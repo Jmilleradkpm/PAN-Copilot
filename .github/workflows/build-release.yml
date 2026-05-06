@@ -1,0 +1,146 @@
+# ============================================================
+# PAN Copilot — Build & Release
+# ============================================================
+# Triggers on any version tag (e.g. git tag v1.0.0 && git push --tags)
+#
+# Outputs uploaded to Cloudflare R2:
+#   /releases/v1.0.0/PAN_Copilot_v1.0.0.zip   ← permanent versioned copy
+#   /latest/PAN_Copilot.zip                     ← always points to newest
+#   /version.json                               ← machine-readable manifest
+#
+# Required GitHub Secrets (Settings → Secrets → Actions):
+#   CF_R2_ACCESS_KEY_ID       R2 API token Access Key ID
+#   CF_R2_SECRET_ACCESS_KEY   R2 API token Secret
+#   CF_R2_ACCOUNT_ID          Your Cloudflare account ID (32 hex chars)
+#   CF_R2_BUCKET              Bucket name, e.g. pan-copilot-downloads
+#   PAN_COPILOT_SYSTEM_PROMPT Full text of PAN_Copilot_Master_System_Prompt.md
+# ============================================================
+
+name: Build & Upload to R2
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+jobs:
+  build-windows:
+    name: Build Windows .exe and upload to R2
+    runs-on: windows-latest
+
+    steps:
+      # ── 1. Checkout ────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Python ──────────────────────────────────────────
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: local/requirements.txt
+
+      # ── 3. Write system prompt from secret ─────────────────
+      # The master system prompt is NOT committed to the repo
+      # (it's your IP). Store it as a GitHub secret instead.
+      - name: Write system prompt
+        shell: pwsh
+        env:
+          PROMPT_CONTENT: ${{ secrets.PAN_COPILOT_SYSTEM_PROMPT }}
+        run: |
+          $content = $env:PROMPT_CONTENT
+          if (-not $content) {
+            Write-Warning "PAN_COPILOT_SYSTEM_PROMPT secret is empty — using placeholder"
+            $content = "# PAN Copilot System Prompt`nYou are PAN Copilot, an expert AI assistant for Palo Alto Networks engineers."
+          }
+          Set-Content -Path "PAN_Copilot_Master_System_Prompt.md" -Value $content -Encoding UTF8
+          Write-Host "System prompt written ($($content.Length) chars)"
+
+      # ── 4. Install deps + PyInstaller ──────────────────────
+      - name: Install Python dependencies
+        working-directory: local
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      # ── 5. Build ───────────────────────────────────────────
+      - name: Build with PyInstaller
+        working-directory: local
+        shell: pwsh
+        run: |
+          pyinstaller pan_copilot.spec --clean --noconfirm
+          Write-Host "Build output:"
+          Get-ChildItem dist -Recurse | Select-Object FullName | Format-Table
+
+      # ── 6. Zip the dist folder ─────────────────────────────
+      - name: Package distribution
+        working-directory: local
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}"
+          $zipName = "PAN_Copilot_${version}.zip"
+          Compress-Archive -Path "dist\PAN Copilot\*" -DestinationPath $zipName -Force
+          Copy-Item $zipName "PAN_Copilot_latest.zip" -Force
+          Write-Host "Created: $zipName ($('{0:N1} MB' -f ((Get-Item $zipName).Length / 1MB)))"
+
+      # ── 7. Write version manifest ──────────────────────────
+      - name: Create version.json
+        working-directory: local
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}"
+          $ts      = (Get-Date -Format "yyyy-MM-ddTHH:mm:ssZ")
+          $json = [ordered]@{
+            version      = $version
+            released_at  = $ts
+            download_url = "https://downloads.adkcyber.com/latest/PAN_Copilot.zip"
+            versioned_url = "https://downloads.adkcyber.com/releases/${version}/PAN_Copilot_${version}.zip"
+            min_app_version = "1.0.0"
+          } | ConvertTo-Json -Depth 3
+          Set-Content -Path "version.json" -Value $json -Encoding UTF8
+          Write-Host $json
+
+      # ── 8. Upload to R2 ────────────────────────────────────
+      - name: Configure AWS CLI for R2
+        shell: pwsh
+        run: |
+          aws configure set aws_access_key_id     "${{ secrets.CF_R2_ACCESS_KEY_ID }}"
+          aws configure set aws_secret_access_key "${{ secrets.CF_R2_SECRET_ACCESS_KEY }}"
+          aws configure set default.region        "auto"
+
+      - name: Upload to Cloudflare R2
+        working-directory: local
+        shell: pwsh
+        env:
+          R2_ENDPOINT: "https://${{ secrets.CF_R2_ACCOUNT_ID }}.r2.cloudflarestorage.com"
+          BUCKET: ${{ secrets.CF_R2_BUCKET }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          $ep     = $env:R2_ENDPOINT
+          $bucket = $env:BUCKET
+          $ver    = $env:VERSION
+
+          Write-Host "Uploading versioned release..."
+          aws s3 cp "PAN_Copilot_${ver}.zip" `
+            "s3://${bucket}/releases/${ver}/PAN_Copilot_${ver}.zip" `
+            --endpoint-url $ep
+
+          Write-Host "Uploading as latest..."
+          aws s3 cp "PAN_Copilot_latest.zip" `
+            "s3://${bucket}/latest/PAN_Copilot.zip" `
+            --endpoint-url $ep
+
+          Write-Host "Uploading version manifest..."
+          aws s3 cp "version.json" `
+            "s3://${bucket}/version.json" `
+            --endpoint-url $ep `
+            --content-type "application/json" `
+            --cache-control "no-cache"
+
+          Write-Host ""
+          Write-Host "✅ Release ${ver} uploaded to R2"
+          Write-Host "   Latest:    https://downloads.adkcyber.com/latest/PAN_Copilot.zip"
+          Write-Host "   Versioned: https://downloads.adkcyber.com/releases/${ver}/PAN_Copilot_${ver}.zip"

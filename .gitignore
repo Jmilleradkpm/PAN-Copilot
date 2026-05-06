@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+env/
+
+# Secrets — NEVER commit these
+PAN_Copilot_Master_System_Prompt.md
+*.env
+
+# Databases
+*.db
+*.sqlite3
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Helper scripts
+git_setup.bat
+push_now.bat
+do_push.vbs
+
+# Legacy files (superseded by local/ and license_server/)
+backend/
+landing.html
+pan_copilot.html
+Procfile
+nixpacks.toml
+railway.toml
+CLAUDE.md

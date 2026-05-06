@@ -1,0 +1,1289 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>PAN Copilot — Local Desktop</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:          #0d1117;
+      --surface:     #161b22;
+      --surface2:    #1c2128;
+      --border:      #30363d;
+      --border-dim:  #21262d;
+      --accent:      #e8412f;
+      --accent-hover:#c93526;
+      --accent-dim:  #3d1208;
+      --text:        #e6edf3;
+      --text-sub:    #8b949e;
+      --text-dim:    #484f58;
+      --user-bg:     #132337;
+      --user-border: #1f3a57;
+      --ai-bg:       #161b22;
+      --ai-border:   #30363d;
+      --code-bg:     #0d1117;
+      --code-border: #30363d;
+      --green:       #3fb950;
+      --yellow:      #d29922;
+      --nav-w:       220px;
+      --right-w:     280px;
+      --header-h:    52px;
+      --radius:      8px;
+    }
+
+    [data-theme="light"] {
+      --bg:          #f6f8fa;
+      --surface:     #ffffff;
+      --surface2:    #f0f2f5;
+      --border:      #d0d7de;
+      --border-dim:  #e4e8ec;
+      --accent:      #e8412f;
+      --accent-hover:#c93526;
+      --accent-dim:  #fce8e6;
+      --text:        #1f2328;
+      --text-sub:    #57606a;
+      --text-dim:    #a8b1ba;
+      --user-bg:     #dbeafe;
+      --user-border: #93c5fd;
+      --ai-bg:       #ffffff;
+      --ai-border:   #d0d7de;
+      --code-bg:     #f6f8fa;
+      --code-border: #d0d7de;
+      --green:       #1a7f37;
+      --yellow:      #9a6700;
+    }
+    [data-theme="light"] .msg-content code { color: #0550ae; }
+    [data-theme="light"] .code-block pre   { color: #1f2328; }
+    [data-theme="light"] .nav-group-label  { color: #57606a; }
+
+    html, body {
+      height: 100%; background: var(--bg); color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      font-size: 14px; line-height: 1.6; overflow: hidden;
+    }
+
+    ::-webkit-scrollbar { width: 5px; height: 5px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+    /* ── Header ──────────────────────────────────────────────────── */
+    #header {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 200;
+      height: var(--header-h);
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; padding: 0 16px; gap: 10px;
+    }
+    .h-logo {
+      width: 28px; height: 28px; border-radius: 7px;
+      background: var(--accent);
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 800; font-size: 12px; color: #fff; flex-shrink: 0;
+    }
+    .h-title { font-size: 14px; font-weight: 700; }
+    .h-sub   { font-size: 11px; color: var(--text-sub); }
+    .h-spacer { flex: 1; }
+
+    /* Local indicator */
+    #local-badge {
+      display: flex; align-items: center; gap: 5px;
+      font-size: 11px; color: var(--green);
+      padding: 4px 9px; border-radius: 20px;
+      background: rgba(63,185,80,0.08);
+      border: 1px solid rgba(63,185,80,0.2);
+    }
+    #local-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--green); }
+
+    /* Tier badge */
+    #tier-badge {
+      display: none; align-items: center; gap: 5px;
+      font-size: 11px; font-weight: 600;
+      padding: 4px 9px; border-radius: 20px;
+    }
+    #tier-badge.free {
+      color: var(--text-sub); background: var(--surface2); border: 1px solid var(--border);
+    }
+    #tier-badge.pro {
+      color: #c9a227; background: rgba(201,162,39,0.08); border: 1px solid rgba(201,162,39,0.3);
+    }
+    #tier-badge.max {
+      color: #5b9bd5; background: rgba(91,155,213,0.08); border: 1px solid rgba(91,155,213,0.3);
+    }
+
+    #theme-toggle {
+      background: var(--surface2); border: 1px solid var(--border-dim);
+      border-radius: 20px; color: var(--text-sub); cursor: pointer;
+      font-size: 12px; padding: 4px 10px;
+      display: flex; align-items: center; gap: 5px; transition: all 0.15s;
+    }
+    #theme-toggle:hover { border-color: var(--accent); color: var(--text); }
+
+    #settings-btn {
+      background: var(--surface2); border: 1px solid var(--border-dim);
+      border-radius: 20px; color: var(--text-sub); cursor: pointer;
+      font-size: 12px; padding: 4px 10px;
+      display: flex; align-items: center; gap: 5px; transition: all 0.15s;
+    }
+    #settings-btn:hover { border-color: var(--accent); color: var(--text); }
+
+    /* ── 3-col layout ──────────────────────────────────────────── */
+    #app {
+      display: flex;
+      margin-top: var(--header-h);
+      height: calc(100vh - var(--header-h));
+    }
+
+    /* ── LEFT NAV ──────────────────────────────────────────────── */
+    #left-nav {
+      width: var(--nav-w); flex-shrink: 0;
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+      overflow-y: auto; overflow-x: hidden;
+      display: flex; flex-direction: column;
+    }
+    .nav-section { padding: 10px 8px 4px; }
+    .nav-group-label {
+      font-size: 10px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.08em; color: var(--text-dim);
+      padding: 6px 8px 4px; display: block;
+    }
+    .nav-item {
+      display: flex; align-items: center; gap: 8px;
+      padding: 7px 10px; border-radius: 6px; cursor: pointer;
+      font-size: 12.5px; color: var(--text-sub);
+      transition: all 0.12s; border: none; background: none;
+      width: 100%; text-align: left;
+    }
+    .nav-item:hover { background: var(--surface2); color: var(--text); }
+    .nav-item.active { background: var(--accent-dim); color: var(--accent); font-weight: 600; }
+    [data-theme="light"] .nav-item.active { background: #fce8e6; }
+    .nav-icon { font-size: 14px; flex-shrink: 0; width: 18px; text-align: center; }
+    .nav-divider { height: 1px; background: var(--border-dim); margin: 6px 8px; }
+
+    /* ── CENTER CHAT ───────────────────────────────────────────── */
+    #center {
+      flex: 1; display: flex; flex-direction: column; overflow: hidden;
+      background: var(--bg); min-width: 0;
+    }
+
+    #context-bar {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 10px 20px; flex-shrink: 0;
+    }
+    #context-product {
+      display: flex; align-items: center; gap: 8px; margin-bottom: 8px;
+    }
+    #context-icon { font-size: 18px; }
+    #context-name { font-size: 14px; font-weight: 700; }
+    #context-desc { font-size: 11px; color: var(--text-sub); }
+    #context-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+    .ctx-chip {
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: 20px; padding: 4px 12px;
+      font-size: 11.5px; color: var(--text-sub); cursor: pointer;
+      transition: all 0.12s; white-space: nowrap;
+    }
+    .ctx-chip:hover { border-color: var(--accent); color: var(--text); }
+
+    #messages {
+      flex: 1; overflow-y: auto; padding: 20px 0;
+      display: flex; flex-direction: column; gap: 0;
+    }
+    #welcome {
+      display: flex; flex-direction: column; align-items: center;
+      justify-content: center; flex: 1; padding: 40px 24px;
+      text-align: center; gap: 10px;
+    }
+    #welcome .w-logo {
+      width: 52px; height: 52px; border-radius: 13px; background: var(--accent);
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 800; font-size: 18px; color: #fff; margin-bottom: 4px;
+    }
+    #welcome h2 { font-size: 20px; font-weight: 700; }
+    #welcome p  { color: var(--text-sub); max-width: 380px; font-size: 13px; }
+    #welcome .privacy-note {
+      display: flex; align-items: center; gap: 6px;
+      font-size: 11px; color: var(--green);
+      background: rgba(63,185,80,0.06);
+      border: 1px solid rgba(63,185,80,0.18);
+      border-radius: 20px; padding: 5px 14px; margin-top: 4px;
+    }
+
+    .msg-row { padding: 5px 20px; display: flex; animation: fadeUp 0.18s ease; }
+    @keyframes fadeUp { from { opacity:0; transform:translateY(4px) } to { opacity:1; transform:none } }
+    .msg-row.user { justify-content: flex-end; }
+    .msg-bubble {
+      max-width: min(680px, 100%); border-radius: var(--radius);
+      padding: 12px 15px; line-height: 1.65;
+    }
+    .msg-row.user .msg-bubble {
+      background: var(--user-bg); border: 1px solid var(--user-border);
+      white-space: pre-wrap; font-size: 13.5px;
+    }
+    .msg-row.assistant .msg-bubble {
+      background: var(--ai-bg); border: 1px solid var(--ai-border); width: 100%;
+    }
+    .msg-label {
+      font-size: 10px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.1em; margin-bottom: 7px;
+    }
+    .msg-row.user .msg-label      { color: #5b9bd5; }
+    .msg-row.assistant .msg-label { color: var(--accent); }
+    .msg-content { font-size: 13.5px; }
+    .msg-content p { margin: 0 0 9px; }
+    .msg-content p:last-child { margin-bottom: 0; }
+    .msg-content strong { color: var(--text); font-weight: 600; }
+    .msg-content em { color: var(--yellow); font-style: normal; }
+    .msg-content ul, .msg-content ol { margin: 6px 0 9px 18px; }
+    .msg-content li { margin: 3px 0; }
+    .msg-content h3 { font-size: 13.5px; font-weight: 700; color: var(--text); margin: 12px 0 5px; }
+    .msg-content h4 { font-size: 12px; font-weight: 600; color: var(--text-sub); margin: 9px 0 4px; text-transform: uppercase; letter-spacing: 0.05em; }
+    .msg-content code {
+      background: var(--code-bg); border: 1px solid var(--code-border);
+      border-radius: 3px; padding: 1px 5px;
+      font-family: 'Consolas','Cascadia Code','Courier New',monospace;
+      font-size: 11.5px; color: #79c0ff;
+    }
+    .code-block { background: var(--code-bg); border: 1px solid var(--code-border); border-radius: var(--radius); margin: 10px 0; overflow: hidden; }
+    .code-block-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 6px 13px; border-bottom: 1px solid var(--code-border);
+      background: var(--surface2);
+    }
+    .code-lang { font-size: 10px; color: var(--text-dim); font-family: monospace; text-transform: uppercase; letter-spacing: 0.05em; }
+    .copy-btn {
+      background: none; border: 1px solid var(--border); border-radius: 4px;
+      color: var(--text-sub); cursor: pointer; font-size: 11px; padding: 2px 8px;
+      transition: all 0.12s;
+    }
+    .copy-btn:hover  { border-color: var(--text-sub); color: var(--text); }
+    .copy-btn.copied { border-color: var(--green); color: var(--green); }
+    .code-block pre {
+      padding: 12px 14px; overflow-x: auto; margin: 0;
+      font-family: 'Consolas','Cascadia Code','Courier New',monospace;
+      font-size: 11.5px; line-height: 1.6; color: var(--text); white-space: pre;
+    }
+    .token-meta {
+      font-size: 10px; color: var(--text-dim); margin-top: 9px;
+      padding-top: 7px; border-top: 1px solid var(--border-dim);
+      display: flex; gap: 10px;
+    }
+    .cursor { display: inline-block; width: 2px; height: 13px; background: var(--accent); vertical-align: middle; margin-left: 2px; animation: blink 0.7s infinite; }
+    @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
+    .thinking-row { padding: 5px 20px; }
+    .thinking-bubble {
+      background: var(--ai-bg); border: 1px solid var(--ai-border);
+      border-radius: var(--radius); padding: 12px 15px;
+      display: flex; align-items: center; gap: 8px;
+    }
+    .dots { display: flex; gap: 4px; }
+    .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); opacity: 0.4; animation: dp 1.4s infinite; }
+    .dot:nth-child(2) { animation-delay: 0.2s; }
+    .dot:nth-child(3) { animation-delay: 0.4s; }
+    @keyframes dp { 0%,80%,100%{opacity:0.3;transform:scale(0.8)} 40%{opacity:1;transform:scale(1)} }
+
+    #input-bar {
+      padding: 12px 20px;
+      background: var(--bg); border-top: 1px solid var(--border-dim);
+    }
+    #input-wrap {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 10px; display: flex; align-items: flex-end;
+      padding: 9px 10px 9px 14px; gap: 8px; transition: border-color 0.15s;
+    }
+    #input-wrap:focus-within { border-color: var(--accent); }
+    #user-input {
+      flex: 1; background: none; border: none; color: var(--text);
+      font-family: inherit; font-size: 13.5px; line-height: 1.55;
+      resize: none; max-height: 160px; min-height: 22px; overflow-y: auto; padding: 0;
+    }
+    #user-input:focus { outline: none; }
+    #user-input::placeholder { color: var(--text-dim); }
+    #send-btn {
+      background: var(--accent); border: none; border-radius: 7px; color: #fff;
+      cursor: pointer; width: 32px; height: 32px;
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0; transition: background 0.15s;
+    }
+    #send-btn:hover:not(:disabled) { background: var(--accent-hover); }
+    #send-btn:disabled { background: var(--accent-dim); cursor: not-allowed; }
+    #input-hint { font-size: 11px; color: var(--text-dim); margin-top: 5px; padding: 0 2px; display: flex; justify-content: space-between; }
+
+    /* ── RIGHT SIDEBAR ─────────────────────────────────────────── */
+    #right-sidebar {
+      width: var(--right-w); flex-shrink: 0;
+      background: var(--surface);
+      border-left: 1px solid var(--border);
+      display: flex; flex-direction: column; overflow: hidden;
+    }
+    .rs-section { padding: 12px 12px 0; }
+    .rs-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-dim); margin-bottom: 7px; display: block; }
+    #new-chat-btn {
+      width: 100%; padding: 8px 12px; margin-bottom: 12px;
+      background: var(--accent); border: none; border-radius: var(--radius);
+      color: #fff; font-size: 12.5px; font-weight: 700; cursor: pointer;
+      display: flex; align-items: center; justify-content: center; gap: 6px;
+      transition: background 0.15s;
+    }
+    #new-chat-btn:hover { background: var(--accent-hover); }
+    .rs-divider { height: 1px; background: var(--border-dim); margin: 8px 12px; }
+
+    #conv-section { display:flex; flex-direction:column; gap:0; flex-shrink:0; }
+    #conv-list { display:flex; flex-direction:column; gap:2px; max-height:220px; overflow-y:auto; }
+    .conv-item {
+      align-items:center; border-radius:6px; cursor:pointer; display:flex;
+      gap:6px; padding:7px 8px; transition:background 0.12s;
+    }
+    .conv-item:hover { background:var(--code-bg); }
+    .conv-item.active { background:var(--code-bg); border-left:2px solid var(--accent); padding-left:6px; }
+    .conv-item-title {
+      color:var(--text); flex:1; font-size:12px; overflow:hidden;
+      text-overflow:ellipsis; white-space:nowrap;
+    }
+    .conv-item-del {
+      background:none; border:none; color:var(--text-dim); cursor:pointer;
+      font-size:13px; flex-shrink:0; line-height:1; opacity:0;
+      padding:1px 3px; transition:opacity 0.1s;
+    }
+    .conv-item:hover .conv-item-del { opacity:1; }
+    .conv-item-del:hover { color:#f85149; }
+    #conv-empty { color:var(--text-dim); font-size:12px; padding:8px 4px; }
+
+    /* Config paste area */
+    #config-section { flex: 1; display: flex; flex-direction: column; padding: 0 12px 10px; overflow: hidden; }
+    #config-hint { font-size: 11px; color: var(--text-sub); margin-bottom: 7px; line-height: 1.5; }
+    #config-paste {
+      flex: 1; background: var(--code-bg); border: 1px solid var(--border);
+      border-radius: var(--radius); color: var(--text);
+      font-family: 'Consolas','Cascadia Code','Courier New',monospace;
+      font-size: 11px; padding: 9px 11px; resize: none; line-height: 1.55; min-height: 100px;
+    }
+    #config-paste:focus { outline: none; border-color: var(--accent); }
+    #config-paste::placeholder { color: var(--text-dim); }
+    #config-status { font-size: 11px; color: var(--text-dim); margin-top: 5px; min-height: 15px; }
+    #config-status.has { color: var(--yellow); }
+    .rs-divider2 { height: 1px; background: var(--border-dim); margin: 6px 12px 10px; }
+    #quick-section { padding: 0 12px 12px; }
+    .qa-btn {
+      background: var(--surface2); border: 1px solid var(--border-dim);
+      border-radius: 6px; color: var(--text-sub); cursor: pointer;
+      font-size: 12px; padding: 7px 10px; text-align: left;
+      transition: all 0.12s; display: flex; align-items: flex-start;
+      gap: 7px; width: 100%; margin-bottom: 5px; line-height: 1.4;
+    }
+    .qa-btn:hover { border-color: var(--accent); color: var(--text); background: var(--surface); }
+    .qa-icon { font-size: 13px; flex-shrink: 0; margin-top: 1px; }
+
+    #upload-btn {
+      align-items:center; background:var(--code-bg); border:1px dashed var(--border);
+      border-radius:6px; color:var(--text-dim); cursor:pointer; display:flex;
+      font-size:12px; gap:7px; justify-content:center; padding:8px 10px;
+      transition:border-color 0.15s,color 0.15s; width:100%; box-sizing:border-box;
+    }
+    #upload-btn:hover { border-color:var(--accent); color:var(--text); }
+    #upload-file { display:none; }
+    #upload-status { font-size:11px; color:var(--text-dim); margin-top:5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    #upload-status.loaded { color:#4caf50; }
+    #upload-status.error  { color:#f85149; }
+
+    /* ── Auth overlay (login / register) ─────────────────────── */
+    #auth-overlay {
+      position: fixed; inset: 0; z-index: 1000;
+      background: rgba(0,0,0,0.88);
+      display: flex; align-items: center; justify-content: center;
+    }
+    #auth-card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 14px; padding: 32px 36px; width: 440px; max-width: 95vw;
+    }
+    .auth-logo {
+      width: 40px; height: 40px; border-radius: 10px; background: var(--accent);
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 800; font-size: 16px; color: #fff; margin-bottom: 16px;
+    }
+    .auth-tabs {
+      display: flex; gap: 0; margin-bottom: 20px;
+      border-bottom: 1px solid var(--border);
+    }
+    .auth-tab {
+      background: none; border: none; border-bottom: 2px solid transparent;
+      color: var(--text-sub); cursor: pointer; font-size: 13px; font-weight: 600;
+      padding: 6px 16px 10px; transition: all 0.15s; margin-bottom: -1px;
+    }
+    .auth-tab.active { border-bottom-color: var(--accent); color: var(--text); }
+    .setup-input {
+      width: 100%; background: var(--code-bg); border: 1px solid var(--border);
+      border-radius: 6px; color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      font-size: 13px; padding: 10px 12px; margin-top: 8px;
+    }
+    .setup-input:focus { outline: none; border-color: var(--accent); }
+    #auth-error {
+      display: none; background: #3a1e1e; border: 1px solid #5f2e2e;
+      border-radius: 6px; color: #f85149; font-size: 12px;
+      margin-top: 12px; padding: 9px 12px;
+    }
+    #auth-submit {
+      margin-top: 18px; width: 100%; background: var(--accent);
+      border: none; border-radius: 8px; color: #fff; cursor: pointer;
+      font-size: 14px; font-weight: 600; padding: 11px;
+      transition: background 0.15s;
+    }
+    #auth-submit:hover:not(:disabled) { background: var(--accent-hover); }
+    #auth-submit:disabled { opacity: 0.6; cursor: not-allowed; }
+    .auth-note {
+      margin-top: 14px; font-size: 11px; color: var(--text-dim);
+      line-height: 1.6; border-top: 1px solid var(--border); padding-top: 12px;
+    }
+    .auth-note a { color: var(--text-sub); }
+
+    /* ── Account panel ────────────────────────────────────────── */
+    #settings-panel {
+      display: none;
+      position: fixed; inset: 0; z-index: 900;
+      background: rgba(0,0,0,0.7);
+      align-items: center; justify-content: center;
+    }
+    #settings-panel.open { display: flex; }
+    #settings-card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 14px; padding: 28px 32px; width: 400px; max-width: 95vw;
+    }
+    #settings-close {
+      float: right; background: none; border: none; color: var(--text-dim);
+      cursor: pointer; font-size: 18px; line-height: 1;
+    }
+    #settings-close:hover { color: var(--text); }
+    .acct-row {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 10px 0; border-bottom: 1px solid var(--border-dim);
+      font-size: 13px;
+    }
+    .acct-label { color: var(--text-dim); font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; }
+    .acct-value { color: var(--text); font-weight: 600; }
+    #upgrade-link {
+      display: inline-block; margin-top: 4px; font-size: 11px;
+      color: var(--accent); text-decoration: none;
+    }
+    #upgrade-link:hover { text-decoration: underline; }
+    #logout-btn {
+      margin-top: 20px; width: 100%; background: none;
+      border: 1px solid var(--border); border-radius: 8px; color: var(--text-sub);
+      cursor: pointer; font-size: 13px; font-weight: 600; padding: 9px;
+      transition: all 0.15s;
+    }
+    #logout-btn:hover { border-color: #f85149; color: #f85149; }
+  </style>
+</head>
+<body>
+
+<!-- ── Header ──────────────────────────────────────────────────── -->
+<header id="header">
+  <div class="h-logo">PAN</div>
+  <div>
+    <div class="h-title">PAN Copilot</div>
+  </div>
+  <div class="h-sub" style="margin-left:2px">Full Portfolio AI Assistant</div>
+  <div class="h-spacer"></div>
+
+  <div id="local-badge" title="Configs never leave your machine">
+    <div id="local-dot"></div>
+    Local · Private
+  </div>
+
+  <div id="tier-badge" title="Your current plan"></div>
+
+  <button id="theme-toggle" onclick="toggleTheme()">
+    <span id="t-icon">☀️</span><span id="t-label">Light</span>
+  </button>
+  <button id="settings-btn" onclick="openSettings()" title="Account">
+    👤 Account
+  </button>
+</header>
+
+<!-- ── AUTH OVERLAY (login / register) ────────────────────────── -->
+<div id="auth-overlay" style="display:none;">
+  <div id="auth-card">
+    <div class="auth-logo">PAN</div>
+    <div style="font-size:20px;font-weight:700;margin-bottom:4px">PAN Copilot</div>
+    <div style="font-size:13px;color:var(--text-sub);margin-bottom:18px">Sign in to access your PAN-OS AI assistant.</div>
+
+    <div class="auth-tabs">
+      <button class="auth-tab active" id="tab-login"    onclick="switchTab('login')">Sign In</button>
+      <button class="auth-tab"        id="tab-register" onclick="switchTab('register')">Create Account</button>
+    </div>
+
+    <label style="font-size:12px;color:var(--text-dim);">Email</label>
+    <input id="auth-email" type="email" class="setup-input" placeholder="you@company.com" autocomplete="email" spellcheck="false" />
+
+    <label style="font-size:12px;color:var(--text-dim);display:block;margin-top:12px;">Password</label>
+    <input id="auth-password" type="password" class="setup-input" placeholder="••••••••" autocomplete="current-password" />
+
+    <div id="auth-error"></div>
+
+    <button id="auth-submit" onclick="submitAuth()">Sign In</button>
+
+    <div class="auth-note">
+      🔒 Your firewall configs stay on your machine. The only data that reaches ADK Cyber's servers is your email and session token — never your PAN-OS configs or CLI output.<br><br>
+      Free tier: <strong style="color:var(--text-sub);">10 queries / week</strong> · Upgrade at <a href="https://www.adkcyber.com/pan-copilot.html" target="_blank">adkcyber.com/pan-copilot.html</a>
+    </div>
+  </div>
+</div>
+
+<!-- ── ACCOUNT PANEL ───────────────────────────────────────────── -->
+<div id="settings-panel">
+  <div id="settings-card">
+    <button id="settings-close" onclick="closeSettings()">✕</button>
+    <div style="font-size:16px;font-weight:700;margin-bottom:20px;">👤 Account</div>
+
+    <div class="acct-row">
+      <span class="acct-label">Email</span>
+      <span class="acct-value" id="acct-email">—</span>
+    </div>
+    <div class="acct-row">
+      <span class="acct-label">Plan</span>
+      <span class="acct-value" id="acct-tier">Free</span>
+    </div>
+    <div class="acct-row" id="acct-usage-row">
+      <span class="acct-label">Queries this week</span>
+      <span class="acct-value" id="acct-usage">0 / 10</span>
+    </div>
+
+    <a id="upgrade-link" href="https://www.adkcyber.com/pan-copilot.html" target="_blank">
+      ↗ Upgrade plan
+    </a>
+
+    <div style="margin-top:20px;font-size:11px;color:var(--text-dim);line-height:1.7;border-top:1px solid var(--border);padding-top:16px;">
+      <strong style="color:var(--text-sub);">Data &amp; Privacy</strong><br>
+      Firewall configs go directly from your machine to Anthropic's API — they never touch ADK Cyber's servers. Conversations are stored locally at <code>~/.pan_copilot/conversations.db</code>.
+    </div>
+
+    <button id="logout-btn" onclick="logout()">Sign Out</button>
+  </div>
+</div>
+
+<div id="app">
+
+  <!-- ── LEFT NAV ──────────────────────────────────────────────── -->
+  <nav id="left-nav">
+
+    <div class="nav-section">
+      <span class="nav-group-label">Network Security</span>
+      <button class="nav-item" onclick="selectProduct('pa-series')"    data-id="pa-series">    <span class="nav-icon">🔥</span> PA-Series NGFW</button>
+      <button class="nav-item" onclick="selectProduct('vm-series')"    data-id="vm-series">    <span class="nav-icon">☁️</span> VM-Series</button>
+      <button class="nav-item" onclick="selectProduct('cn-series')"    data-id="cn-series">    <span class="nav-icon">🐳</span> CN-Series</button>
+      <button class="nav-item" onclick="selectProduct('panorama')"     data-id="panorama">     <span class="nav-icon">🗂️</span> Panorama</button>
+    </div>
+
+    <div class="nav-divider"></div>
+
+    <div class="nav-section">
+      <span class="nav-group-label">SASE / Network-as-a-Service</span>
+      <button class="nav-item" onclick="selectProduct('prisma-access')"  data-id="prisma-access"> <span class="nav-icon">🌐</span> Prisma Access</button>
+      <button class="nav-item" onclick="selectProduct('prisma-sdwan')"   data-id="prisma-sdwan">  <span class="nav-icon">🔀</span> Prisma SD-WAN</button>
+      <button class="nav-item" onclick="selectProduct('adem')"           data-id="adem">          <span class="nav-icon">📊</span> ADEM</button>
+    </div>
+
+    <div class="nav-divider"></div>
+
+    <div class="nav-section">
+      <span class="nav-group-label">Cloud Security (Prisma Cloud)</span>
+      <button class="nav-item" onclick="selectProduct('cspm')"   data-id="cspm">  <span class="nav-icon">🛡️</span> CSPM</button>
+      <button class="nav-item" onclick="selectProduct('cwp')"    data-id="cwp">   <span class="nav-icon">💻</span> CWP</button>
+      <button class="nav-item" onclick="selectProduct('ciem')"   data-id="ciem">  <span class="nav-icon">🔑</span> CIEM</button>
+      <button class="nav-item" onclick="selectProduct('appsec')" data-id="appsec"><span class="nav-icon">🧪</span> Application Security</button>
+    </div>
+
+    <div class="nav-divider"></div>
+
+    <div class="nav-section">
+      <span class="nav-group-label">Security Operations (Cortex)</span>
+      <button class="nav-item" onclick="selectProduct('xdr')"    data-id="xdr">   <span class="nav-icon">🔎</span> Cortex XDR</button>
+      <button class="nav-item" onclick="selectProduct('xsoar')"  data-id="xsoar"> <span class="nav-icon">⚙️</span> Cortex XSOAR</button>
+      <button class="nav-item" onclick="selectProduct('xsiam')"  data-id="xsiam"> <span class="nav-icon">🧠</span> Cortex XSIAM</button>
+      <button class="nav-item" onclick="selectProduct('xpanse')" data-id="xpanse"><span class="nav-icon">🌍</span> Cortex Xpanse</button>
+    </div>
+
+    <div class="nav-divider"></div>
+
+    <div class="nav-section">
+      <span class="nav-group-label">Threat Intelligence</span>
+      <button class="nav-item" onclick="selectProduct('wildfire')" data-id="wildfire"><span class="nav-icon">🔬</span> WildFire</button>
+      <button class="nav-item" onclick="selectProduct('atp')"      data-id="atp">     <span class="nav-icon">🚫</span> Adv. Threat Prevention</button>
+      <button class="nav-item" onclick="selectProduct('urlf')"     data-id="urlf">    <span class="nav-icon">🔗</span> Adv. URL Filtering</button>
+      <button class="nav-item" onclick="selectProduct('dns-sec')"  data-id="dns-sec"> <span class="nav-icon">🔍</span> DNS Security</button>
+      <button class="nav-item" onclick="selectProduct('unit42')"   data-id="unit42">  <span class="nav-icon">🕵️</span> Unit 42</button>
+    </div>
+
+    <div class="nav-divider"></div>
+
+    <div class="nav-section">
+      <span class="nav-group-label">Identity &amp; Access</span>
+      <button class="nav-item" onclick="selectProduct('globalprotect')" data-id="globalprotect"><span class="nav-icon">🔒</span> GlobalProtect</button>
+      <button class="nav-item" onclick="selectProduct('cie')"           data-id="cie">           <span class="nav-icon">🪪</span> Cloud Identity Engine</button>
+    </div>
+
+    <div class="nav-divider"></div>
+
+    <div class="nav-section" style="padding-bottom:12px;">
+      <span class="nav-group-label">AI / Emerging</span>
+      <button class="nav-item" onclick="selectProduct('ai-runtime')"   data-id="ai-runtime">  <span class="nav-icon">🤖</span> AI Runtime Security</button>
+      <button class="nav-item" onclick="selectProduct('strata-log')"   data-id="strata-log">  <span class="nav-icon">📋</span> Strata Logging Service</button>
+    </div>
+
+  </nav>
+
+  <!-- ── CENTER ────────────────────────────────────────────────── -->
+  <main id="center">
+
+    <div id="context-bar">
+      <div id="context-product">
+        <span id="context-icon">🔥</span>
+        <div>
+          <div id="context-name">PAN Copilot</div>
+          <div id="context-desc">Select a product from the left to focus the chat, or ask anything below.</div>
+        </div>
+      </div>
+      <div id="context-chips"></div>
+    </div>
+
+    <div id="messages">
+      <div id="welcome">
+        <div class="w-logo">PAN</div>
+        <h2>PAN Copilot</h2>
+        <p>Select a product from the left nav to get focused help, or just ask anything about the Palo Alto Networks portfolio.</p>
+        <div class="privacy-note">🔒 Runs 100% locally — your configs never leave this machine</div>
+      </div>
+    </div>
+
+    <div id="input-bar">
+      <div id="input-wrap">
+        <textarea id="user-input" rows="1"
+          placeholder="Ask about any Palo Alto Networks product…"
+          onkeydown="handleKey(event)" oninput="autoResize(this)"></textarea>
+        <button id="send-btn" onclick="sendMessage()">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>
+          </svg>
+        </button>
+      </div>
+      <div id="input-hint">
+        <span>Shift+Enter for newline · Enter to send</span>
+        <span id="config-ind"></span>
+      </div>
+    </div>
+  </main>
+
+  <!-- ── RIGHT SIDEBAR ─────────────────────────────────────────── -->
+  <aside id="right-sidebar">
+
+    <div class="rs-section" style="padding-bottom:12px;">
+      <button id="new-chat-btn" onclick="newChat()">
+        <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+        New Chat
+      </button>
+    </div>
+
+    <div class="rs-divider" style="margin-top:0;"></div>
+
+    <div id="conv-section" class="rs-section" style="padding-bottom:8px;">
+      <span class="rs-label">Recent Conversations</span>
+      <div id="conv-list">
+        <div id="conv-empty">No conversations yet.</div>
+      </div>
+    </div>
+
+    <div class="rs-divider"></div>
+
+    <!-- File / Config paste area -->
+    <div id="config-section" class="rs-section" style="padding:8px 12px 6px;flex-shrink:0;">
+      <span class="rs-label">Paste Config / CLI Output</span>
+      <div id="config-hint">Paste PAN-OS config, CLI output, or log entries here. It will be sent with your next question.</div>
+
+      <label id="upload-btn" for="upload-file">
+        <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+        Upload file (.txt, .xml, .cfg, .log)
+      </label>
+      <input type="file" id="upload-file" accept=".txt,.xml,.cfg,.conf,.log" onchange="uploadFile(this)"/>
+      <div id="upload-status"></div>
+
+      <textarea id="config-paste" rows="5"
+        placeholder="# paste your config or CLI output here…"
+        oninput="updateConfigStatus()"></textarea>
+      <div id="config-status"></div>
+    </div>
+
+    <div class="rs-divider2"></div>
+
+    <!-- Quick actions -->
+    <div id="quick-section">
+      <span class="rs-label">Quick Actions</span>
+      <button class="qa-btn" onclick="quickAsk('Audit my rulebase for shadow rules, overly permissive entries, and rules missing security profiles.')"><span class="qa-icon">🔍</span>Audit for shadow &amp; bad rules</button>
+      <button class="qa-btn" onclick="quickAsk('Explain what this policy does in plain English, noting what traffic it permits, what zones it spans, and any concerns.')"><span class="qa-icon">📖</span>Explain this config</button>
+      <button class="qa-btn" onclick="quickAsk('Walk me through diagnosing why traffic might be hitting the interzone-default deny instead of my allow rule.')"><span class="qa-icon">🛠️</span>Traffic hitting deny? Debug</button>
+      <button class="qa-btn" onclick="quickAsk('What are the most common reasons an IPSec VPN tunnel comes up but passes no traffic?')"><span class="qa-icon">🔗</span>IPSec tunnel no traffic</button>
+      <button class="qa-btn" onclick="quickAsk('Convert my port-based security rules to App-ID. List the App-IDs I should use and any implicit dependencies.')"><span class="qa-icon">🔄</span>Convert to App-ID</button>
+      <button class="qa-btn" onclick="quickAsk('Explain the Panorama device-group and template stack hierarchy and how inheritance works in practice.')"><span class="qa-icon">🗂️</span>Panorama hierarchy explained</button>
+    </div>
+
+  </aside>
+
+</div>
+
+<script>
+/* ================================================================
+   PAN Copilot — Local Desktop JS
+   ================================================================ */
+
+const API = 'http://127.0.0.1:' + (window.location.port || 80);
+
+// Product metadata
+const PRODUCTS = {
+  'pa-series':     { name:'PA-Series NGFW', icon:'🔥', chips:['Security policy','NAT rules','App-ID','Decryption','HA design'] },
+  'vm-series':     { name:'VM-Series', icon:'☁️', chips:['VMware/Azure/AWS deploy','Interfaces','Routing','Bootstrap'] },
+  'cn-series':     { name:'CN-Series', icon:'🐳', chips:['Kubernetes','Daemonset','Service graph','eBPF'] },
+  'panorama':      { name:'Panorama', icon:'🗂️', chips:['Device groups','Templates','Log collectors','Migrations'] },
+  'prisma-access': { name:'Prisma Access', icon:'🌐', chips:['Mobile users','Remote networks','Service connections','SPNs'] },
+  'prisma-sdwan':  { name:'Prisma SD-WAN', icon:'🔀', chips:['ION devices','Policy sets','BGP','Path quality'] },
+  'adem':          { name:'ADEM', icon:'📊', chips:['Digital experience','Autonomous tests','Real user monitoring'] },
+  'cspm':          { name:'Prisma Cloud CSPM', icon:'🛡️', chips:['Misconfigurations','Compliance checks','Asset inventory'] },
+  'cwp':           { name:'CWP/CWPP', icon:'💻', chips:['Host defender','Container defender','Serverless','Compliance'] },
+  'ciem':          { name:'CIEM', icon:'🔑', chips:['Net effective permissions','Least privilege','Identity risks'] },
+  'appsec':        { name:'Application Security', icon:'🧪', chips:['SAST','SCA','IaC scanning','Secrets detection'] },
+  'xdr':           { name:'Cortex XDR', icon:'🔎', chips:['Endpoint policy','Exclusions','BIOCs','Causality chains'] },
+  'xsoar':         { name:'Cortex XSOAR', icon:'⚙️', chips:['Playbooks','Integrations','Indicators','Automations'] },
+  'xsiam':         { name:'Cortex XSIAM', icon:'🧠', chips:['AI-driven SOC','Rules','Correlation','Ingestion'] },
+  'xpanse':        { name:'Cortex Xpanse', icon:'🌍', chips:['Attack surface','Asset discovery','Risk scoring'] },
+  'wildfire':      { name:'WildFire', icon:'🔬', chips:['Verdict lookup','File submission','Signatures','Baselining'] },
+  'atp':           { name:'Adv. Threat Prevention', icon:'🚫', chips:['IPS signatures','C2','Evasion','Inline ML'] },
+  'urlf':          { name:'Adv. URL Filtering', icon:'🔗', chips:['Custom categories','PAN-DB','Credential submission'] },
+  'dns-sec':       { name:'DNS Security', icon:'🔍', chips:['DNS sinkhole','Tunneling detection','Domains'] },
+  'unit42':        { name:'Unit 42', icon:'🕵️', chips:['Threat reports','IOCs','Campaign tracking','Ransomware'] },
+  'globalprotect': { name:'GlobalProtect', icon:'🔒', chips:['Gateway/portal','HIP','Split tunnel','Gateways'] },
+  'cie':           { name:'Cloud Identity Engine', icon:'🪪', chips:['Directory sync','SAML','User-ID','Auth'] },
+  'ai-runtime':    { name:'AI Runtime Security', icon:'🤖', chips:['LLM protection','AI posture','Data exposure'] },
+  'strata-log':    { name:'Strata Logging Service', icon:'📋', chips:['Log forwarding','Retention','Queries','CDL'] },
+};
+
+// State
+let currentProduct    = null;
+let currentConvId     = null;
+let configText        = '';
+let isStreaming       = false;
+let authMode          = 'login'; // 'login' | 'register'
+
+// ── Init ─────────────────────────────────────────────────────────
+async function init() {
+  applyTheme();
+  await checkAuthStatus();
+}
+
+async function checkAuthStatus() {
+  try {
+    const res  = await fetch(`${API}/api/auth/status`);
+    const data = await res.json();
+    if (data.authenticated) {
+      onAuthenticated(data);
+    } else {
+      showAuthOverlay();
+    }
+  } catch (e) {
+    // Server not yet ready — retry
+    setTimeout(checkAuthStatus, 800);
+  }
+}
+
+function onAuthenticated(data) {
+  document.getElementById('auth-overlay').style.display = 'none';
+  const used  = data.queries_used  ?? data.weekly_used  ?? 0;
+  const limit = data.queries_limit ?? data.weekly_limit ?? 10;
+  const period = data.period ?? (data.tier === 'free' ? 'weekly' : 'monthly');
+  updateTierUI(data.tier, used, limit, period);
+  document.getElementById('acct-email').textContent = data.email || '—';
+  document.getElementById('acct-tier').textContent  = tierLabel(data.tier);
+  updateUsageDisplay(used, limit, data.tier, period);
+  // Show/hide upgrade link
+  document.getElementById('upgrade-link').style.display = data.tier === 'free' ? 'inline-block' : 'none';
+  loadConversations();
+}
+
+function tierLabel(tier) {
+  return tier === 'pro' ? 'Pro ($20/mo)' : tier === 'max' ? 'MAX ($50/mo)' : 'Free';
+}
+
+function updateTierUI(tier, queriesUsed, queriesLimit, period) {
+  const badge = document.getElementById('tier-badge');
+  badge.style.display = 'flex';
+  if (tier === 'pro') {
+    badge.className = 'pro';
+    const used = queriesUsed ?? 0;
+    const lim  = queriesLimit ?? 1000;
+    const pct  = Math.round((used / lim) * 100);
+    badge.textContent = `★ Pro · ${used.toLocaleString()}/${lim.toLocaleString()} this month`;
+  } else if (tier === 'max') {
+    badge.className = 'max';
+    const used = queriesUsed ?? 0;
+    const lim  = queriesLimit ?? 2500;
+    badge.textContent = `★ MAX · ${used.toLocaleString()}/${lim.toLocaleString()} this month`;
+  } else {
+    badge.className = 'free';
+    const used = queriesUsed ?? 0;
+    const lim  = queriesLimit ?? 10;
+    badge.textContent = `Free · ${used}/${lim} this week`;
+  }
+}
+
+function updateUsageDisplay(queriesUsed, queriesLimit, tier, period) {
+  const row   = document.getElementById('acct-usage-row');
+  const label = document.querySelector('#acct-usage-row .acct-label');
+  const val   = document.getElementById('acct-usage');
+  const used  = queriesUsed ?? 0;
+  const lim   = queriesLimit ?? (tier === 'free' ? 10 : tier === 'pro' ? 1000 : 2500);
+  const pct   = Math.min(100, Math.round((used / lim) * 100));
+  const p     = period ?? (tier === 'free' ? 'weekly' : 'monthly');
+
+  row.style.display = 'flex';
+  if (label) label.textContent = p === 'weekly' ? 'Queries this week' : 'Queries this month';
+  val.innerHTML = `
+    ${used.toLocaleString()} / ${lim.toLocaleString()}
+    <span style="margin-left:8px;font-size:10px;color:var(--text-sub)">${pct}%</span>
+    <div style="margin-top:5px;height:3px;border-radius:2px;background:var(--border);width:120px">
+      <div style="height:100%;border-radius:2px;width:${pct}%;background:${pct >= 90 ? '#e05252' : pct >= 70 ? '#d4891a' : 'var(--accent)'}"></div>
+    </div>`;
+}
+
+// ── Auth overlay ──────────────────────────────────────────────────
+function showAuthOverlay() {
+  document.getElementById('auth-overlay').style.display = 'flex';
+}
+
+function switchTab(mode) {
+  authMode = mode;
+  document.getElementById('tab-login').classList.toggle('active', mode === 'login');
+  document.getElementById('tab-register').classList.toggle('active', mode === 'register');
+  document.getElementById('auth-submit').textContent = mode === 'login' ? 'Sign In' : 'Create Account';
+  document.getElementById('auth-error').style.display = 'none';
+  document.getElementById('auth-password').autocomplete = mode === 'login' ? 'current-password' : 'new-password';
+}
+
+async function submitAuth() {
+  const email    = document.getElementById('auth-email').value.trim();
+  const password = document.getElementById('auth-password').value;
+  const btn      = document.getElementById('auth-submit');
+  const err      = document.getElementById('auth-error');
+  err.style.display = 'none';
+
+  if (!email || !password) {
+    showAuthError('Please enter your email and password.');
+    return;
+  }
+
+  btn.disabled = true;
+  btn.textContent = authMode === 'login' ? 'Signing in…' : 'Creating account…';
+
+  const endpoint = authMode === 'login' ? '/api/auth/login' : '/api/auth/register';
+
+  try {
+    const res = await fetch(`${API}${endpoint}`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({email, password}),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      showAuthError(data.detail || 'Authentication failed.');
+    } else {
+      onAuthenticated(data);
+    }
+  } catch (e) {
+    showAuthError('Could not reach local server. Is PAN Copilot running?');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = authMode === 'login' ? 'Sign In' : 'Create Account';
+  }
+}
+
+function showAuthError(msg) {
+  const el = document.getElementById('auth-error');
+  el.textContent = msg;
+  el.style.display = 'block';
+}
+
+// Enter key on auth form
+document.addEventListener('DOMContentLoaded', () => {
+  ['auth-email','auth-password'].forEach(id => {
+    document.getElementById(id).addEventListener('keydown', e => {
+      if (e.key === 'Enter') submitAuth();
+    });
+  });
+  init();
+});
+
+// ── Account panel ─────────────────────────────────────────────────
+function openSettings() {
+  document.getElementById('settings-panel').classList.add('open');
+}
+function closeSettings() {
+  document.getElementById('settings-panel').classList.remove('open');
+}
+
+async function logout() {
+  try {
+    await fetch(`${API}/api/auth/logout`, {method: 'POST'});
+  } catch {}
+  document.getElementById('tier-badge').style.display = 'none';
+  closeSettings();
+  showAuthOverlay();
+}
+
+// ── Theme ─────────────────────────────────────────────────────────
+function applyTheme() {
+  const t = localStorage.getItem('theme') || 'dark';
+  document.documentElement.setAttribute('data-theme', t);
+  document.getElementById('t-icon').textContent  = t === 'dark' ? '☀️' : '🌙';
+  document.getElementById('t-label').textContent = t === 'dark' ? 'Light' : 'Dark';
+}
+function toggleTheme() {
+  const next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+  localStorage.setItem('theme', next);
+  applyTheme();
+}
+
+// ── Product selection ─────────────────────────────────────────────
+function selectProduct(id) {
+  currentProduct = id;
+  const p = PRODUCTS[id];
+
+  document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
+  document.querySelector(`[data-id="${id}"]`)?.classList.add('active');
+
+  document.getElementById('context-icon').textContent = p.icon;
+  document.getElementById('context-name').textContent = p.name;
+  document.getElementById('context-desc').textContent = `Focused on ${p.name}. Ask about config, troubleshooting, best practices, or paste output below.`;
+
+  const chips = document.getElementById('context-chips');
+  chips.innerHTML = p.chips.map(c => `<button class="ctx-chip" onclick="quickAsk('${c}')">${c}</button>`).join('');
+}
+
+// ── Conversation list ─────────────────────────────────────────────
+async function loadConversations() {
+  try {
+    const res  = await fetch(`${API}/conversations`);
+    const list = await res.json();
+    renderConvList(list);
+  } catch {}
+}
+
+function renderConvList(list) {
+  const el = document.getElementById('conv-list');
+  if (!list.length) {
+    el.innerHTML = '<div id="conv-empty">No conversations yet.</div>';
+    return;
+  }
+  el.innerHTML = list.map(c => `
+    <div class="conv-item${c.id === currentConvId ? ' active' : ''}" onclick="loadConv('${c.id}')">
+      <span class="conv-item-title">${escHtml(c.title)}</span>
+      <button class="conv-item-del" onclick="deleteConv(event,'${c.id}')" title="Delete">✕</button>
+    </div>
+  `).join('');
+}
+
+async function loadConv(id) {
+  try {
+    const res  = await fetch(`${API}/conversations/${id}`);
+    const data = await res.json();
+    currentConvId = id;
+    clearMessages();
+    for (const m of data.messages) {
+      if (m.role === 'user')      appendUserMessage(m.content);
+      if (m.role === 'assistant') appendAssistantMessage(m.content, null);
+    }
+    loadConversations();
+  } catch {}
+}
+
+async function deleteConv(e, id) {
+  e.stopPropagation();
+  await fetch(`${API}/conversations/${id}`, {method: 'DELETE'});
+  if (currentConvId === id) { currentConvId = null; newChat(); }
+  loadConversations();
+}
+
+function newChat() {
+  currentConvId = null;
+  clearMessages();
+  document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
+  currentProduct = null;
+  document.getElementById('context-icon').textContent = '🔥';
+  document.getElementById('context-name').textContent = 'PAN Copilot';
+  document.getElementById('context-desc').textContent = 'Select a product from the left to focus the chat, or ask anything below.';
+  document.getElementById('context-chips').innerHTML = '';
+  loadConversations();
+}
+
+// ── Messages ──────────────────────────────────────────────────────
+function clearMessages() {
+  const el = document.getElementById('messages');
+  el.innerHTML = `
+    <div id="welcome">
+      <div class="w-logo">PAN</div>
+      <h2>PAN Copilot</h2>
+      <p>Select a product from the left nav to get focused help, or just ask anything about the Palo Alto Networks portfolio.</p>
+      <div class="privacy-note">🔒 Runs 100% locally — your configs never leave this machine</div>
+    </div>`;
+}
+
+function hideWelcome() {
+  document.getElementById('welcome')?.remove();
+}
+
+function appendUserMessage(text) {
+  hideWelcome();
+  const div = document.createElement('div');
+  div.className = 'msg-row user';
+  div.innerHTML = `
+    <div class="msg-bubble">
+      <div class="msg-label">You</div>
+      <div>${escHtml(text)}</div>
+    </div>`;
+  document.getElementById('messages').appendChild(div);
+  scrollBottom();
+}
+
+function appendAssistantMessage(text, tokenMeta) {
+  hideWelcome();
+  const div = document.createElement('div');
+  div.className = 'msg-row assistant';
+  div.innerHTML = `
+    <div class="msg-bubble">
+      <div class="msg-label">PAN Copilot</div>
+      <div class="msg-content">${renderMarkdown(text)}</div>
+      ${tokenMeta ? `<div class="token-meta"><span>${tokenMeta.in_tokens} in</span><span>${tokenMeta.out_tokens} out</span></div>` : ''}
+    </div>`;
+  document.getElementById('messages').appendChild(div);
+  scrollBottom();
+  return div;
+}
+
+function appendThinking() {
+  hideWelcome();
+  const div = document.createElement('div');
+  div.className = 'thinking-row';
+  div.innerHTML = `
+    <div class="thinking-bubble">
+      <div class="dots"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div>
+      <span style="font-size:12px;color:var(--text-dim)">PAN Copilot is thinking…</span>
+    </div>`;
+  document.getElementById('messages').appendChild(div);
+  scrollBottom();
+  return div;
+}
+
+// ── Send message ──────────────────────────────────────────────────
+function quickAsk(q) {
+  document.getElementById('user-input').value = q;
+  sendMessage();
+}
+
+async function sendMessage() {
+  if (isStreaming) return;
+  const input = document.getElementById('user-input');
+  const msg   = input.value.trim();
+  if (!msg) return;
+
+  input.value = '';
+  autoResize(input);
+  isStreaming = true;
+  document.getElementById('send-btn').disabled = true;
+
+  appendUserMessage(msg);
+  const thinking = appendThinking();
+
+  const cfgText = document.getElementById('config-paste').value.trim() || configText;
+
+  try {
+    const res = await fetch(`${API}/chat/stream`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        message:         msg,
+        config_text:     cfgText,
+        history:         [],          // history loaded from conversation
+        conversation_id: currentConvId,
+        product_id:      currentProduct,
+      }),
+    });
+
+    if (!res.ok) {
+      const err = await res.json();
+      thinking.remove();
+      appendAssistantMessage(`⚠️ ${err.detail || 'Error reaching the API.'}`, null);
+      return;
+    }
+
+    thinking.remove();
+    const placeholder = document.createElement('div');
+    placeholder.className = 'msg-row assistant';
+    placeholder.innerHTML = `
+      <div class="msg-bubble">
+        <div class="msg-label">PAN Copilot</div>
+        <div class="msg-content"></div>
+      </div>`;
+    document.getElementById('messages').appendChild(placeholder);
+    const contentEl = placeholder.querySelector('.msg-content');
+
+    const reader = res.body.getReader();
+    const dec    = new TextDecoder();
+    let raw      = '';
+
+    while (true) {
+      const {done, value} = await reader.read();
+      if (done) break;
+      const chunk = dec.decode(value, {stream: true});
+      for (const line of chunk.split('\n')) {
+        if (!line.startsWith('data: ')) continue;
+        const data = JSON.parse(line.slice(6));
+        if (data.type === 'token') {
+          raw += data.text;
+          contentEl.innerHTML = renderMarkdown(raw) + '<span class="cursor"></span>';
+          scrollBottom();
+        } else if (data.type === 'done') {
+          currentConvId = data.conversation_id;
+          contentEl.innerHTML = renderMarkdown(raw);
+          const meta = document.createElement('div');
+          meta.className = 'token-meta';
+          meta.innerHTML = `<span>${data.input_tokens} in</span><span>${data.output_tokens} out</span>`;
+          placeholder.querySelector('.msg-bubble').appendChild(meta);
+          // Refresh query counter in header for all tiers
+          if (data.queries_used != null) {
+            const tier   = data.tier   || 'free';
+            const period = data.period || (tier === 'free' ? 'weekly' : 'monthly');
+            updateTierUI(tier, data.queries_used, data.queries_limit, period);
+            updateUsageDisplay(data.queries_used, data.queries_limit, tier, period);
+          }
+          loadConversations();
+        } else if (data.type === 'error') {
+          contentEl.innerHTML = `<span style="color:#f85149">⚠️ ${escHtml(data.detail)}</span>`;
+        }
+      }
+    }
+  } catch (e) {
+    thinking.remove();
+    appendAssistantMessage(`⚠️ Lost connection to local server. Is PAN Copilot still running?`, null);
+  } finally {
+    isStreaming = false;
+    document.getElementById('send-btn').disabled = false;
+  }
+}
+
+function handleKey(e) {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    sendMessage();
+  }
+}
+
+function autoResize(el) {
+  el.style.height = 'auto';
+  el.style.height = Math.min(el.scrollHeight, 160) + 'px';
+}
+
+// ── Config paste ──────────────────────────────────────────────────
+function updateConfigStatus() {
+  const val = document.getElementById('config-paste').value.trim();
+  const el  = document.getElementById('config-status');
+  if (val) {
+    const lines = val.split('\n').length;
+    el.textContent = `${lines} lines ready to attach`;
+    el.className   = 'has';
+  } else {
+    el.textContent = '';
+    el.className   = '';
+  }
+  document.getElementById('config-ind').textContent = val ? '📎 Config attached' : '';
+}
+
+async function uploadFile(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const status = document.getElementById('upload-status');
+  status.textContent = `Uploading ${file.name}…`;
+  status.className   = '';
+
+  const form = new FormData();
+  form.append('file', file);
+
+  try {
+    const res  = await fetch(`${API}/upload`, {method: 'POST', body: form});
+    const data = await res.json();
+    if (!res.ok) {
+      status.textContent = data.detail || 'Upload failed.';
+      status.className   = 'error';
+    } else {
+      document.getElementById('config-paste').value = data.text;
+      updateConfigStatus();
+      status.textContent = `✓ ${file.name} loaded (${(data.size / 1024).toFixed(1)} KB)`;
+      status.className   = 'loaded';
+    }
+  } catch {
+    status.textContent = 'Upload failed — server not reachable.';
+    status.className   = 'error';
+  }
+  input.value = '';
+}
+
+// ── Utilities ─────────────────────────────────────────────────────
+function scrollBottom() {
+  const el = document.getElementById('messages');
+  el.scrollTop = el.scrollHeight;
+}
+
+function escHtml(str) {
+  return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function renderMarkdown(md) {
+  let html = escHtml(md);
+  // Code blocks
+  html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => {
+    const l = lang || 'text';
+    return `<div class="code-block">
+      <div class="code-block-header">
+        <span class="code-lang">${escHtml(l)}</span>
+        <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+      </div>
+      <pre>${code}</pre>
+    </div>`;
+  });
+  // Inline code
+  html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+  // Bold
+  html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  // H3/H4
+  html = html.replace(/^#### (.+)$/gm, '<h4>$1</h4>');
+  html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+  // Lists
+  html = html.replace(/^[\*\-] (.+)$/gm, '<li>$1</li>');
+  html = html.replace(/(<li>.*<\/li>\n?)+/gs, m => `<ul>${m}</ul>`);
+  html = html.replace(/^\d+\. (.+)$/gm, '<li>$1</li>');
+  // Paragraphs
+  html = html.replace(/\n{2,}/g, '</p><p>');
+  html = html.replace(/\n/g, '<br>');
+  return `<p>${html}</p>`;
+}
+
+function copyCode(btn) {
+  const code = btn.closest('.code-block').querySelector('pre').textContent;
+  navigator.clipboard.writeText(code).then(() => {
+    btn.textContent = 'Copied!';
+    btn.classList.add('copied');
+    setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 1800);
+  });
+}
+</script>
+
+</body>
+</html>
