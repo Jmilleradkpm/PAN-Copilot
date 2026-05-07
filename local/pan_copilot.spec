@@ -58,7 +58,7 @@ a = Analysis(
     hiddenimports=hidden_imports,
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=[],
+    runtime_hooks=["rthook_fix_streams.py"],
     excludes=[
         # These packages are huge and not needed
         "tkinter", "matplotlib", "numpy", "pandas",

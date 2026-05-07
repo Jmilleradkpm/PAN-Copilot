@@ -31,20 +31,45 @@ if sys.stderr is None:
 
 import uvicorn
 import uvicorn.config
+import uvicorn.logging as _uvlog
 
-# In a windowless PyInstaller build sys.stdout/stderr are None.
-# uvicorn.Config.configure_logging ultimately instantiates DefaultFormatter
-# which calls sys.stdout.isatty() → AttributeError → crash.
+# ── Definitive isatty() fix ──────────────────────────────────────────────────
 #
-# Passing a custom log_config dict is NOT reliable: some uvicorn versions
-# deep-merge the provided dict with their own LOGGING_CONFIG default before
-# calling dictConfig, so uvicorn.logging.DefaultFormatter still ends up in
-# the final config and still calls isatty().
+# In a --windowed PyInstaller build sys.stdout/stderr are None.
+# uvicorn's DefaultFormatter (and AccessFormatter) call sys.stdout.isatty()
+# inside __init__ when use_colors is not explicitly set → AttributeError.
 #
-# The only bulletproof fix is to replace configure_logging on the class
-# itself with a no-op before any Config instance is created.  Uvicorn will
-# skip all logging setup; for a windowed desktop app that is exactly right.
+# Three layers of defence, all applied before any uvicorn.Config is created:
+#
+#  Layer 1 – stdout/stderr redirect (above): ensures streams are valid file
+#            objects so isatty() won't crash even if layers 2/3 ever miss.
+#
+#  Layer 2 – Patch __init__ on the class objects themselves.
+#            logging.config.dictConfig resolves formatter classes by string
+#            ("uvicorn.logging.DefaultFormatter"), gets the class OBJECT, then
+#            instantiates it.  Replacing the class reference in the module
+#            namespace (the approach that didn't work) can be bypassed by
+#            importlib; patching __init__ directly on the object cannot —
+#            the class is the same object regardless of how it was imported.
+#
+_orig_default = _uvlog.DefaultFormatter.__init__
+def _safe_default(self, *args, use_colors=None, **kwargs):
+    # Force use_colors=False; the isatty() branch is only reached when
+    # use_colors is None (neither True nor False).
+    _orig_default(self, *args, use_colors=False, **kwargs)
+_uvlog.DefaultFormatter.__init__ = _safe_default
+
+if hasattr(_uvlog, "AccessFormatter"):
+    _orig_access = _uvlog.AccessFormatter.__init__
+    def _safe_access(self, *args, use_colors=None, **kwargs):
+        _orig_access(self, *args, use_colors=False, **kwargs)
+    _uvlog.AccessFormatter.__init__ = _safe_access
+
+#  Layer 3 – Make configure_logging itself a no-op as belt-and-suspenders.
+#            If for any reason layers 1/2 are insufficient, uvicorn will
+#            simply skip all logging configuration entirely.
 uvicorn.config.Config.configure_logging = lambda self: None
+# ────────────────────────────────────────────────────────────────────────────
 
 
 def _show_crash_dialog(message: str) -> None:
