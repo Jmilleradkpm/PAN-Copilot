@@ -1,4 +1,4 @@
-﻿# -*- mode: python ; coding: utf-8 -*-
+# -*- mode: python ; coding: utf-8 -*-
 #
 # PAN Copilot â€” PyInstaller build spec
 #
@@ -20,7 +20,8 @@ block_cipher = None
 # Data files to bundle alongside the executable
 datas = [
     # (source_path, dest_folder_inside_bundle)
-    ("pan_copilot_desktop.html",              "."),`n    ("pan_copilot.ico",                       "."),
+    ("pan_copilot_desktop.html",              "."),
+    ("pan_copilot.ico",                       "."),
     ("../PAN_Copilot_Master_System_Prompt.md", "."),
 ]
 
