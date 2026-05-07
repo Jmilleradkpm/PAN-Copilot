@@ -13,11 +13,20 @@ What it does:
 Everything runs on your machine. Your configs never leave.
 """
 
+import os
 import socket
 import sys
 import threading
 import time
 import webbrowser
+
+# PyInstaller bundles without a console window, leaving sys.stdout/stderr as
+# None. Uvicorn's log formatter calls .isatty() on them and crashes.
+# Redirect to devnull so uvicorn starts cleanly.
+if sys.stdout is None:
+    sys.stdout = open(os.devnull, "w")
+if sys.stderr is None:
+    sys.stderr = open(os.devnull, "w")
 
 import uvicorn
 
@@ -59,8 +68,9 @@ def main():
         app,
         host="127.0.0.1",
         port=port,
-        log_level="warning",   # suppress noisy uvicorn startup logs
+        log_level="warning",
         access_log=False,
+        log_config=None,       # disable uvicorn log config to avoid isatty crash
     )
     server = uvicorn.Server(config)
 
