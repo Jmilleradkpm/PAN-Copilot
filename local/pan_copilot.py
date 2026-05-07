@@ -23,11 +23,17 @@ import webbrowser
 
 # PyInstaller bundles without a console window, leaving sys.stdout/stderr as
 # None. Uvicorn's DefaultFormatter calls sys.stdout.isatty() and crashes.
-# Fix 1: redirect None streams to devnull.
-if sys.stdout is None:
-    sys.stdout = open(os.devnull, "w")
-if sys.stderr is None:
-    sys.stderr = open(os.devnull, "w")
+# Fix 1: redirect None streams to a writable debug log.
+if sys.stdout is None or sys.stderr is None:
+    _log = open(
+        os.path.join(os.path.expanduser("~"), "pan_copilot_debug.log"),
+        "w",
+        buffering=1,
+    )
+    if sys.stdout is None:
+        sys.stdout = _log
+    if sys.stderr is None:
+        sys.stderr = _log
 
 import logging.config as _logging_config
 import uvicorn
@@ -143,7 +149,7 @@ def main():
         print("Server did not start in time. Try opening the browser manually:")
         print(f"  {url}")
 
-    # Keep alive — the daemon thread will keep running
+    # Keep alive while the server thread runs.
     try:
         server_thread.join()
     except KeyboardInterrupt:
