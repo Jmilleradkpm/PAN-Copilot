@@ -259,11 +259,13 @@ def auto_title(conversation_id: str, first_message: str):
 # ---------------------------------------------------------------------------
 
 def _license_post(path: str, body: dict) -> dict:
+    # Render free tier can take up to 60 s to wake from sleep — use a generous
+    # timeout so the first sign-in after inactivity doesn't fail.
     try:
         r = httpx.post(
             f"{LICENSE_SERVER_URL}{path}",
             json=body,
-            timeout=10.0,
+            timeout=60.0,
         )
         r.raise_for_status()
         return r.json()
@@ -275,7 +277,10 @@ def _license_post(path: str, body: dict) -> dict:
             pass
         raise HTTPException(status_code=e.response.status_code, detail=detail)
     except Exception as e:
-        raise HTTPException(status_code=503, detail=f"License server unreachable: {str(e)}")
+        raise HTTPException(
+            status_code=503,
+            detail=f"License server unreachable: {str(e)}. If this is your first sign-in today, wait 30 seconds and try again."
+        )
 
 def _populate_session(data: dict):
     """Write license server response into the in-memory session cache."""

@@ -52,16 +52,18 @@ LS_VARIANT_TIER = {
     "0475eb28-6e6b-4f68-adcc-9de6045192d6": "max",
 }
 
-FREE_WEEKLY_LIMIT = 10       # ~40 / month
-PRO_MONTHLY_LIMIT = 1_000    # API cost ≈ $20 at this volume
-MAX_MONTHLY_LIMIT = 2_500    # API cost ≈ $50 at this volume
+FREE_WEEKLY_LIMIT  = 10        # ~40 / month
+PRO_MONTHLY_LIMIT  = 1_000     # API cost ≈ $20 at this volume
+MAX_MONTHLY_LIMIT  = 2_500     # API cost ≈ $50 at this volume
+OWNER_LIMIT        = 999_999   # Effectively unlimited
 
 SESSION_TTL_DAYS = 30
 
 TIER_LIMITS = {
-    "free": FREE_WEEKLY_LIMIT,
-    "pro":  PRO_MONTHLY_LIMIT,
-    "max":  MAX_MONTHLY_LIMIT,
+    "free":  FREE_WEEKLY_LIMIT,
+    "pro":   PRO_MONTHLY_LIMIT,
+    "max":   MAX_MONTHLY_LIMIT,
+    "owner": OWNER_LIMIT,
 }
 
 # ---------------------------------------------------------------------------
@@ -143,7 +145,9 @@ def month_start() -> str:
 
 def period_key(tier: str) -> str:
     """Return the appropriate counting period key for this tier."""
-    return week_start() if tier == "free" else month_start()
+    if tier == "free":
+        return week_start()
+    return month_start()  # pro, max, owner all use monthly window
 
 def hash_password(password: str) -> str:
     salted = SECRET_PEPPER + password
@@ -186,6 +190,7 @@ def usage_response(user: sqlite3.Row, queries_used: int = None) -> dict:
     used  = queries_used if queries_used is not None else get_query_count(user["id"], tier)
     period = "weekly" if tier == "free" else "monthly"
 
+    unlimited = (tier == "owner")
     return {
         "email":         user["email"],
         "tier":          tier,
@@ -193,7 +198,8 @@ def usage_response(user: sqlite3.Row, queries_used: int = None) -> dict:
         "period":        period,
         "queries_used":  used,
         "queries_limit": limit,
-        "queries_remaining": max(0, limit - used),
+        "queries_remaining": OWNER_LIMIT if unlimited else max(0, limit - used),
+        "unlimited":     unlimited,
         # Legacy keys kept for older local-app versions
         "weekly_used":  used  if tier == "free" else None,
         "weekly_limit": limit if tier == "free" else None,
@@ -337,6 +343,18 @@ def check_and_count(req: TokenRequest):
     limit = query_limit_for(tier)
     pk    = period_key(tier)
 
+    # Owner tier bypasses all query limits
+    if tier == "owner":
+        return {
+            "allowed": True,
+            "tier": "owner",
+            "period": "monthly",
+            "queries_used": 0,
+            "queries_limit": OWNER_LIMIT,
+            "queries_remaining": OWNER_LIMIT,
+            "unlimited": True,
+        }
+
     with get_db() as db:
         row = db.execute(
             "SELECT count FROM query_counts WHERE user_id = ? AND period_key = ?",
@@ -397,8 +415,8 @@ def check_and_count(req: TokenRequest):
 def set_tier(req: AdminTierRequest):
     if not ADMIN_TOKEN or req.admin_token != ADMIN_TOKEN:
         raise HTTPException(status_code=403, detail="Forbidden.")
-    if req.tier not in ("free", "pro", "max"):
-        raise HTTPException(status_code=400, detail="tier must be free, pro, or max.")
+    if req.tier not in ("free", "pro", "max", "owner"):
+        raise HTTPException(status_code=400, detail="tier must be free, pro, max, or owner.")
 
     with get_db() as db:
         result = db.execute(

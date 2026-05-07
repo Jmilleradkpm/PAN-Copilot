@@ -126,12 +126,14 @@ jobs:
           Write-Host "Uploading versioned release..."
           aws s3 cp "PAN_Copilot_${ver}.zip" `
             "s3://${bucket}/releases/${ver}/PAN_Copilot_${ver}.zip" `
-            --endpoint-url $ep
+            --endpoint-url $ep `
+            --cache-control "no-cache"
 
           Write-Host "Uploading as latest..."
           aws s3 cp "PAN_Copilot_latest.zip" `
             "s3://${bucket}/latest/PAN_Copilot.zip" `
-            --endpoint-url $ep
+            --endpoint-url $ep `
+            --cache-control "no-cache"
 
           Write-Host "Uploading version manifest..."
           aws s3 cp "version.json" `
