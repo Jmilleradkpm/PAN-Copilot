@@ -68,7 +68,7 @@ TIER_LIMITS = {
 # Database
 # ---------------------------------------------------------------------------
 
-DB_PATH = Path(os.environ.get("DB_PATH", "/data/license_server.db"))
+DB_PATH = Path(os.environ.get("DB_PATH", "/tmp/license_server.db"))
 
 def get_db():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
