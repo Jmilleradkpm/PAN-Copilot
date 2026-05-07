@@ -96,7 +96,7 @@ jobs:
           $json = [ordered]@{
             version      = $version
             released_at  = $ts
-            download_url = "https://downloads.adkcyber.com/latest/PAN_Copilot.zip"
+            download_url = "https://downloads.adkcyber.com/releases/${version}/PAN_Copilot_${version}.zip"
             versioned_url = "https://downloads.adkcyber.com/releases/${version}/PAN_Copilot_${version}.zip"
             min_app_version = "1.0.0"
           } | ConvertTo-Json -Depth 3
