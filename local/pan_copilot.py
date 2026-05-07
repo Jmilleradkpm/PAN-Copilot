@@ -7,8 +7,8 @@ What it does:
   1. Finds a free localhost port
   2. Starts the FastAPI server on 127.0.0.1:<port> (background thread)
   3. Waits for the server to be ready
-  4. Opens the user's default browser to http://127.0.0.1:<port>
-  5. Keeps the process alive until the window is closed
+  4. Opens a native desktop window (pywebview / WebView2) — no browser required
+  5. Window close shuts down the process cleanly
 
 Everything runs on your machine. Your configs never leave.
 """
@@ -19,43 +19,23 @@ import sys
 import threading
 import time
 import traceback
-import webbrowser
 
-# PyInstaller bundles without a console window, leaving sys.stdout/stderr as
-# None. Uvicorn's DefaultFormatter calls sys.stdout.isatty() and crashes.
-# Fix 1: redirect None streams to a writable debug log.
+# PyInstaller windowed builds leave sys.stdout/stderr as None.
+# Redirect to devnull so nothing crashes on write.
 if sys.stdout is None or sys.stderr is None:
-    _log = open(
-        os.path.join(os.path.expanduser("~"), "pan_copilot_debug.log"),
-        "w",
-        buffering=1,
-    )
+    _devnull = open(os.devnull, "w")
     if sys.stdout is None:
-        sys.stdout = _log
+        sys.stdout = _devnull
     if sys.stderr is None:
-        sys.stderr = _log
+        sys.stderr = _devnull
 
 import logging.config as _logging_config
 import uvicorn
 import uvicorn.config
-import uvicorn.logging as _uvlog
 
 # ── isatty() crash fix ───────────────────────────────────────────────────────
-# In a --windowed PyInstaller build sys.stdout/stderr are None.
-# uvicorn's DefaultFormatter calls sys.stdout.isatty() inside __init__ and
-# crashes before the server ever starts.
-#
-# Root cause: uvicorn.Config calls logging.config.dictConfig(LOGGING_CONFIG)
-# which instantiates DefaultFormatter via its '()' factory string.
-# Every higher-level patch (replacing the class, patching the method, making
-# configure_logging a no-op) has proven unreliable across Python/PyInstaller
-# versions because of how the frozen import machinery resolves names.
-#
-# The only approach that cannot be bypassed: patch dictConfig itself.
-# dictConfig is a plain function in stdlib logging.config — we replace it with
-# a wrapper that strips uvicorn's custom formatter factories before the call,
-# substituting the safe stdlib logging.Formatter instead.
-# No custom formatter → no isatty() call → no crash.
+# uvicorn's DefaultFormatter calls sys.stdout.isatty() inside dictConfig.
+# Patch dictConfig itself to swap out uvicorn formatter factories before they run.
 
 _orig_dictConfig = _logging_config.dictConfig
 
@@ -69,30 +49,23 @@ def _safe_dictConfig(cfg):
     _orig_dictConfig(cfg)
 
 _logging_config.dictConfig = _safe_dictConfig
-
-# Belt-and-suspenders: also silence configure_logging entirely.
 uvicorn.config.Config.configure_logging = lambda self: None
 # ─────────────────────────────────────────────────────────────────────────────
 
 
 def _show_crash_dialog(message: str) -> None:
-    """Surface a fatal startup error in a Windows MessageBox so users see what failed.
-
-    Without this, an unhandled exception in a --windowed PyInstaller build either
-    crashes silently or pops a generic 'Failed to execute script' dialog that
-    doesn't include our app name or contact info.
-    """
+    """Surface a fatal startup error in a Windows MessageBox."""
     try:
         import ctypes
-        # MB_ICONERROR (0x10) | MB_OK (0x00)
         ctypes.windll.user32.MessageBoxW(
             0, message, "PAN Copilot — Startup Error", 0x10
         )
     except Exception:
-        pass  # If even MessageBox fails, there's nothing more we can do.
+        pass
+
 
 # ---------------------------------------------------------------------------
-# Find a free port
+# Helpers
 # ---------------------------------------------------------------------------
 
 def find_free_port() -> int:
@@ -100,11 +73,8 @@ def find_free_port() -> int:
         s.bind(("127.0.0.1", 0))
         return s.getsockname()[1]
 
-# ---------------------------------------------------------------------------
-# Wait for server to accept connections
-# ---------------------------------------------------------------------------
 
-def wait_for_server(port: int, timeout: float = 15.0):
+def wait_for_server(port: int, timeout: float = 15.0) -> bool:
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:
@@ -114,6 +84,7 @@ def wait_for_server(port: int, timeout: float = 15.0):
             time.sleep(0.2)
     return False
 
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -122,11 +93,10 @@ def main():
     port = find_free_port()
     url  = f"http://127.0.0.1:{port}"
 
-    # Import here so PyInstaller can resolve it
-    from app import app
+    from app import app as fastapi_app
 
     config = uvicorn.Config(
-        app,
+        fastapi_app,
         host="127.0.0.1",
         port=port,
         log_level="warning",
@@ -134,27 +104,41 @@ def main():
     )
     server = uvicorn.Server(config)
 
-    # Start server in a daemon thread (dies when main thread exits)
     server_thread = threading.Thread(target=server.run, daemon=True)
     server_thread.start()
 
-    print(f"PAN Copilot starting on {url}")
+    if not wait_for_server(port):
+        _show_crash_dialog(
+            "PAN Copilot server did not start in time.\n"
+            f"Try opening manually: {url}"
+        )
+        sys.exit(1)
 
-    # Wait until server is ready, then open browser
-    if wait_for_server(port):
-        webbrowser.open(url)
-        print("Browser opened. PAN Copilot is running.")
-        print("Close this window to exit.")
-    else:
-        print("Server did not start in time. Try opening the browser manually:")
-        print(f"  {url}")
+    # ── Native window via pywebview ──────────────────────────────────────────
+    import webview
 
-    # Keep alive while the server thread runs.
-    try:
-        server_thread.join()
-    except KeyboardInterrupt:
-        print("\nShutting down PAN Copilot.")
-        sys.exit(0)
+    window = webview.create_window(
+        "PAN Copilot",
+        url,
+        width=1280,
+        height=820,
+        min_size=(900, 600),
+        resizable=True,
+        text_select=False,
+    )
+
+    # When the window closes, signal uvicorn to stop
+    def on_closed():
+        server.should_exit = True
+
+    window.events.closed += on_closed
+
+    # Start the GUI event loop — blocks until window is closed
+    webview.start(debug=False)
+
+    # Give uvicorn a moment to shut down cleanly
+    server_thread.join(timeout=3.0)
+
 
 if __name__ == "__main__":
     try:

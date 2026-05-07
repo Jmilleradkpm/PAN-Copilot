@@ -48,6 +48,12 @@ hidden_imports = [
     "httpcore",
     "httpx",
     "h11",
+    # pywebview
+    "webview",
+    "webview.platforms.winforms",
+    "clr",
+    "System",
+    "System.Windows.Forms",
 ]
 
 a = Analysis(
@@ -61,7 +67,7 @@ a = Analysis(
     runtime_hooks=["rthook_fix_streams.py"],
     excludes=[
         # These packages are huge and not needed
-        "tkinter", "matplotlib", "numpy", "pandas",
+        "matplotlib", "numpy", "pandas",
         "scipy", "PIL", "cv2", "torch", "tensorflow",
     ],
     win_no_prefer_redirects=False,
