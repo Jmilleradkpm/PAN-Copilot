@@ -1,5 +1,5 @@
-"""
-PAN Copilot — Desktop Launcher
+﻿"""
+PAN Copilot â€” Desktop Launcher
 ================================
 This is the PyInstaller entry point.
 
@@ -8,7 +8,7 @@ What it does:
   2. Starts the FastAPI server on 127.0.0.1:<port> (background thread)
   3. Waits for the server to be ready
   4. Opens Edge (or Chrome) in --app mode: a borderless window with no URL bar,
-     no tabs, no bookmark bar — indistinguishable from a native desktop app
+     no tabs, no bookmark bar â€” indistinguishable from a native desktop app
   5. Monitors the browser process; when it exits, the server shuts down cleanly
 
 Everything runs on your machine. Your configs never leave.
@@ -36,7 +36,7 @@ import logging.config as _logging_config
 import uvicorn
 import uvicorn.config
 
-# ── isatty() crash fix ───────────────────────────────────────────────────────
+# â”€â”€ isatty() crash fix â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 _orig_dictConfig = _logging_config.dictConfig
 
 def _safe_dictConfig(cfg):
@@ -50,14 +50,14 @@ def _safe_dictConfig(cfg):
 
 _logging_config.dictConfig = _safe_dictConfig
 uvicorn.config.Config.configure_logging = lambda self: None
-# ─────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
 def _show_crash_dialog(message: str) -> None:
     try:
         import ctypes
         ctypes.windll.user32.MessageBoxW(
-            0, message, "PAN Copilot — Startup Error", 0x10
+            0, message, "PAN Copilot â€” Startup Error", 0x10
         )
     except Exception:
         pass
@@ -90,10 +90,10 @@ def find_browser() -> list:
     Prefers Edge (always present on Win10/11), then Chrome.
     """
     candidates = [
-        # Edge — standard install paths
+        # Edge â€” standard install paths
         r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
         r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
-        # Chrome — standard install paths
+        # Chrome â€” standard install paths
         r"C:\Program Files\Google\Chrome\Application\chrome.exe",
         r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
         os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"),
@@ -139,7 +139,7 @@ def main():
         )
         sys.exit(1)
 
-    # ── Open browser in app mode (no URL bar, no tabs) ──────────────────────
+    # â”€â”€ Open browser in app mode (no URL bar, no tabs) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     browser = find_browser()
 
     if browser:
@@ -156,7 +156,7 @@ def main():
         proc.wait()
         server.should_exit = True
     else:
-        # No supported browser found — fall back to default browser
+        # No supported browser found â€” fall back to default browser
         import webbrowser
         webbrowser.open(url)
         # Keep alive until interrupted
@@ -178,3 +178,4 @@ if __name__ == "__main__":
             "Please report this error to support@adkcyber.com."
         )
         sys.exit(1)
+

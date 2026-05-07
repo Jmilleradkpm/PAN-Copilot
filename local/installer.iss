@@ -1,4 +1,4 @@
-; PAN Copilot — Windows Installer Script
+﻿; PAN Copilot â€” Windows Installer Script
 ; Inno Setup 6.x
 ; Build with: ISCC.exe installer.iss
 ; Output: Output\PAN_Copilot_Setup_vX.X.X.exe
@@ -24,6 +24,7 @@ DisableProgramGroupPage=yes
 ; Output installer exe
 OutputDir=Output
 OutputBaseFilename=PAN_Copilot_Setup_{#AppVersion}
+SetupIconFile=..\local\pan_copilot.ico
 
 ; Compression
 Compression=lzma2/ultra64
@@ -72,7 +73,7 @@ Name: "{autodesktop}\PAN Copilot"; Filename: "{app}\PAN Copilot.exe"; Comment: "
 Filename: "{app}\PAN Copilot.exe"; Description: "Launch PAN Copilot"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
-; Nothing extra needed — standard uninstaller removes all installed files
+; Nothing extra needed â€” standard uninstaller removes all installed files
 
 [Code]
 // Show a friendly finish message
@@ -83,3 +84,4 @@ begin
     // Nothing extra needed
   end;
 end;
+

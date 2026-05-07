@@ -1,12 +1,12 @@
-# -*- mode: python ; coding: utf-8 -*-
+﻿# -*- mode: python ; coding: utf-8 -*-
 #
-# PAN Copilot — PyInstaller build spec
+# PAN Copilot â€” PyInstaller build spec
 #
 # Build command (run from the local/ directory):
 #   pyinstaller pan_copilot.spec
 #
 # Output: dist/PAN Copilot/PAN Copilot.exe   (Windows, one-folder)
-#         dist/PAN Copilot.exe                (Windows, onefile — slower first launch)
+#         dist/PAN Copilot.exe                (Windows, onefile â€” slower first launch)
 #
 # NOTE: Build on Windows to produce a Windows .exe.
 #       Build on macOS to produce a macOS .app bundle.
@@ -20,7 +20,7 @@ block_cipher = None
 # Data files to bundle alongside the executable
 datas = [
     # (source_path, dest_folder_inside_bundle)
-    ("pan_copilot_desktop.html",              "."),
+    ("pan_copilot_desktop.html",              "."),`n    ("pan_copilot.ico",                       "."),
     ("../PAN_Copilot_Master_System_Prompt.md", "."),
 ]
 
@@ -72,7 +72,7 @@ a = Analysis(
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
-# ── One-folder build (faster startup, recommended for distribution) ──
+# â”€â”€ One-folder build (faster startup, recommended for distribution) â”€â”€
 exe = EXE(
     pyz,
     a.scripts,
@@ -89,7 +89,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    # icon="pan_copilot.ico",  # Uncomment and add a .ico file for a custom icon
+    icon="pan_copilot.ico",
 )
 
 coll = COLLECT(
@@ -103,7 +103,7 @@ coll = COLLECT(
     name="PAN Copilot",
 )
 
-# ── Uncomment below and comment out COLLECT above for a single .exe file ──
+# â”€â”€ Uncomment below and comment out COLLECT above for a single .exe file â”€â”€
 # Single .exe is convenient but has a slower first launch (~5s) while it
 # extracts itself to a temp dir on each run.
 #
@@ -128,3 +128,5 @@ coll = COLLECT(
 #     codesign_identity=None,
 #     entitlements_file=None,
 # )
+
+
