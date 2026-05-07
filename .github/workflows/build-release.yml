@@ -77,13 +77,16 @@ jobs:
 
       # ── 6. Sign the main executable ────────────────────────
       - name: Sign PAN Copilot.exe
-        if: ${{ secrets.CODE_SIGNING_CERT_PFX != '' }}
         working-directory: local
         shell: pwsh
         env:
           CERT_PFX_BASE64: ${{ secrets.CODE_SIGNING_CERT_PFX }}
           CERT_PASSWORD:   ${{ secrets.CODE_SIGNING_CERT_PASSWORD }}
         run: |
+          if (-not $env:CERT_PFX_BASE64) {
+            Write-Host "CODE_SIGNING_CERT_PFX not set — skipping signing"
+            exit 0
+          }
           # Decode PFX from base64 secret
           $pfxBytes = [Convert]::FromBase64String($env:CERT_PFX_BASE64)
           $pfxPath  = Join-Path $env:TEMP "pan_copilot_sign.pfx"
@@ -132,13 +135,16 @@ jobs:
 
       # ── 9. Sign the installer ──────────────────────────────
       - name: Sign installer exe
-        if: ${{ secrets.CODE_SIGNING_CERT_PFX != '' }}
         working-directory: local
         shell: pwsh
         env:
           CERT_PFX_BASE64: ${{ secrets.CODE_SIGNING_CERT_PFX }}
           CERT_PASSWORD:   ${{ secrets.CODE_SIGNING_CERT_PASSWORD }}
         run: |
+          if (-not $env:CERT_PFX_BASE64) {
+            Write-Host "CODE_SIGNING_CERT_PFX not set — skipping signing"
+            exit 0
+          }
           $version  = "${{ github.ref_name }}"
           $pfxBytes = [Convert]::FromBase64String($env:CERT_PFX_BASE64)
           $pfxPath  = Join-Path $env:TEMP "pan_copilot_sign.pfx"
