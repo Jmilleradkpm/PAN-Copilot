@@ -86,7 +86,21 @@ jobs:
           Copy-Item $zipName "PAN_Copilot_latest.zip" -Force
           Write-Host "Created: $zipName ($('{0:N1} MB' -f ((Get-Item $zipName).Length / 1MB)))"
 
-      # ── 7. Write version manifest ──────────────────────────
+      # ── 7. Build Inno Setup installer ─────────────────────
+      - name: Build Windows installer
+        working-directory: local
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}"
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          & $iscc /DAppVersion=$version installer.iss
+          $installer = "Output\PAN_Copilot_Setup_${version}.exe"
+          if (-not (Test-Path $installer)) {
+            throw "Installer not found at $installer"
+          }
+          Write-Host "Installer built: $installer ($('{0:N1} MB' -f ((Get-Item $installer).Length / 1MB)))"
+
+      # ── 8. Write version manifest ──────────────────────────
       - name: Create version.json
         working-directory: local
         shell: pwsh
@@ -94,10 +108,11 @@ jobs:
           $version = "${{ github.ref_name }}"
           $ts      = (Get-Date -Format "yyyy-MM-ddTHH:mm:ssZ")
           $json = [ordered]@{
-            version      = $version
-            released_at  = $ts
-            download_url = "https://downloads.adkcyber.com/releases/${version}/PAN_Copilot_${version}.zip"
+            version       = $version
+            released_at   = $ts
+            download_url  = "https://downloads.adkcyber.com/releases/${version}/PAN_Copilot_${version}.zip"
             versioned_url = "https://downloads.adkcyber.com/releases/${version}/PAN_Copilot_${version}.zip"
+            installer_url = "https://downloads.adkcyber.com/releases/${version}/PAN_Copilot_Setup_${version}.exe"
             min_app_version = "1.0.0"
           } | ConvertTo-Json -Depth 3
           Set-Content -Path "version.json" -Value $json -Encoding UTF8
@@ -135,6 +150,12 @@ jobs:
             --endpoint-url $ep `
             --cache-control "no-cache"
 
+          Write-Host "Uploading installer..."
+          aws s3 cp "Output\PAN_Copilot_Setup_${ver}.exe" `
+            "s3://${bucket}/releases/${ver}/PAN_Copilot_Setup_${ver}.exe" `
+            --endpoint-url $ep `
+            --cache-control "no-cache"
+
           Write-Host "Uploading version manifest..."
           aws s3 cp "version.json" `
             "s3://${bucket}/version.json" `
@@ -144,5 +165,5 @@ jobs:
 
           Write-Host ""
           Write-Host "✅ Release ${ver} uploaded to R2"
-          Write-Host "   Latest:    https://downloads.adkcyber.com/latest/PAN_Copilot.zip"
-          Write-Host "   Versioned: https://downloads.adkcyber.com/releases/${ver}/PAN_Copilot_${ver}.zip"
+          Write-Host "   Zip:       https://downloads.adkcyber.com/releases/${ver}/PAN_Copilot_${ver}.zip"
+          Write-Host "   Installer: https://downloads.adkcyber.com/releases/${ver}/PAN_Copilot_Setup_${ver}.exe"
