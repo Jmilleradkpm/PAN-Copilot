@@ -30,25 +30,23 @@ if sys.stderr is None:
     sys.stderr = open(os.devnull, "w")
 
 import uvicorn
-import uvicorn.logging as _uv_log
 
-# Fix 2: monkey-patch DefaultFormatter so it never calls sys.stdout.isatty().
-# This handles uvicorn versions that ignore log_config=None.
-_OrigFormatter = _uv_log.DefaultFormatter
-class _SafeFormatter(_OrigFormatter):
-    def __init__(self, *args, use_colors=None, **kwargs):
-        super().__init__(*args, use_colors=False, **kwargs)
-_uv_log.DefaultFormatter = _SafeFormatter
-
-# Fix 3: AccessFormatter has the same isatty vulnerability. We set
-# access_log=False below, but belt-and-suspenders in case that ever changes
-# or a uvicorn version touches AccessFormatter during config setup anyway.
-if hasattr(_uv_log, "AccessFormatter"):
-    _OrigAccess = _uv_log.AccessFormatter
-    class _SafeAccess(_OrigAccess):
-        def __init__(self, *args, use_colors=None, **kwargs):
-            super().__init__(*args, use_colors=False, **kwargs)
-    _uv_log.AccessFormatter = _SafeAccess
+# Explicit log config that uses only stdlib classes — no uvicorn formatters.
+# The monkey-patch approach doesn't work because logging.config.dictConfig
+# re-imports formatter classes by their fully-qualified name string, bypassing
+# any module-level patches. Passing our own dict sidesteps that entirely.
+_SAFE_LOG_CONFIG = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "handlers": {
+        "null": {"class": "logging.NullHandler"},
+    },
+    "loggers": {
+        "uvicorn":        {"handlers": ["null"], "level": "WARNING", "propagate": False},
+        "uvicorn.error":  {"handlers": ["null"], "level": "WARNING", "propagate": False},
+        "uvicorn.access": {"handlers": ["null"], "level": "WARNING", "propagate": False},
+    },
+}
 
 
 def _show_crash_dialog(message: str) -> None:
@@ -107,7 +105,7 @@ def main():
         port=port,
         log_level="warning",
         access_log=False,
-        log_config=None,       # disable uvicorn log config to avoid isatty crash
+        log_config=_SAFE_LOG_CONFIG,   # stdlib-only formatters, no isatty() calls
     )
     server = uvicorn.Server(config)
 
