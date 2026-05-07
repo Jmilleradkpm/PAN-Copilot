@@ -466,9 +466,39 @@
     .acct-value { color: var(--text); font-weight: 600; }
     #upgrade-link {
       display: inline-block; margin-top: 4px; font-size: 11px;
-      color: var(--accent); text-decoration: none;
+      color: var(--accent); text-decoration: none; cursor: pointer;
+      background: none; border: none; padding: 0; font-family: inherit;
     }
     #upgrade-link:hover { text-decoration: underline; }
+
+    /* Upgrade modal */
+    #upgrade-modal-backdrop {
+      display: none; position: fixed; inset: 0; z-index: 1000;
+      background: rgba(0,0,0,0.7); align-items: center; justify-content: center;
+    }
+    #upgrade-modal-backdrop.open { display: flex; }
+    #upgrade-modal {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 12px; padding: 28px 24px; width: 340px; max-width: 94vw;
+    }
+    #upgrade-modal h3 { font-size: 15px; margin-bottom: 6px; color: var(--text); }
+    #upgrade-modal p  { font-size: 12px; color: var(--text-sub); margin-bottom: 20px; }
+    .upgrade-plan-card {
+      border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px;
+      margin-bottom: 12px; cursor: pointer; text-decoration: none;
+      display: block; transition: border-color 0.15s;
+    }
+    .upgrade-plan-card:hover { border-color: var(--accent); }
+    .upgrade-plan-card .plan-name { font-size: 13px; font-weight: 700; color: var(--text); }
+    .upgrade-plan-card .plan-price { font-size: 12px; color: var(--text-sub); margin-top: 2px; }
+    .upgrade-plan-card .plan-limit { font-size: 11px; color: var(--text-dim); margin-top: 4px; }
+    .upgrade-plan-card.pro  { border-left: 3px solid #c9a227; }
+    .upgrade-plan-card.max  { border-left: 3px solid #5b9bd5; }
+    #upgrade-modal-close {
+      width: 100%; margin-top: 4px; background: none; border: none;
+      color: var(--text-dim); font-size: 12px; cursor: pointer; padding: 6px;
+    }
+    #upgrade-modal-close:hover { color: var(--text-sub); }
     #logout-btn {
       margin-top: 20px; width: 100%; background: none;
       border: 1px solid var(--border); border-radius: 8px; color: var(--text-sub);
@@ -552,9 +582,9 @@
       <span class="acct-value" id="acct-usage">0 / 10</span>
     </div>
 
-    <a id="upgrade-link" href="https://www.adkcyber.com/pan-copilot.html" target="_blank">
+    <button id="upgrade-link" onclick="openUpgradeModal()">
       ↗ Upgrade plan
-    </a>
+    </button>
 
     <div style="margin-top:20px;font-size:11px;color:var(--text-dim);line-height:1.7;border-top:1px solid var(--border);padding-top:16px;">
       <strong style="color:var(--text-sub);">Data &amp; Privacy</strong><br>
@@ -812,6 +842,23 @@ function onAuthenticated(data) {
 
 function tierLabel(tier) {
   return tier === 'pro' ? 'Pro ($20/mo)' : tier === 'max' ? 'MAX ($50/mo)' : 'Free';
+}
+
+const LS_PRO_URL = 'https://adkcyber.lemonsqueezy.com/checkout/buy/1c4c4370-4557-4651-a684-fadaf1a44404';
+const LS_MAX_URL = 'https://adkcyber.lemonsqueezy.com/checkout/buy/0475eb28-6e6b-4f68-adcc-9de6045192d6';
+
+function openUpgradeModal() {
+  const email = document.getElementById('acct-email').textContent.trim();
+  const qs = email && email !== '—' ? `?checkout[email]=${encodeURIComponent(email)}` : '';
+  document.getElementById('upgrade-pro-btn').href = LS_PRO_URL + qs;
+  document.getElementById('upgrade-max-btn').href = LS_MAX_URL + qs;
+  document.getElementById('upgrade-modal-backdrop').classList.add('open');
+}
+
+function closeUpgradeModal(e) {
+  if (!e || e.target === document.getElementById('upgrade-modal-backdrop') || e.target.id === 'upgrade-modal-close') {
+    document.getElementById('upgrade-modal-backdrop').classList.remove('open');
+  }
 }
 
 function updateTierUI(tier, queriesUsed, queriesLimit, period) {
@@ -1284,6 +1331,25 @@ function copyCode(btn) {
   });
 }
 </script>
+
+<!-- Upgrade modal -->
+<div id="upgrade-modal-backdrop" onclick="closeUpgradeModal(event)">
+  <div id="upgrade-modal">
+    <h3>Upgrade PAN Copilot</h3>
+    <p>Choose a plan to unlock more queries. Your session will update automatically after payment.</p>
+    <a id="upgrade-pro-btn" class="upgrade-plan-card pro" href="#" target="_blank">
+      <div class="plan-name">Pro — $20 / month</div>
+      <div class="plan-price">1,000 queries / month</div>
+      <div class="plan-limit">25× more than Free</div>
+    </a>
+    <a id="upgrade-max-btn" class="upgrade-plan-card max" href="#" target="_blank">
+      <div class="plan-name">MAX — $50 / month</div>
+      <div class="plan-price">2,500 queries / month</div>
+      <div class="plan-limit">No seat cap · Power users &amp; consultants</div>
+    </a>
+    <button id="upgrade-modal-close" onclick="closeUpgradeModal()">Cancel</button>
+  </div>
+</div>
 
 </body>
 </html>

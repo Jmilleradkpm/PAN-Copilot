@@ -33,7 +33,7 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -41,9 +41,16 @@ from pydantic import BaseModel
 # Config from environment variables (set these in Railway)
 # ---------------------------------------------------------------------------
 
-ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")   # ADK Cyber's key
-SECRET_PEPPER     = os.environ.get("SECRET_PEPPER", "change-me-in-production")
-ADMIN_TOKEN       = os.environ.get("ADMIN_TOKEN", "")          # For admin endpoints
+ANTHROPIC_API_KEY       = os.environ.get("ANTHROPIC_API_KEY", "")
+SECRET_PEPPER           = os.environ.get("SECRET_PEPPER", "change-me-in-production")
+ADMIN_TOKEN             = os.environ.get("ADMIN_TOKEN", "")
+LS_WEBHOOK_SECRET       = os.environ.get("LS_WEBHOOK_SECRET", "")  # Lemon Squeezy webhook secret
+
+# Map Lemon Squeezy variant UUIDs → tier strings
+LS_VARIANT_TIER = {
+    "1c4c4370-4557-4651-a684-fadaf1a44404": "pro",
+    "0475eb28-6e6b-4f68-adcc-9de6045192d6": "max",
+}
 
 FREE_WEEKLY_LIMIT = 10       # ~40 / month
 PRO_MONTHLY_LIMIT = 1_000    # API cost ≈ $20 at this volume
@@ -414,6 +421,74 @@ def list_users(admin_token: str = ""):
             "SELECT id, email, tier, seats_allowed, created_at FROM users ORDER BY created_at DESC"
         ).fetchall()
     return [dict(r) for r in rows]
+
+# ---------------------------------------------------------------------------
+# Lemon Squeezy webhook
+# ---------------------------------------------------------------------------
+
+@app.post("/webhook/lemonsqueezy")
+async def lemonsqueezy_webhook(request: Request):
+    """
+    Receives Lemon Squeezy subscription events and updates user tiers.
+    Verifies HMAC-SHA256 signature using LS_WEBHOOK_SECRET.
+    """
+    body = await request.body()
+
+    # Verify signature
+    if LS_WEBHOOK_SECRET:
+        sig = request.headers.get("X-Signature", "")
+        expected = hmac.new(
+            LS_WEBHOOK_SECRET.encode(), body, hashlib.sha256
+        ).hexdigest()
+        if not hmac.compare_digest(expected, sig):
+            raise HTTPException(status_code=401, detail="Invalid webhook signature.")
+
+    import json
+    payload = json.loads(body)
+    event   = payload.get("meta", {}).get("event_name", "")
+    data    = payload.get("data", {})
+    attrs   = data.get("attributes", {})
+
+    # Extract email and determine tier
+    email         = (attrs.get("user_email") or "").strip().lower()
+    variant_name  = (attrs.get("variant_name") or "").lower()
+    product_name  = (attrs.get("product_name") or "").lower()
+
+    # Determine tier from variant/product name (most reliable)
+    if "max" in variant_name or "max" in product_name:
+        tier = "max"
+    elif "pro" in variant_name or "pro" in product_name:
+        tier = "pro"
+    else:
+        # Fallback: try integer variant_id map (update these from LS dashboard if needed)
+        tier = LS_VARIANT_TIER.get(str(attrs.get("variant_id", ""))) or "pro"
+
+    if event in ("subscription_created", "subscription_updated", "subscription_resumed"):
+        if not email:
+            return {"ok": False, "reason": "no email in payload"}
+        new_tier = tier if tier else "pro"  # safe default
+        with get_db() as db:
+            db.execute(
+                "UPDATE users SET tier = ? WHERE email = ?",
+                (new_tier, email)
+            )
+            db.commit()
+        return {"ok": True, "event": event, "email": email, "tier": new_tier}
+
+    elif event in ("subscription_cancelled", "subscription_expired", "subscription_paused"):
+        if not email:
+            return {"ok": False, "reason": "no email in payload"}
+        with get_db() as db:
+            db.execute(
+                "UPDATE users SET tier = 'free' WHERE email = ?",
+                (email,)
+            )
+            db.commit()
+        return {"ok": True, "event": event, "email": email, "tier": "free"}
+
+    # Ignore all other events (order_created, etc.)
+    return {"ok": True, "event": event, "handled": False}
+
 
 # ---------------------------------------------------------------------------
 # Health

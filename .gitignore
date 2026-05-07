@@ -36,7 +36,7 @@ do_push.vbs
 backend/
 landing.html
 pan_copilot.html
-Procfile
-nixpacks.toml
-railway.toml
+/Procfile
+/nixpacks.toml
+/railway.toml
 CLAUDE.md

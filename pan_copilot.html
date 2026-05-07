@@ -1,0 +1,1189 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>PAN Copilot — AI Assistant for Palo Alto Engineers</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:          #0d1117;
+      --surface:     #161b22;
+      --surface2:    #1c2128;
+      --border:      #30363d;
+      --border-dim:  #21262d;
+      --accent:      #e8412f;
+      --accent-hover:#c93526;
+      --accent-dim:  #3d1208;
+      --text:        #e6edf3;
+      --text-sub:    #8b949e;
+      --text-dim:    #484f58;
+      --user-bg:     #132337;
+      --user-border: #1f3a57;
+      --ai-bg:       #161b22;
+      --ai-border:   #30363d;
+      --code-bg:     #0d1117;
+      --code-border: #30363d;
+      --green:       #3fb950;
+      --yellow:      #d29922;
+      --nav-w:       220px;
+      --right-w:     280px;
+      --header-h:    52px;
+      --radius:      8px;
+    }
+
+    [data-theme="light"] {
+      --bg:          #f6f8fa;
+      --surface:     #ffffff;
+      --surface2:    #f0f2f5;
+      --border:      #d0d7de;
+      --border-dim:  #e4e8ec;
+      --accent:      #e8412f;
+      --accent-hover:#c93526;
+      --accent-dim:  #fce8e6;
+      --text:        #1f2328;
+      --text-sub:    #57606a;
+      --text-dim:    #a8b1ba;
+      --user-bg:     #dbeafe;
+      --user-border: #93c5fd;
+      --ai-bg:       #ffffff;
+      --ai-border:   #d0d7de;
+      --code-bg:     #f6f8fa;
+      --code-border: #d0d7de;
+      --green:       #1a7f37;
+      --yellow:      #9a6700;
+    }
+    [data-theme="light"] .msg-content code { color: #0550ae; }
+    [data-theme="light"] .code-block pre   { color: #1f2328; }
+    [data-theme="light"] .nav-group-label  { color: #57606a; }
+
+    html, body {
+      height: 100%; background: var(--bg); color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      font-size: 14px; line-height: 1.6; overflow: hidden;
+    }
+
+    /* ── Scrollbar ─────────────────────────────────────────────── */
+    ::-webkit-scrollbar { width: 5px; height: 5px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+    /* ── Header ────────────────────────────────────────────────── */
+    #header {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 200;
+      height: var(--header-h);
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; padding: 0 16px; gap: 10px;
+    }
+    .h-logo {
+      width: 28px; height: 28px; border-radius: 7px;
+      background: var(--accent);
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 800; font-size: 12px; color: #fff; flex-shrink: 0;
+    }
+    .h-title { font-size: 14px; font-weight: 700; }
+    .h-sub   { font-size: 11px; color: var(--text-sub); }
+    .h-spacer { flex: 1; }
+    #theme-toggle {
+      background: var(--surface2); border: 1px solid var(--border-dim);
+      border-radius: 20px; color: var(--text-sub); cursor: pointer;
+      font-size: 12px; padding: 4px 10px;
+      display: flex; align-items: center; gap: 5px; transition: all 0.15s;
+    }
+    #theme-toggle:hover { border-color: var(--accent); color: var(--text); }
+    #conn-badge {
+      display: flex; align-items: center; gap: 5px; font-size: 11px;
+      color: var(--text-sub); padding: 4px 9px; border-radius: 20px;
+      background: var(--surface2); border: 1px solid var(--border-dim);
+    }
+    #conn-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-dim); transition: background 0.3s; }
+    #conn-dot.online  { background: var(--green); box-shadow: 0 0 5px rgba(63,185,80,0.5); }
+    #conn-dot.offline { background: var(--accent); }
+
+    /* ── 3-col layout ──────────────────────────────────────────── */
+    #app {
+      display: flex;
+      margin-top: var(--header-h);
+      height: calc(100vh - var(--header-h));
+    }
+
+    /* ── LEFT NAV ──────────────────────────────────────────────── */
+    #left-nav {
+      width: var(--nav-w); flex-shrink: 0;
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+      overflow-y: auto; overflow-x: hidden;
+      display: flex; flex-direction: column;
+    }
+    .nav-section { padding: 10px 8px 4px; }
+    .nav-group-label {
+      font-size: 10px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.08em; color: var(--text-dim);
+      padding: 6px 8px 4px; display: block;
+    }
+    .nav-item {
+      display: flex; align-items: center; gap: 8px;
+      padding: 7px 10px; border-radius: 6px; cursor: pointer;
+      font-size: 12.5px; color: var(--text-sub);
+      transition: all 0.12s; border: none; background: none;
+      width: 100%; text-align: left;
+    }
+    .nav-item:hover { background: var(--surface2); color: var(--text); }
+    .nav-item.active {
+      background: var(--accent-dim); color: var(--accent);
+      font-weight: 600;
+    }
+    [data-theme="light"] .nav-item.active { background: #fce8e6; }
+    .nav-icon { font-size: 14px; flex-shrink: 0; width: 18px; text-align: center; }
+    .nav-divider { height: 1px; background: var(--border-dim); margin: 6px 8px; }
+
+    /* ── CENTER CHAT ───────────────────────────────────────────── */
+    #center {
+      flex: 1; display: flex; flex-direction: column; overflow: hidden;
+      background: var(--bg); min-width: 0;
+    }
+
+    /* Product context bar */
+    #context-bar {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 10px 20px;
+      flex-shrink: 0;
+    }
+    #context-product {
+      display: flex; align-items: center; gap: 8px;
+      margin-bottom: 8px;
+    }
+    #context-icon { font-size: 18px; }
+    #context-name { font-size: 14px; font-weight: 700; }
+    #context-desc { font-size: 11px; color: var(--text-sub); }
+    #context-chips {
+      display: flex; gap: 6px; flex-wrap: wrap;
+    }
+    .ctx-chip {
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: 20px; padding: 4px 12px;
+      font-size: 11.5px; color: var(--text-sub); cursor: pointer;
+      transition: all 0.12s; white-space: nowrap;
+    }
+    .ctx-chip:hover { border-color: var(--accent); color: var(--text); }
+
+    /* Messages */
+    #messages {
+      flex: 1; overflow-y: auto; padding: 20px 0;
+      display: flex; flex-direction: column; gap: 0;
+    }
+    #welcome {
+      display: flex; flex-direction: column; align-items: center;
+      justify-content: center; flex: 1; padding: 40px 24px;
+      text-align: center; gap: 10px;
+    }
+    #welcome .w-logo {
+      width: 52px; height: 52px; border-radius: 13px; background: var(--accent);
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 800; font-size: 18px; color: #fff; margin-bottom: 4px;
+    }
+    #welcome h2 { font-size: 20px; font-weight: 700; }
+    #welcome p  { color: var(--text-sub); max-width: 380px; font-size: 13px; }
+    .msg-row { padding: 5px 20px; display: flex; animation: fadeUp 0.18s ease; }
+    @keyframes fadeUp { from { opacity:0; transform:translateY(4px) } to { opacity:1; transform:none } }
+    .msg-row.user { justify-content: flex-end; }
+    .msg-bubble {
+      max-width: min(680px, 100%); border-radius: var(--radius);
+      padding: 12px 15px; line-height: 1.65;
+    }
+    .msg-row.user .msg-bubble {
+      background: var(--user-bg); border: 1px solid var(--user-border);
+      white-space: pre-wrap; font-size: 13.5px;
+    }
+    .msg-row.assistant .msg-bubble {
+      background: var(--ai-bg); border: 1px solid var(--ai-border); width: 100%;
+    }
+    .msg-label {
+      font-size: 10px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.1em; margin-bottom: 7px;
+    }
+    .msg-row.user .msg-label { color: #5b9bd5; }
+    .msg-row.assistant .msg-label { color: var(--accent); }
+    .msg-content { font-size: 13.5px; }
+    .msg-content p { margin: 0 0 9px; }
+    .msg-content p:last-child { margin-bottom: 0; }
+    .msg-content strong { color: var(--text); font-weight: 600; }
+    .msg-content em { color: var(--yellow); font-style: normal; }
+    .msg-content ul, .msg-content ol { margin: 6px 0 9px 18px; }
+    .msg-content li { margin: 3px 0; }
+    .msg-content h3 { font-size: 13.5px; font-weight: 700; color: var(--text); margin: 12px 0 5px; }
+    .msg-content h4 { font-size: 12px; font-weight: 600; color: var(--text-sub); margin: 9px 0 4px; text-transform: uppercase; letter-spacing: 0.05em; }
+    .msg-content code {
+      background: var(--code-bg); border: 1px solid var(--code-border);
+      border-radius: 3px; padding: 1px 5px;
+      font-family: 'Consolas','Cascadia Code','Courier New',monospace;
+      font-size: 11.5px; color: #79c0ff;
+    }
+    .code-block { background: var(--code-bg); border: 1px solid var(--code-border); border-radius: var(--radius); margin: 10px 0; overflow: hidden; }
+    .code-block-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 6px 13px; border-bottom: 1px solid var(--code-border);
+      background: var(--surface2);
+    }
+    .code-lang { font-size: 10px; color: var(--text-dim); font-family: monospace; text-transform: uppercase; letter-spacing: 0.05em; }
+    .copy-btn {
+      background: none; border: 1px solid var(--border); border-radius: 4px;
+      color: var(--text-sub); cursor: pointer; font-size: 11px; padding: 2px 8px;
+      transition: all 0.12s;
+    }
+    .copy-btn:hover { border-color: var(--text-sub); color: var(--text); }
+    .copy-btn.copied { border-color: var(--green); color: var(--green); }
+    .code-block pre {
+      padding: 12px 14px; overflow-x: auto; margin: 0;
+      font-family: 'Consolas','Cascadia Code','Courier New',monospace;
+      font-size: 11.5px; line-height: 1.6; color: var(--text); white-space: pre;
+    }
+    .token-meta {
+      font-size: 10px; color: var(--text-dim); margin-top: 9px;
+      padding-top: 7px; border-top: 1px solid var(--border-dim);
+      display: flex; gap: 10px;
+    }
+    .cursor { display: inline-block; width: 2px; height: 13px; background: var(--accent); vertical-align: middle; margin-left: 2px; animation: blink 0.7s infinite; }
+    @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
+    .thinking-row { padding: 5px 20px; }
+    .thinking-bubble {
+      background: var(--ai-bg); border: 1px solid var(--ai-border);
+      border-radius: var(--radius); padding: 12px 15px;
+      display: flex; align-items: center; gap: 8px;
+    }
+    .dots { display: flex; gap: 4px; }
+    .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); opacity: 0.4; animation: dp 1.4s infinite; }
+    .dot:nth-child(2) { animation-delay: 0.2s; }
+    .dot:nth-child(3) { animation-delay: 0.4s; }
+    @keyframes dp { 0%,80%,100%{opacity:0.3;transform:scale(0.8)} 40%{opacity:1;transform:scale(1)} }
+
+    /* Input */
+    #input-bar {
+      padding: 12px 20px;
+      background: var(--bg); border-top: 1px solid var(--border-dim);
+    }
+    #input-wrap {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 10px; display: flex; align-items: flex-end;
+      padding: 9px 10px 9px 14px; gap: 8px; transition: border-color 0.15s;
+    }
+    #input-wrap:focus-within { border-color: var(--accent); }
+    #user-input {
+      flex: 1; background: none; border: none; color: var(--text);
+      font-family: inherit; font-size: 13.5px; line-height: 1.55;
+      resize: none; max-height: 160px; min-height: 22px; overflow-y: auto; padding: 0;
+    }
+    #user-input:focus { outline: none; }
+    #user-input::placeholder { color: var(--text-dim); }
+    #send-btn {
+      background: var(--accent); border: none; border-radius: 7px; color: #fff;
+      cursor: pointer; width: 32px; height: 32px;
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0; transition: background 0.15s;
+    }
+    #send-btn:hover:not(:disabled) { background: var(--accent-hover); }
+    #send-btn:disabled { background: var(--accent-dim); cursor: not-allowed; }
+    #input-hint { font-size: 11px; color: var(--text-dim); margin-top: 5px; padding: 0 2px; display: flex; justify-content: space-between; }
+
+    /* ── RIGHT SIDEBAR ─────────────────────────────────────────── */
+    #right-sidebar {
+      width: var(--right-w); flex-shrink: 0;
+      background: var(--surface);
+      border-left: 1px solid var(--border);
+      display: flex; flex-direction: column; overflow: hidden;
+    }
+    .rs-section { padding: 12px 12px 0; }
+    .rs-label {
+      font-size: 10px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.08em; color: var(--text-dim); margin-bottom: 7px; display: block;
+    }
+    #new-chat-btn {
+      width: 100%; padding: 8px 12px; margin-bottom: 12px;
+      background: var(--accent); border: none; border-radius: var(--radius);
+      color: #fff; font-size: 12.5px; font-weight: 700; cursor: pointer;
+      display: flex; align-items: center; justify-content: center; gap: 6px;
+      transition: background 0.15s;
+    }
+    #new-chat-btn:hover { background: var(--accent-hover); }
+    .rs-divider { height: 1px; background: var(--border-dim); margin: 8px 12px; }
+    #config-section { flex: 1; display: flex; flex-direction: column; padding: 0 12px 10px; overflow: hidden; }
+    #config-hint { font-size: 11px; color: var(--text-sub); margin-bottom: 7px; line-height: 1.5; }
+    #config-paste {
+      flex: 1; background: var(--code-bg); border: 1px solid var(--border);
+      border-radius: var(--radius); color: var(--text);
+      font-family: 'Consolas','Cascadia Code','Courier New',monospace;
+      font-size: 11px; padding: 9px 11px; resize: none; line-height: 1.55; min-height: 100px;
+    }
+    #config-paste:focus { outline: none; border-color: var(--accent); }
+    #config-paste::placeholder { color: var(--text-dim); }
+    #config-status { font-size: 11px; color: var(--text-dim); margin-top: 5px; min-height: 15px; }
+    #config-status.has { color: var(--yellow); }
+    .rs-divider2 { height: 1px; background: var(--border-dim); margin: 6px 12px 10px; }
+    #quick-section { padding: 0 12px 12px; }
+    .qa-btn {
+      background: var(--surface2); border: 1px solid var(--border-dim);
+      border-radius: 6px; color: var(--text-sub); cursor: pointer;
+      font-size: 12px; padding: 7px 10px; text-align: left;
+      transition: all 0.12s; display: flex; align-items: flex-start;
+      gap: 7px; width: 100%; margin-bottom: 5px; line-height: 1.4;
+    }
+    .qa-btn:hover { border-color: var(--accent); color: var(--text); background: var(--surface); }
+    .qa-icon { font-size: 13px; flex-shrink: 0; margin-top: 1px; }
+
+  /* ── Auth overlay ───────────────────────────────────────────── */
+  #auth-overlay {
+    position: fixed; inset: 0; z-index: 1000;
+    background: rgba(0,0,0,0.75);
+    display: flex; align-items: center; justify-content: center;
+  }
+  #auth-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 28px 32px;
+    width: 380px;
+    max-width: 95vw;
+  }
+  .auth-tab {
+    background: none; border: none; border-bottom: 2px solid transparent;
+    color: var(--text-dim); cursor: pointer; font-size: 13px;
+    font-weight: 600; padding: 8px 16px; margin-bottom: -1px;
+    transition: color 0.15s, border-color 0.15s;
+  }
+  .auth-tab.active { color: var(--text); border-bottom-color: var(--accent); }
+  .auth-label { display:block; font-size:12px; color:var(--text-dim); margin-bottom:4px; }
+  .auth-input {
+    width:100%; background:var(--code-bg); border:1px solid var(--border);
+    border-radius:6px; color:var(--text); font-size:14px; padding:9px 12px;
+    box-sizing:border-box;
+  }
+  .auth-input:focus { outline:none; border-color:var(--accent); }
+  /* ── Tier badge ─────────────────────────────────────────────── */
+  .tier-badge {
+    border-radius: 20px; font-size: 10px; font-weight: 700;
+    letter-spacing: 0.06em; padding: 3px 8px; text-transform: uppercase;
+  }
+  .tier-badge.free { background:#1e2a3a; border:1px solid #2a4a6a; color:#5ca8f5; }
+  .tier-badge.pro  { background:#1e3a1e; border:1px solid #2e5f2e; color:#4caf50; }
+  .queries-left { font-size:11px; color:var(--text-dim); }
+  /* ── Conversation history ───────────────────────────────────── */
+  #conv-section { display:flex; flex-direction:column; gap:0; flex-shrink:0; }
+  #conv-list { display:flex; flex-direction:column; gap:2px; max-height:220px; overflow-y:auto; }
+  .conv-item {
+    align-items:center; border-radius:6px; cursor:pointer; display:flex;
+    gap:6px; padding:7px 8px; transition:background 0.12s;
+  }
+  .conv-item:hover { background:var(--code-bg); }
+  .conv-item.active { background:var(--code-bg); border-left:2px solid var(--accent); padding-left:6px; }
+  .conv-item-title {
+    color:var(--text); flex:1; font-size:12px; overflow:hidden;
+    text-overflow:ellipsis; white-space:nowrap;
+  }
+  .conv-item-del {
+    background:none; border:none; color:var(--text-dim); cursor:pointer;
+    font-size:13px; flex-shrink:0; line-height:1; opacity:0;
+    padding:1px 3px; transition:opacity 0.1s;
+  }
+  .conv-item:hover .conv-item-del { opacity:1; }
+  .conv-item-del:hover { color:#f85149; }
+  #conv-empty { color:var(--text-dim); font-size:12px; padding:8px 4px; }
+  /* ── File upload ─────────────────────────────────────────────── */
+  #upload-btn {
+    align-items:center; background:var(--code-bg); border:1px dashed var(--border);
+    border-radius:6px; color:var(--text-dim); cursor:pointer; display:flex;
+    font-size:12px; gap:7px; justify-content:center; padding:8px 10px;
+    transition:border-color 0.15s,color 0.15s; width:100%; box-sizing:border-box;
+  }
+  #upload-btn:hover { border-color:var(--accent); color:var(--text); }
+  #upload-file { display:none; }
+  #upload-status {
+    font-size:11px; color:var(--text-dim); margin-top:5px;
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  }
+  #upload-status.loaded { color:#4caf50; }
+  #upload-status.error  { color:#f85149; }
+  </style>
+</head>
+<body>
+
+<!-- ── Header ──────────────────────────────────────────────────── -->
+<header id="header">
+  <div class="h-logo">PAN</div>
+  <div>
+    <div class="h-title">PAN Copilot</div>
+  </div>
+  <div class="h-sub" style="margin-left:2px">Full Portfolio AI Assistant</div>
+  <div class="h-spacer"></div>
+  <button id="theme-toggle" onclick="toggleTheme()">
+    <span id="t-icon">☀️</span><span id="t-label">Light</span>
+  </button>
+  <div id="user-info" style="display:none;align-items:center;gap:10px;margin-right:8px">
+    <span id="user-tier-badge" class="tier-badge free">FREE</span>
+    <span id="user-queries" class="queries-left"></span>
+    <span id="user-email" style="font-size:12px;color:var(--text-dim)"></span>
+    <button id="logout-btn" onclick="doLogout()" title="Sign out" style="background:none;border:1px solid var(--border);border-radius:6px;color:var(--text-dim);cursor:pointer;font-size:11px;padding:3px 8px">Sign out</button>
+  </div>
+  <button id="login-btn" onclick="showAuth()" style="background:var(--accent);border:none;border-radius:6px;color:#fff;cursor:pointer;font-size:12px;font-weight:600;padding:5px 14px;display:none">Sign in</button>
+  <div id="conn-badge">
+    <div id="conn-dot"></div>
+    <span id="conn-label">Connecting…</span>
+  </div>
+</header>
+
+<!-- ── AUTH OVERLAY ──────────────────────────────────────────── -->
+<div id="auth-overlay">
+  <div id="auth-card">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:24px">
+      <div class="h-logo" style="width:36px;height:36px;font-size:16px">PAN</div>
+      <div>
+        <div style="font-size:18px;font-weight:700">PAN Copilot</div>
+        <div style="font-size:12px;color:var(--text-dim)">Full Portfolio AI Assistant</div>
+      </div>
+    </div>
+
+    <div id="auth-tabs" style="display:flex;gap:0;border-bottom:1px solid var(--border);margin-bottom:20px">
+      <button class="auth-tab active" id="tab-login"    onclick="switchTab('login')">Sign In</button>
+      <button class="auth-tab"        id="tab-register" onclick="switchTab('register')">Create Account</button>
+    </div>
+
+    <div id="auth-error" style="display:none;background:#3a1e1e;border:1px solid #5f2e2e;border-radius:6px;color:#f85149;font-size:13px;margin-bottom:14px;padding:10px 12px"></div>
+
+    <form onsubmit="return false">
+      <label class="auth-label">Email</label>
+      <input id="auth-email" type="email" class="auth-input" placeholder="you@example.com" autocomplete="email"/>
+
+      <label class="auth-label" style="margin-top:12px">Password</label>
+      <input id="auth-password" type="password" class="auth-input" placeholder="••••••••" autocomplete="current-password"/>
+
+      <div id="register-hint" style="display:none;font-size:11px;color:var(--text-dim);margin-top:6px">Minimum 8 characters.</div>
+
+      <button id="auth-submit" onclick="submitAuth()" style="margin-top:20px;width:100%;background:var(--accent);border:none;border-radius:8px;color:#fff;cursor:pointer;font-size:14px;font-weight:600;padding:11px">Sign In</button>
+    </form>
+
+    <div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--border);font-size:12px;color:var(--text-dim);text-align:center">
+      <span id="auth-plan-text">Free plan: 10 queries / day. <a href="#" style="color:var(--accent);text-decoration:none" onclick="return false">Upgrade to Pro →</a></span>
+    </div>
+  </div>
+</div>
+
+<div id="app">
+
+  <!-- ── LEFT NAV ──────────────────────────────────────────────── -->
+  <nav id="left-nav">
+
+    <div class="nav-section">
+      <span class="nav-group-label">Network Security</span>
+      <button class="nav-item" onclick="selectProduct('pa-series')"    data-id="pa-series">    <span class="nav-icon">🔥</span> PA-Series NGFW</button>
+      <button class="nav-item" onclick="selectProduct('vm-series')"    data-id="vm-series">    <span class="nav-icon">☁️</span> VM-Series</button>
+      <button class="nav-item" onclick="selectProduct('cn-series')"    data-id="cn-series">    <span class="nav-icon">🐳</span> CN-Series</button>
+      <button class="nav-item" onclick="selectProduct('panorama')"     data-id="panorama">     <span class="nav-icon">🗂️</span> Panorama</button>
+    </div>
+
+    <div class="nav-divider"></div>
+
+    <div class="nav-section">
+      <span class="nav-group-label">SASE / Network-as-a-Service</span>
+      <button class="nav-item" onclick="selectProduct('prisma-access')"  data-id="prisma-access"> <span class="nav-icon">🌐</span> Prisma Access</button>
+      <button class="nav-item" onclick="selectProduct('prisma-sdwan')"   data-id="prisma-sdwan">  <span class="nav-icon">🔀</span> Prisma SD-WAN</button>
+      <button class="nav-item" onclick="selectProduct('adem')"           data-id="adem">          <span class="nav-icon">📊</span> ADEM</button>
+    </div>
+
+    <div class="nav-divider"></div>
+
+    <div class="nav-section">
+      <span class="nav-group-label">Cloud Security (Prisma Cloud)</span>
+      <button class="nav-item" onclick="selectProduct('cspm')"  data-id="cspm"> <span class="nav-icon">🛡️</span> CSPM</button>
+      <button class="nav-item" onclick="selectProduct('cwp')"   data-id="cwp">  <span class="nav-icon">💻</span> CWP</button>
+      <button class="nav-item" onclick="selectProduct('ciem')"  data-id="ciem"> <span class="nav-icon">🔑</span> CIEM</button>
+      <button class="nav-item" onclick="selectProduct('appsec')" data-id="appsec"><span class="nav-icon">🧪</span> Application Security</button>
+    </div>
+
+    <div class="nav-divider"></div>
+
+    <div class="nav-section">
+      <span class="nav-group-label">Security Operations (Cortex)</span>
+      <button class="nav-item" onclick="selectProduct('xdr')"    data-id="xdr">   <span class="nav-icon">🔎</span> Cortex XDR</button>
+      <button class="nav-item" onclick="selectProduct('xsoar')"  data-id="xsoar"> <span class="nav-icon">⚙️</span> Cortex XSOAR</button>
+      <button class="nav-item" onclick="selectProduct('xsiam')"  data-id="xsiam"> <span class="nav-icon">🧠</span> Cortex XSIAM</button>
+      <button class="nav-item" onclick="selectProduct('xpanse')" data-id="xpanse"><span class="nav-icon">🌍</span> Cortex Xpanse</button>
+    </div>
+
+    <div class="nav-divider"></div>
+
+    <div class="nav-section">
+      <span class="nav-group-label">Threat Intelligence</span>
+      <button class="nav-item" onclick="selectProduct('wildfire')" data-id="wildfire"><span class="nav-icon">🔬</span> WildFire</button>
+      <button class="nav-item" onclick="selectProduct('atp')"      data-id="atp">     <span class="nav-icon">🚫</span> Adv. Threat Prevention</button>
+      <button class="nav-item" onclick="selectProduct('urlf')"     data-id="urlf">    <span class="nav-icon">🔗</span> Adv. URL Filtering</button>
+      <button class="nav-item" onclick="selectProduct('dns-sec')"  data-id="dns-sec"> <span class="nav-icon">🔍</span> DNS Security</button>
+      <button class="nav-item" onclick="selectProduct('unit42')"   data-id="unit42">  <span class="nav-icon">🕵️</span> Unit 42</button>
+    </div>
+
+    <div class="nav-divider"></div>
+
+    <div class="nav-section">
+      <span class="nav-group-label">Identity &amp; Access</span>
+      <button class="nav-item" onclick="selectProduct('globalprotect')" data-id="globalprotect"><span class="nav-icon">🔒</span> GlobalProtect</button>
+      <button class="nav-item" onclick="selectProduct('cie')"           data-id="cie">           <span class="nav-icon">🪪</span> Cloud Identity Engine</button>
+    </div>
+
+    <div class="nav-divider"></div>
+
+    <div class="nav-section" style="padding-bottom:12px;">
+      <span class="nav-group-label">AI / Emerging</span>
+      <button class="nav-item" onclick="selectProduct('ai-runtime')"   data-id="ai-runtime">  <span class="nav-icon">🤖</span> AI Runtime Security</button>
+      <button class="nav-item" onclick="selectProduct('strata-log')"   data-id="strata-log">  <span class="nav-icon">📋</span> Strata Logging Service</button>
+    </div>
+
+  </nav>
+
+  <!-- ── CENTER ────────────────────────────────────────────────── -->
+  <main id="center">
+
+    <div id="context-bar">
+      <div id="context-product">
+        <span id="context-icon">🔥</span>
+        <div>
+          <div id="context-name">PAN Copilot</div>
+          <div id="context-desc">Select a product from the left to focus the chat, or ask anything below.</div>
+        </div>
+      </div>
+      <div id="context-chips"></div>
+    </div>
+
+    <div id="messages">
+      <div id="welcome">
+        <div class="w-logo">PAN</div>
+        <h2>PAN Copilot</h2>
+        <p>Select a product from the left nav to get focused help, or just ask anything about the Palo Alto Networks portfolio.</p>
+      </div>
+    </div>
+
+    <div id="input-bar">
+      <div id="input-wrap">
+        <textarea id="user-input" rows="1"
+          placeholder="Ask about any Palo Alto Networks product…"
+          onkeydown="handleKey(event)" oninput="autoResize(this)"></textarea>
+        <button id="send-btn" onclick="sendMessage()">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>
+          </svg>
+        </button>
+      </div>
+      <div id="input-hint">
+        <span>Shift+Enter for newline · Enter to send</span>
+        <span id="config-ind"></span>
+      </div>
+    </div>
+  </main>
+
+  <!-- ── RIGHT SIDEBAR ─────────────────────────────────────────── -->
+  <aside id="right-sidebar">
+
+    <div class="rs-section" style="padding-bottom:12px;">
+      <button id="new-chat-btn" onclick="newChat()">
+        <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+        New Chat
+      </button>
+    </div>
+
+    <div class="rs-divider" style="margin-top:0;"></div>
+
+    <div id="conv-section">
+      <span class="rs-label">Recent Conversations</span>
+      <div id="conv-list">
+        <div id="conv-empty">No conversations yet.</div>
+      </div>
+    </div>
+
+    <div class="rs-divider2"></div>
+
+    <div id="config-section">
+      <div style="padding:0 0 7px;">
+        <span class="rs-label">Paste Config / CLI Output</span>
+        <div id="config-hint">Attach raw PAN-OS output to your next message — session tables, rule bases, show commands, XML snippets.</div>
+      </div>
+      <label id="upload-btn" for="upload-file">
+        <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+        Upload config file (.txt .xml .log .cfg)
+      </label>
+      <input type="file" id="upload-file" accept=".txt,.xml,.log,.cfg,.conf" onchange="handleFileUpload(this)"/>
+      <div id="upload-status">No file uploaded</div>
+      <textarea id="config-paste"
+        placeholder="> show session all&#10;> show routing route&#10;set rulebase security rules...&#10;&#10;Or paste anything here."
+        oninput="onConfigInput()"></textarea>
+      <div id="config-status">No config attached</div>
+    </div>
+
+    <div class="rs-divider2"></div>
+
+    <div id="quick-section">
+      <span class="rs-label">Quick Actions</span>
+      <button class="qa-btn" onclick="qa('Audit the pasted rule base for shadow rules, overly permissive rules, rules with no security profile, and service=any rules. Format as: Critical Issues, High Priority, Best Practice Recommendations.')">
+        <span class="qa-icon">🔍</span> Audit Rule Base
+      </button>
+      <button class="qa-btn" onclick="qa('Traffic is being dropped. Walk me through systematic troubleshooting: test security-policy-match, NAT check, session table, routing, and logs.')">
+        <span class="qa-icon">🔧</span> Troubleshoot Drop
+      </button>
+      <button class="qa-btn" onclick="qa('Generate a PAN-OS security rule — give me the CLI set command and XML snippet. Ask me for source zone, destination zone, addresses, application, and security profile group.')">
+        <span class="qa-icon">⚡</span> Generate Config
+      </button>
+      <button class="qa-btn" onclick="qa('A Prisma Access mobile user is connected but cannot reach internal resources. Walk me through troubleshooting — split tunnel, service connection, routing, and SCM logs.')">
+        <span class="qa-icon">🌐</span> Prisma Access Issue
+      </button>
+      <button class="qa-btn" onclick="qa('I have a Cortex XDR alert to triage. Walk me through causality chain, process tree, network connections, and how to determine true vs false positive. Then explain response options.')">
+        <span class="qa-icon">🛡️</span> Triage XDR Alert
+      </button>
+      <button class="qa-btn" onclick="qa('Explain NAT and security policy interaction on PAN-OS — pre-NAT vs post-NAT IP, which zone to use. Walk through a source NAT and destination NAT example.')">
+        <span class="qa-icon">📖</span> NAT Policy Explained
+      </button>
+    </div>
+
+  </aside>
+</div>
+
+<script>
+// ── Product catalogue ─────────────────────────────────────────────
+const PRODUCTS = {
+  'pa-series':    { icon:'🔥', name:'PA-Series NGFW', desc:'Hardware next-generation firewalls — PA-400 through PA-7000 series', chips:['PA-400 vs PA-800 differences','Troubleshoot session drops','HA active/passive setup','Upgrade path to PAN-OS 11.x','SSL decryption best practices','Policy optimizer walkthrough'] },
+  'vm-series':    { icon:'☁️', name:'VM-Series', desc:'Virtualized NGFW on VMware, AWS, Azure, GCP, KVM', chips:['Bootstrap on AWS','Azure HA with load balancer','Disable source/dest check on ENI','PAYG vs BYOL licensing','VM-Series sizing guide','GCP route table failover'] },
+  'cn-series':    { icon:'🐳', name:'CN-Series', desc:'Container NGFW for Kubernetes environments', chips:['DaemonSet vs sidecar deployment','Kubernetes network policy integration','Panorama device group for CN-Series','East-west traffic inspection','CN-Series limitations vs PA-Series'] },
+  'panorama':     { icon:'🗂️', name:'Panorama', desc:'Centralized management — M-Series and virtual appliances', chips:['Device group hierarchy design','Template stack variables','Push without committing devices','Pre-rules vs post-rules vs local','Log collector group setup','Out-of-sync device troubleshooting'] },
+  'prisma-access':{ icon:'🌐', name:'Prisma Access', desc:'Cloud-delivered SASE/SSE — mobile users, remote networks, service connections', chips:['Mobile user split tunnel config','Service connection routing','Remote network IPSec setup','HIP check failures','SCM vs Panorama management','Compute location selection'] },
+  'prisma-sdwan': { icon:'🔀', name:'Prisma SD-WAN', desc:'ION device-based SD-WAN (formerly CloudGenix)', chips:['ION device onboarding','Application-based path selection','SLA monitoring config','Integration with Prisma Access','SD-WAN vs MPLS migration','ADEM integration'] },
+  'adem':         { icon:'📊', name:'ADEM', desc:'Autonomous Digital Experience Management', chips:['What metrics ADEM monitors','Synthetic test configuration','Correlating ADEM with Prisma Access','End-user experience scoring','ADEM vs traditional NPM tools'] },
+  'cspm':         { icon:'🛡️', name:'Prisma Cloud CSPM', desc:'Cloud Security Posture Management — misconfig detection across AWS, Azure, GCP', chips:['Suppress a false positive alert','Custom policy creation','CIS benchmark compliance report','Auto-remediation setup','Account group RBAC','Alert notification routing'] },
+  'cwp':          { icon:'💻', name:'Prisma Cloud CWP', desc:'Cloud Workload Protection — VMs, containers, serverless', chips:['Defender deployment on Linux','Container vulnerability scanning','Runtime protection rules','Serverless function scanning','Compliance benchmark mapping','Defender upgrade process'] },
+  'ciem':         { icon:'🔑', name:'Prisma Cloud CIEM', desc:'Cloud Infrastructure Entitlement Management — IAM risk analysis', chips:['Net Effective Permissions explained','Toxic permission combinations','Unused permission cleanup','Cross-account role risk','CIEM remediation workflow','Integrate with AWS IAM Access Analyzer'] },
+  'appsec':       { icon:'🧪', name:'Application Security', desc:'DevSecOps — IaC scanning, secrets detection, CI/CD pipeline security', chips:['Terraform misconfiguration scanning','Secrets detection in repos','CI/CD pipeline integration','SBOM generation','Fix IaC finding in code','IDE plugin setup'] },
+  'xdr':          { icon:'🔎', name:'Cortex XDR', desc:'Extended Detection and Response — endpoint, network, and cloud telemetry', chips:['Triage an XDR alert','Read the causality chain','Isolate a compromised host','BIOC vs IOC detections','XDR + DAG firewall block','Agent deployment options'] },
+  'xsoar':        { icon:'⚙️', name:'Cortex XSOAR', desc:'Security Orchestration, Automation and Response — playbook-driven SOC', chips:['Panorama integration setup','Phishing response playbook','EDL update via XSOAR','XSOAR 6.x vs 8.x differences','Incident layout customization','Content pack installation'] },
+  'xsiam':        { icon:'🧠', name:'Cortex XSIAM', desc:'AI-driven SOC platform — SIEM + SOAR combined', chips:['XQL query basics','Alert stitching explained','XSIAM vs legacy SIEM','Data ingestion onboarding','XSIAM vs XSOAR comparison','Correlation rule creation'] },
+  'xpanse':       { icon:'🌍', name:'Cortex Xpanse', desc:'Attack surface management — discover internet-exposed assets', chips:['What Xpanse discovers','Remediation workflow','Xpanse + XSOAR automation','Attributing assets to BUs','Exposed RDP detection','Certificate expiry monitoring'] },
+  'wildfire':     { icon:'🔬', name:'WildFire', desc:'Cloud malware analysis sandbox — file detonation and verdict generation', chips:['WildFire profile vs Threat profile','File types forwarded by default','Check submission status via CLI','WildFire private cloud (WF-500)','Verdict override process','Signature update frequency'] },
+  'atp':          { icon:'🚫', name:'Advanced Threat Prevention', desc:'Inline ML-based IPS — zero-day exploit and C2 detection', chips:['ATP vs legacy Threat Prevention','Inline ML latency impact','ATP license requirements','Enable ATP in security profile','Supported platforms','ATP vs WildFire difference'] },
+  'urlf':         { icon:'🔗', name:'Advanced URL Filtering', desc:'ML-based real-time URL categorization and zero-day phishing blocking', chips:['AURLF vs PAN-DB difference','Real-time analysis for unknown URLs','AURLF license requirements','Custom URL category creation','Block page customization','Safe search enforcement'] },
+  'dns-sec':      { icon:'🔍', name:'DNS Security', desc:'DNS sinkholing, DGA detection, DNS tunneling prevention', chips:['DNS Security profile setup','DGA domain detection','DNS tunneling indicators','Sinkhole IP configuration','DNS Security vs firewall DNS rule','Troubleshoot false positives'] },
+  'unit42':       { icon:'🕵️', name:'Unit 42', desc:'Threat intelligence and incident response from Palo Alto Networks', chips:['Where to find Unit 42 IOCs','How WildFire uses Unit 42 intel','Incident response engagement','Unit 42 MITRE ATT&CK mapping','Threat brief interpretation','AutoFocus vs Unit 42 feeds'] },
+  'globalprotect':{ icon:'🔒', name:'GlobalProtect', desc:'VPN and ZTNA agent — portal, gateway, HIP checks', chips:['HIP check failing silently','Split tunnel configuration','Portal vs Gateway explained','GP connected but no traffic','ZTNA 1.0 vs ZTNA 2.0','iOS/Android GP deployment'] },
+  'cie':          { icon:'🪪', name:'Cloud Identity Engine', desc:'Cloud-based User-ID — sync with AD, Azure AD, Okta', chips:['CIE vs on-prem User-ID agent','Azure AD sync setup','Troubleshoot user mapping','CIE with Prisma Access','Supported identity providers','CIE license requirements'] },
+  'ai-runtime':   { icon:'🤖', name:'AI Runtime Security', desc:'Protect AI applications — prompt injection, LLM abuse detection', chips:['What threats AI Runtime detects','Prompt injection protection','Deployment options explained','Policy for AI API traffic','AI Runtime vs traditional IPS','OpenAI API inspection setup'] },
+  'strata-log':   { icon:'📋', name:'Strata Logging Service', desc:'Cloud-based log storage replacing on-premises log collectors', chips:['Strata Logging vs on-prem collectors','Data sovereignty regions','Configure log forwarding to cloud','Cortex Data Lake relationship','Log retention policies','Cost and sizing guidance'] },
+};
+
+// ── State ─────────────────────────────────────────────────────────
+// In production the frontend is served by FastAPI at the same origin.
+// Locally it's a file opened in the browser pointing at localhost:8000.
+const API_BASE = (location.hostname === 'localhost' || location.hostname === '127.0.0.1' || location.protocol === 'file:')
+  ? 'http://localhost:8000'
+  : '';   // same-origin in production
+let history       = [];
+let isStreaming   = false;
+let activeProduct = null;
+let authToken     = null;
+let currentUser   = null;
+let activeConvId  = null;
+
+// ── Theme ─────────────────────────────────────────────────────────
+(function(){
+  const t = localStorage.getItem('pan-theme') || 'dark';
+  setTheme(t, false);
+})();
+function setTheme(t, save=true) {
+  document.documentElement.setAttribute('data-theme', t);
+  const icon = document.getElementById('t-icon');
+  const lbl  = document.getElementById('t-label');
+  if (t === 'light') { if(icon) icon.textContent='🌙'; if(lbl) lbl.textContent='Dark'; }
+  else               { if(icon) icon.textContent='☀️'; if(lbl) lbl.textContent='Light'; }
+  if (save) localStorage.setItem('pan-theme', t);
+}
+function toggleTheme() {
+  const cur = document.documentElement.getAttribute('data-theme') || 'dark';
+  setTheme(cur === 'dark' ? 'light' : 'dark');
+}
+
+// ── Auth ──────────────────────────────────────────────────────────
+function getAuthHeaders() {
+  const h = { 'Content-Type': 'application/json' };
+  if (authToken) h['Authorization'] = 'Bearer ' + authToken;
+  return h;
+}
+
+function showAuth() {
+  document.getElementById('auth-overlay').style.display = 'flex';
+}
+function hideAuth() {
+  document.getElementById('auth-overlay').style.display = 'none';
+}
+function switchTab(tab) {
+  const isLogin = tab === 'login';
+  document.getElementById('tab-login').classList.toggle('active', isLogin);
+  document.getElementById('tab-register').classList.toggle('active', !isLogin);
+  document.getElementById('auth-submit').textContent = isLogin ? 'Sign In' : 'Create Account';
+  document.getElementById('register-hint').style.display = isLogin ? 'none' : 'block';
+  document.getElementById('auth-error').style.display = 'none';
+}
+function setAuthError(msg) {
+  const el = document.getElementById('auth-error');
+  el.textContent = msg; el.style.display = 'block';
+}
+
+async function submitAuth() {
+  const email    = document.getElementById('auth-email').value.trim();
+  const password = document.getElementById('auth-password').value;
+  const isLogin  = document.getElementById('tab-login').classList.contains('active');
+  const btn      = document.getElementById('auth-submit');
+  if (!email || !password) { setAuthError('Please enter your email and password.'); return; }
+  btn.disabled = true; btn.textContent = '…';
+  try {
+    const endpoint = isLogin ? '/auth/login' : '/auth/register';
+    const res = await fetch(API_BASE + endpoint, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password }),
+    });
+    const data = await res.json();
+    if (!res.ok) { setAuthError(data.detail || 'Something went wrong.'); return; }
+    setCurrentUser(data);
+    hideAuth();
+    loadConversationList();
+  } catch (e) {
+    setAuthError('Cannot reach the server. Is the backend running?');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = isLogin ? 'Sign In' : 'Create Account';
+  }
+}
+
+function setCurrentUser(data) {
+  authToken   = data.token;
+  currentUser = data;
+  localStorage.setItem('pan_token', data.token);
+  updateUserUI(data);
+}
+
+function updateUserUI(data) {
+  const ui = document.getElementById('user-info');
+  ui.style.display = 'flex';
+  document.getElementById('login-btn').style.display = 'none';
+  document.getElementById('user-email').textContent = data.email;
+  const badge = document.getElementById('user-tier-badge');
+  badge.textContent = data.tier === 'pro' ? 'PRO' : 'FREE';
+  badge.className = 'tier-badge ' + data.tier;
+  const ql = document.getElementById('user-queries');
+  if (data.tier === 'pro' || data.remaining_queries === -1) {
+    ql.textContent = 'Unlimited';
+  } else {
+    ql.textContent = `${data.remaining_queries} / 10 left today`;
+  }
+}
+
+function doLogout() {
+  authToken = null; currentUser = null;
+  localStorage.removeItem('pan_token');
+  document.getElementById('user-info').style.display = 'none';
+  document.getElementById('login-btn').style.display = 'inline-block';
+  showAuth();
+}
+
+async function initAuth() {
+  const saved = localStorage.getItem('pan_token');
+  if (!saved) { showAuth(); return; }
+  try {
+    const res = await fetch(API_BASE + '/auth/me', {
+      headers: { 'Authorization': 'Bearer ' + saved }
+    });
+    if (res.ok) {
+      const data = await res.json();
+      authToken = saved;
+      currentUser = { ...data, token: saved };
+      updateUserUI(currentUser);
+      hideAuth();
+      loadConversationList();
+    } else {
+      localStorage.removeItem('pan_token');
+      showAuth();
+    }
+  } catch {
+    // backend offline — show overlay
+    showAuth();
+  }
+}
+
+// ── Connection ────────────────────────────────────────────────────
+async function checkConn() {
+  const dot = document.getElementById('conn-dot');
+  const lbl = document.getElementById('conn-label');
+  try {
+    const r = await fetch(`${API_BASE}/health`, { signal: AbortSignal.timeout(4000) });
+    if (r.ok) { dot.className='online'; lbl.textContent='Connected'; return; }
+  } catch {}
+  dot.className='offline'; lbl.textContent='Offline';
+}
+initAuth(); checkConn(); setInterval(checkConn, 15000);
+
+// ── Conversation history ───────────────────────────────────────────
+async function loadConversationList() {
+  if (!authToken) return;
+  try {
+    const res = await fetch(API_BASE + '/conversations', { headers: getAuthHeaders() });
+    if (!res.ok) return;
+    const convs = await res.json();
+    renderConvList(convs);
+  } catch {}
+}
+
+function renderConvList(convs) {
+  const list  = document.getElementById('conv-list');
+  const empty = document.getElementById('conv-empty');
+  list.querySelectorAll('.conv-item').forEach(el => el.remove());
+  if (!convs.length) { empty.style.display = 'block'; return; }
+  empty.style.display = 'none';
+  convs.forEach(c => {
+    const item = document.createElement('div');
+    item.className = 'conv-item' + (c.id === activeConvId ? ' active' : '');
+    item.dataset.id = c.id;
+    const icon = c.product_id && PRODUCTS[c.product_id] ? PRODUCTS[c.product_id].icon : '💬';
+    item.innerHTML = `
+      <span style="font-size:13px;flex-shrink:0">${icon}</span>
+      <span class="conv-item-title" title="${escHtml(c.title)}">${escHtml(c.title)}</span>
+      <button class="conv-item-del" onclick="deleteConv(event,'${c.id}')" title="Delete">✕</button>`;
+    item.addEventListener('click', () => openConversation(c.id));
+    list.appendChild(item);
+  });
+}
+
+async function openConversation(convId) {
+  if (!authToken) return;
+  try {
+    const res = await fetch(`${API_BASE}/conversations/${convId}`, { headers: getAuthHeaders() });
+    if (!res.ok) return;
+    const data = await res.json();
+    activeConvId = convId;
+    // restore product context
+    const pid = data.conversation.product_id;
+    if (pid && PRODUCTS[pid]) selectProduct(pid, false);
+    else {
+      newChat(true, false);
+    }
+    // restore messages
+    history = [];
+    document.getElementById('messages').innerHTML = '';
+    document.getElementById('welcome')?.remove();
+    for (const msg of data.messages) {
+      if (msg.role === 'user') {
+        appendUserBubble(msg.content);
+        history.push({ role: 'user', content: msg.content });
+      } else {
+        const el = createAIBubble();
+        el.innerHTML = renderMarkdown(msg.content);
+        finalizeAIBubble(el, msg.content, null, null);
+        history.push({ role: 'assistant', content: msg.content });
+      }
+    }
+    scrollBottom();
+    // highlight conv item
+    document.querySelectorAll('.conv-item').forEach(el => {
+      el.classList.toggle('active', el.dataset.id === convId);
+    });
+  } catch {}
+}
+
+async function deleteConv(e, convId) {
+  e.stopPropagation();
+  try {
+    await fetch(`${API_BASE}/conversations/${convId}`, {
+      method: 'DELETE', headers: getAuthHeaders()
+    });
+    if (activeConvId === convId) newChat();
+    loadConversationList();
+  } catch {}
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ── File upload ─────────────────────────────────────────────────────
+async function handleFileUpload(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const status = document.getElementById('upload-status');
+  status.className = '';
+  status.textContent = `Uploading ${file.name}…`;
+  if (!authToken) { status.className='error'; status.textContent='Sign in to upload files.'; return; }
+  try {
+    const fd = new FormData();
+    fd.append('file', file);
+    const res = await fetch(API_BASE + '/upload', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + authToken },
+      body: fd,
+    });
+    const data = await res.json();
+    if (!res.ok) { throw new Error(data.detail || 'Upload failed'); }
+    // paste extracted text into config area
+    const cfg = document.getElementById('config-paste');
+    cfg.value = data.text;
+    onConfigInput();
+    status.className = 'loaded';
+    status.textContent = `✓ ${file.name} (${(data.size/1024).toFixed(1)} KB)`;
+  } catch(e) {
+    status.className = 'error';
+    status.textContent = '✗ ' + e.message;
+  }
+  input.value = '';
+}
+
+// ── Product selection ─────────────────────────────────────────────
+function selectProduct(id, openNewChat=true) {
+  const p = PRODUCTS[id];
+  if (!p) return;
+
+  activeProduct = id;
+
+  // Highlight nav item
+  document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
+  const btn = document.querySelector(`.nav-item[data-id="${id}"]`);
+  if (btn) btn.classList.add('active');
+
+  // Update context bar
+  document.getElementById('context-icon').textContent = p.icon;
+  document.getElementById('context-name').textContent = p.name;
+  document.getElementById('context-desc').textContent = p.desc;
+
+  // Render chips
+  const chips = document.getElementById('context-chips');
+  chips.innerHTML = p.chips.map(c =>
+    `<div class="ctx-chip" onclick="chipPrompt('${c.replace(/'/g,"\\'")}', '${id}')">${c}</div>`
+  ).join('');
+
+  // Start a fresh chat with product context pre-loaded
+  newChat(false);
+  removeWelcome();
+
+  // Add a system-style opener in the chat
+  const msgs = document.getElementById('messages');
+  const row  = document.createElement('div');
+  row.className = 'msg-row assistant';
+  row.innerHTML = `
+    <div class="msg-bubble">
+      <div class="msg-label">PAN Copilot</div>
+      <div class="msg-content">
+        <p>${p.icon} <strong>${p.name}</strong> — ${p.desc}</p>
+        <p>Ask me anything about ${p.name}, or use one of the quick questions above. You can also paste config or CLI output in the right panel to include it with your question.</p>
+      </div>
+    </div>`;
+  msgs.appendChild(row);
+}
+
+function chipPrompt(text, productId) {
+  // Pre-fill the context that this is about the selected product
+  const p = PRODUCTS[productId];
+  const prefixed = p ? `[${p.name}] ${text}` : text;
+  const inp = document.getElementById('user-input');
+  inp.value = prefixed;
+  autoResize(inp);
+  inp.focus();
+}
+
+// ── Config paste ──────────────────────────────────────────────────
+function onConfigInput() {
+  const val = document.getElementById('config-paste').value.trim();
+  const st  = document.getElementById('config-status');
+  const ind = document.getElementById('config-ind');
+  if (val) {
+    const n = val.split('\n').length;
+    st.textContent = `${n} line${n!==1?'s':''} attached — sends with next message`;
+    st.className = 'has';
+    ind.textContent = `📎 ${n} lines attached`;
+    ind.style.color = '#d29922';
+  } else {
+    st.textContent = 'No config attached'; st.className = '';
+    ind.textContent = ''; ind.style.color = '';
+  }
+}
+
+function qa(text) {
+  const inp = document.getElementById('user-input');
+  inp.value = text; autoResize(inp); inp.focus();
+}
+
+// ── New chat ──────────────────────────────────────────────────────
+function newChat(resetProduct=true, resetConv=true) {
+  if (resetConv) activeConvId = null;
+  history = [];
+  document.getElementById('messages').innerHTML = `
+    <div id="welcome">
+      <div class="w-logo">PAN</div>
+      <h2>PAN Copilot</h2>
+      <p>Select a product on the left to get focused help, or ask anything below.</p>
+    </div>`;
+  document.getElementById('user-input').value = '';
+  document.getElementById('config-paste').value = '';
+  onConfigInput();
+  if (resetProduct) {
+    activeProduct = null;
+    document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
+    document.getElementById('context-icon').textContent = '🔥';
+    document.getElementById('context-name').textContent = 'PAN Copilot';
+    document.getElementById('context-desc').textContent = 'Select a product from the left to focus the chat, or ask anything below.';
+    document.getElementById('context-chips').innerHTML = '';
+  }
+}
+
+// ── DOM helpers ───────────────────────────────────────────────────
+function removeWelcome() { const w=document.getElementById('welcome'); if(w) w.remove(); }
+function scrollBottom()  { const m=document.getElementById('messages'); m.scrollTop=m.scrollHeight; }
+
+function appendUser(text) {
+  removeWelcome();
+  const row = document.createElement('div');
+  row.className = 'msg-row user';
+  row.innerHTML = `<div class="msg-bubble"><div class="msg-label">You</div><div class="msg-content" style="white-space:pre-wrap">${esc(text)}</div></div>`;
+  document.getElementById('messages').appendChild(row);
+  scrollBottom();
+}
+
+function showThinking() {
+  removeWelcome();
+  const row = document.createElement('div');
+  row.id='thinking'; row.className='thinking-row';
+  row.innerHTML=`<div class="thinking-bubble"><div class="msg-label" style="margin:0;color:var(--accent)">PAN Copilot</div><div class="dots"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div></div>`;
+  document.getElementById('messages').appendChild(row); scrollBottom();
+}
+function rmThinking() { const t=document.getElementById('thinking'); if(t) t.remove(); }
+
+function createAIBubble() {
+  const row = document.createElement('div');
+  row.className='msg-row assistant';
+  row.innerHTML=`<div class="msg-bubble"><div class="msg-label">PAN Copilot</div><div class="msg-content" id="sc"></div></div>`;
+  document.getElementById('messages').appendChild(row); scrollBottom();
+  return document.getElementById('sc');
+}
+
+function finalizeAIBubble(el, text, iTok, oTok) {
+  el.id=''; el.innerHTML=renderMd(text);
+  el.querySelectorAll('.copy-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const code = btn.closest('.code-block').querySelector('pre').innerText;
+      navigator.clipboard.writeText(code).then(() => {
+        btn.textContent='✓ Copied'; btn.classList.add('copied');
+        setTimeout(()=>{ btn.textContent='Copy'; btn.classList.remove('copied'); }, 2000);
+      });
+    });
+  });
+  if (iTok != null) {
+    const b = el.closest('.msg-bubble');
+    const m = document.createElement('div'); m.className='token-meta';
+    m.innerHTML=`<span>↑ ${iTok} in</span><span>↓ ${oTok} out</span>`;
+    b.appendChild(m);
+  }
+  scrollBottom();
+}
+
+// ── Markdown ──────────────────────────────────────────────────────
+function renderMd(text) {
+  const blocks=[];
+  text = text.replace(/```(\w*)\n?([\s\S]*?)```/g, (_,lang,code) => {
+    blocks.push({lang:lang||'text',code:code.trimEnd()});
+    return `\x00B${blocks.length-1}\x00`;
+  });
+  text = esc(text);
+  text = text.replace(/\x00B(\d+)\x00/g, (_,i) => {
+    const {lang,code} = blocks[i];
+    return `<div class="code-block"><div class="code-block-header"><span class="code-lang">${lang}</span><button class="copy-btn">Copy</button></div><pre>${esc(code)}</pre></div>`;
+  });
+  text = text.replace(/`([^`\n]+)`/g,'<code>$1</code>');
+  text = text.replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>');
+  text = text.replace(/(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)/g,'<em>$1</em>');
+  text = text.replace(/^### (.+)$/gm,'<h3>$1</h3>');
+  text = text.replace(/^#### (.+)$/gm,'<h4>$1</h4>');
+  text = text.replace(/^[-*] (.+)$/gm,'<li>$1</li>');
+  text = text.replace(/^\d+\. (.+)$/gm,'<li>$1</li>');
+  text = text.replace(/\n\n+/g,'</p><p>');
+  text = text.replace(/\n/g,'<br>');
+  return `<p>${text}</p>`;
+}
+function esc(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+// ── Input helpers ─────────────────────────────────────────────────
+function autoResize(el) { el.style.height='auto'; el.style.height=Math.min(el.scrollHeight,160)+'px'; }
+function handleKey(e) { if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMessage();} }
+
+// ── Send ──────────────────────────────────────────────────────────
+async function sendMessage() {
+  if (isStreaming) return;
+  const input  = document.getElementById('user-input');
+  const cfgEl  = document.getElementById('config-paste');
+  const sendBtn= document.getElementById('send-btn');
+  const message= input.value.trim();
+  if (!message) return;
+
+  const configText = cfgEl.value.trim();
+  const displayMsg = configText ? `${message}\n\n[📎 Config attached — ${configText.split('\n').length} lines]` : message;
+  appendUser(displayMsg);
+  input.value=''; input.style.height='auto';
+
+  isStreaming=true; sendBtn.disabled=true; showThinking();
+
+  let fullText='', contentEl=null, iTok=null, oTok=null;
+
+  // Build system context hint for selected product
+  let msgToSend = message;
+  if (activeProduct && PRODUCTS[activeProduct] && !message.startsWith('[')) {
+    msgToSend = `[Context: user is asking about ${PRODUCTS[activeProduct].name}] ${message}`;
+  }
+
+  try {
+    const res = await fetch(`${API_BASE}/chat/stream`, {
+      method:'POST', headers: getAuthHeaders(),
+      body: JSON.stringify({ message: msgToSend, config_text: configText||null, history, model:'claude-sonnet-4-6', max_tokens:2048, conversation_id: activeConvId, product_id: activeProduct }),
+    });
+    if (res.status === 401) { doLogout(); throw new Error('Session expired. Please sign in again.'); }
+    if (!res.ok) { const e=await res.json().catch(()=>({detail:res.statusText})); throw new Error(e.detail||`HTTP ${res.status}`); }
+
+    const reader=res.body.getReader(), decoder=new TextDecoder(); let buf='';
+    while(true) {
+      const {done,value}=await reader.read(); if(done) break;
+      buf += decoder.decode(value,{stream:true});
+      const lines=buf.split('\n'); buf=lines.pop();
+      for(const line of lines) {
+        if(!line.startsWith('data: ')) continue;
+        let p; try{p=JSON.parse(line.slice(6));}catch{continue;}
+        if(p.type==='token'){
+          if(!contentEl){rmThinking();contentEl=createAIBubble();}
+          fullText+=p.text;
+          contentEl.innerHTML=esc(fullText)+'<span class="cursor"></span>';
+          scrollBottom();
+        } else if(p.type==='done'){
+          iTok=p.input_tokens; oTok=p.output_tokens;
+          if (p.conversation_id) activeConvId = p.conversation_id;
+          if (currentUser && p.remaining_queries !== undefined) {
+            currentUser.remaining_queries = p.remaining_queries;
+            updateUserUI(currentUser);
+          }
+        } else if(p.type==='error'){
+          throw new Error(p.detail);
+        }
+      }
+    }
+    if(contentEl&&fullText) finalizeAIBubble(contentEl,fullText,iTok,oTok);
+    history.push({role:'user',content:message});
+    history.push({role:'assistant',content:fullText});
+    loadConversationList();
+    if(configText){cfgEl.value='';onConfigInput();}
+  } catch(err) {
+    rmThinking();
+    if(!contentEl) contentEl=createAIBubble();
+    contentEl.innerHTML=`<span style="color:#f85149">⚠ Error: ${esc(err.message)}</span><br><br>Make sure the backend is running:<br><code>cd backend &amp;&amp; python main.py</code>`;
+    finalizeAIBubble(contentEl,'',null,null);
+  } finally {
+    isStreaming=false; sendBtn.disabled=false; input.focus();
+  }
+}
+</script>
+</body>
+</html>
