@@ -134,7 +134,8 @@ def main():
     window.events.closed += on_closed
 
     # Start the GUI event loop — blocks until window is closed
-    webview.start(debug=False)
+    # edgechromium uses WebView2 (built into Windows 10/11 via Edge) — no pythonnet needed
+    webview.start(debug=False, gui='edgechromium')
 
     # Give uvicorn a moment to shut down cleanly
     server_thread.join(timeout=3.0)

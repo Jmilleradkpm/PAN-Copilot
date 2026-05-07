@@ -14,8 +14,12 @@
 
 import os
 from pathlib import Path
+from PyInstaller.utils.hooks import collect_all
 
 block_cipher = None
+
+# Collect all pywebview data/binaries/hidden imports automatically
+_wv_datas, _wv_binaries, _wv_hiddenimports = collect_all('webview')
 
 # Data files to bundle alongside the executable
 datas = [
@@ -48,19 +52,16 @@ hidden_imports = [
     "httpcore",
     "httpx",
     "h11",
-    # pywebview
+    # pywebview (edgechromium backend — WebView2, no pythonnet)
     "webview",
-    "webview.platforms.winforms",
-    "clr",
-    "System",
-    "System.Windows.Forms",
-]
+    "webview.platforms.edgechromium",
+] + _wv_hiddenimports
 
 a = Analysis(
     ["pan_copilot.py"],
     pathex=[str(Path(".").resolve())],
-    binaries=[],
-    datas=datas,
+    binaries=[] + _wv_binaries,
+    datas=datas + _wv_datas,
     hiddenimports=hidden_imports,
     hookspath=[],
     hooksconfig={},
