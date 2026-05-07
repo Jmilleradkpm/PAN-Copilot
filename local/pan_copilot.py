@@ -29,47 +29,44 @@ if sys.stdout is None:
 if sys.stderr is None:
     sys.stderr = open(os.devnull, "w")
 
+import logging.config as _logging_config
 import uvicorn
 import uvicorn.config
 import uvicorn.logging as _uvlog
 
-# ── Definitive isatty() fix ──────────────────────────────────────────────────
-#
+# ── isatty() crash fix ───────────────────────────────────────────────────────
 # In a --windowed PyInstaller build sys.stdout/stderr are None.
-# uvicorn's DefaultFormatter (and AccessFormatter) call sys.stdout.isatty()
-# inside __init__ when use_colors is not explicitly set → AttributeError.
+# uvicorn's DefaultFormatter calls sys.stdout.isatty() inside __init__ and
+# crashes before the server ever starts.
 #
-# Three layers of defence, all applied before any uvicorn.Config is created:
+# Root cause: uvicorn.Config calls logging.config.dictConfig(LOGGING_CONFIG)
+# which instantiates DefaultFormatter via its '()' factory string.
+# Every higher-level patch (replacing the class, patching the method, making
+# configure_logging a no-op) has proven unreliable across Python/PyInstaller
+# versions because of how the frozen import machinery resolves names.
 #
-#  Layer 1 – stdout/stderr redirect (above): ensures streams are valid file
-#            objects so isatty() won't crash even if layers 2/3 ever miss.
-#
-#  Layer 2 – Patch __init__ on the class objects themselves.
-#            logging.config.dictConfig resolves formatter classes by string
-#            ("uvicorn.logging.DefaultFormatter"), gets the class OBJECT, then
-#            instantiates it.  Replacing the class reference in the module
-#            namespace (the approach that didn't work) can be bypassed by
-#            importlib; patching __init__ directly on the object cannot —
-#            the class is the same object regardless of how it was imported.
-#
-_orig_default = _uvlog.DefaultFormatter.__init__
-def _safe_default(self, *args, use_colors=None, **kwargs):
-    # Force use_colors=False; the isatty() branch is only reached when
-    # use_colors is None (neither True nor False).
-    _orig_default(self, *args, use_colors=False, **kwargs)
-_uvlog.DefaultFormatter.__init__ = _safe_default
+# The only approach that cannot be bypassed: patch dictConfig itself.
+# dictConfig is a plain function in stdlib logging.config — we replace it with
+# a wrapper that strips uvicorn's custom formatter factories before the call,
+# substituting the safe stdlib logging.Formatter instead.
+# No custom formatter → no isatty() call → no crash.
 
-if hasattr(_uvlog, "AccessFormatter"):
-    _orig_access = _uvlog.AccessFormatter.__init__
-    def _safe_access(self, *args, use_colors=None, **kwargs):
-        _orig_access(self, *args, use_colors=False, **kwargs)
-    _uvlog.AccessFormatter.__init__ = _safe_access
+_orig_dictConfig = _logging_config.dictConfig
 
-#  Layer 3 – Make configure_logging itself a no-op as belt-and-suspenders.
-#            If for any reason layers 1/2 are insufficient, uvicorn will
-#            simply skip all logging configuration entirely.
+def _safe_dictConfig(cfg):
+    if isinstance(cfg, dict):
+        for fmt in cfg.get("formatters", {}).values():
+            factory = fmt.get("()")
+            if isinstance(factory, str) and "uvicorn" in factory:
+                fmt["()"] = "logging.Formatter"
+                fmt.pop("use_colors", None)
+    _orig_dictConfig(cfg)
+
+_logging_config.dictConfig = _safe_dictConfig
+
+# Belt-and-suspenders: also silence configure_logging entirely.
 uvicorn.config.Config.configure_logging = lambda self: None
-# ────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 
 
 def _show_crash_dialog(message: str) -> None:
