@@ -18,6 +18,7 @@ import socket
 import sys
 import threading
 import time
+import traceback
 import webbrowser
 
 # PyInstaller bundles without a console window, leaving sys.stdout/stderr as
@@ -38,6 +39,33 @@ class _SafeFormatter(_OrigFormatter):
     def __init__(self, *args, use_colors=None, **kwargs):
         super().__init__(*args, use_colors=False, **kwargs)
 _uv_log.DefaultFormatter = _SafeFormatter
+
+# Fix 3: AccessFormatter has the same isatty vulnerability. We set
+# access_log=False below, but belt-and-suspenders in case that ever changes
+# or a uvicorn version touches AccessFormatter during config setup anyway.
+if hasattr(_uv_log, "AccessFormatter"):
+    _OrigAccess = _uv_log.AccessFormatter
+    class _SafeAccess(_OrigAccess):
+        def __init__(self, *args, use_colors=None, **kwargs):
+            super().__init__(*args, use_colors=False, **kwargs)
+    _uv_log.AccessFormatter = _SafeAccess
+
+
+def _show_crash_dialog(message: str) -> None:
+    """Surface a fatal startup error in a Windows MessageBox so users see what failed.
+
+    Without this, an unhandled exception in a --windowed PyInstaller build either
+    crashes silently or pops a generic 'Failed to execute script' dialog that
+    doesn't include our app name or contact info.
+    """
+    try:
+        import ctypes
+        # MB_ICONERROR (0x10) | MB_OK (0x00)
+        ctypes.windll.user32.MessageBoxW(
+            0, message, "PAN Copilot — Startup Error", 0x10
+        )
+    except Exception:
+        pass  # If even MessageBox fails, there's nothing more we can do.
 
 # ---------------------------------------------------------------------------
 # Find a free port
@@ -106,4 +134,12 @@ def main():
         sys.exit(0)
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:
+        _show_crash_dialog(
+            "PAN Copilot failed to start.\n\n"
+            f"{traceback.format_exc()}\n\n"
+            "Please report this error to support@adkcyber.com."
+        )
+        sys.exit(1)
