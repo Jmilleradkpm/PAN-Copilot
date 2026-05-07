@@ -21,14 +21,23 @@ import time
 import webbrowser
 
 # PyInstaller bundles without a console window, leaving sys.stdout/stderr as
-# None. Uvicorn's log formatter calls .isatty() on them and crashes.
-# Redirect to devnull so uvicorn starts cleanly.
+# None. Uvicorn's DefaultFormatter calls sys.stdout.isatty() and crashes.
+# Fix 1: redirect None streams to devnull.
 if sys.stdout is None:
     sys.stdout = open(os.devnull, "w")
 if sys.stderr is None:
     sys.stderr = open(os.devnull, "w")
 
 import uvicorn
+import uvicorn.logging as _uv_log
+
+# Fix 2: monkey-patch DefaultFormatter so it never calls sys.stdout.isatty().
+# This handles uvicorn versions that ignore log_config=None.
+_OrigFormatter = _uv_log.DefaultFormatter
+class _SafeFormatter(_OrigFormatter):
+    def __init__(self, *args, use_colors=None, **kwargs):
+        super().__init__(*args, use_colors=False, **kwargs)
+_uv_log.DefaultFormatter = _SafeFormatter
 
 # ---------------------------------------------------------------------------
 # Find a free port
