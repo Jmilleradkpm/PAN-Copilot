@@ -30,23 +30,21 @@ if sys.stderr is None:
     sys.stderr = open(os.devnull, "w")
 
 import uvicorn
+import uvicorn.config
 
-# Explicit log config that uses only stdlib classes — no uvicorn formatters.
-# The monkey-patch approach doesn't work because logging.config.dictConfig
-# re-imports formatter classes by their fully-qualified name string, bypassing
-# any module-level patches. Passing our own dict sidesteps that entirely.
-_SAFE_LOG_CONFIG = {
-    "version": 1,
-    "disable_existing_loggers": False,
-    "handlers": {
-        "null": {"class": "logging.NullHandler"},
-    },
-    "loggers": {
-        "uvicorn":        {"handlers": ["null"], "level": "WARNING", "propagate": False},
-        "uvicorn.error":  {"handlers": ["null"], "level": "WARNING", "propagate": False},
-        "uvicorn.access": {"handlers": ["null"], "level": "WARNING", "propagate": False},
-    },
-}
+# In a windowless PyInstaller build sys.stdout/stderr are None.
+# uvicorn.Config.configure_logging ultimately instantiates DefaultFormatter
+# which calls sys.stdout.isatty() → AttributeError → crash.
+#
+# Passing a custom log_config dict is NOT reliable: some uvicorn versions
+# deep-merge the provided dict with their own LOGGING_CONFIG default before
+# calling dictConfig, so uvicorn.logging.DefaultFormatter still ends up in
+# the final config and still calls isatty().
+#
+# The only bulletproof fix is to replace configure_logging on the class
+# itself with a no-op before any Config instance is created.  Uvicorn will
+# skip all logging setup; for a windowed desktop app that is exactly right.
+uvicorn.config.Config.configure_logging = lambda self: None
 
 
 def _show_crash_dialog(message: str) -> None:
@@ -105,7 +103,6 @@ def main():
         port=port,
         log_level="warning",
         access_log=False,
-        log_config=_SAFE_LOG_CONFIG,   # stdlib-only formatters, no isatty() calls
     )
     server = uvicorn.Server(config)
 
