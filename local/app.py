@@ -46,12 +46,12 @@ FRONTEND_PATH      = _base() / "pan_copilot_desktop.html"
 SYSTEM_PROMPT_PATH = _base() / "PAN_Copilot_Master_System_Prompt.md"
 
 # ---------------------------------------------------------------------------
-# License server URL (update after Railway deploy)
+# License server URL
 # ---------------------------------------------------------------------------
 
 LICENSE_SERVER_URL = os.environ.get(
     "PAN_COPILOT_LICENSE_URL",
-    "https://pan-copilot-license.up.railway.app"
+    "https://pan-copilot.onrender.com"
 )
 
 # ---------------------------------------------------------------------------
