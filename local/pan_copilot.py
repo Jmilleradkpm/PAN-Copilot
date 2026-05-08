@@ -119,6 +119,7 @@ def main():
     url  = f"http://127.0.0.1:{port}"
 
     from app import app as fastapi_app
+    import app as _app_module
 
     config = uvicorn.Config(
         fastapi_app,
@@ -128,6 +129,9 @@ def main():
         access_log=False,
     )
     server = uvicorn.Server(config)
+
+    # Give app.py a reference so /api/shutdown can call should_exit.
+    _app_module._uvicorn_server = server
 
     server_thread = threading.Thread(target=server.run, daemon=True)
     server_thread.start()

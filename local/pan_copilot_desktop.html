@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en" data-theme="dark">
 <head>
   <meta charset="UTF-8"/>
@@ -1351,5 +1351,11 @@ function copyCode(btn) {
   </div>
 </div>
 
+
+<script>
+  window.addEventListener('beforeunload', function () {
+    navigator.sendBeacon('/api/shutdown', '{}');
+  });
+</script>
 </body>
 </html>

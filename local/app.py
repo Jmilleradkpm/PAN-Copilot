@@ -1,4 +1,4 @@
-"""
+﻿"""
 PAN Copilot - Local Desktop Backend v4.0
 =========================================
 Session-based auth. ADK Cyber's Anthropic key is returned by the license server
@@ -527,3 +527,20 @@ def serve_frontend():
     if FRONTEND_PATH.exists():
         return HTMLResponse(content=FRONTEND_PATH.read_text(encoding="utf-8"))
     return HTMLResponse("<h1>PAN Copilot</h1><p>Frontend not found.</p>", status_code=404)
+
+
+# ---------------------------------------------------------------------------
+# Graceful shutdown endpoint
+# ---------------------------------------------------------------------------
+_uvicorn_server = None
+
+@app.post("/api/shutdown")
+def request_shutdown():
+    import threading
+    def _do_exit():
+        import time
+        time.sleep(0.4)
+        if _uvicorn_server is not None:
+            _uvicorn_server.should_exit = True
+    threading.Thread(target=_do_exit, daemon=True).start()
+    return {"ok": True}
