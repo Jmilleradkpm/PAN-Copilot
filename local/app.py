@@ -12,9 +12,11 @@ Data flow:
 Nothing about your firewall configs ever touches ADK Cyber's servers.
 """
 
+import base64
 import json
 import os
 import re
+import secrets
 import sqlite3
 import sys
 import uuid
@@ -24,10 +26,10 @@ from typing import Optional
 
 import anthropic
 import httpx
-from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi import FastAPI, HTTPException, UploadFile, File, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, HTMLResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, validator
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -49,10 +51,67 @@ SYSTEM_PROMPT_PATH = _base() / "PAN_Copilot_Master_System_Prompt.md"
 # License server URL
 # ---------------------------------------------------------------------------
 
-LICENSE_SERVER_URL = os.environ.get(
-    "PAN_COPILOT_LICENSE_URL",
-    "https://pan-copilot.onrender.com"
-)
+_raw_license_url = os.environ.get("PAN_COPILOT_LICENSE_URL", "https://pan-copilot.onrender.com")
+import urllib.parse as _urlparse
+_parsed = _urlparse.urlparse(_raw_license_url)
+if _parsed.scheme != "https":
+    raise ValueError(f"PAN_COPILOT_LICENSE_URL must use https://, got: {_raw_license_url}")
+LICENSE_SERVER_URL = _raw_license_url
+
+# ---------------------------------------------------------------------------
+# Shutdown token — generated at startup, required by /api/shutdown
+# ---------------------------------------------------------------------------
+SHUTDOWN_TOKEN = secrets.token_hex(32)
+
+# ---------------------------------------------------------------------------
+# API key decryption (matches license_server encryption via HKDF + Fernet)
+# ---------------------------------------------------------------------------
+try:
+    from cryptography.hazmat.primitives.kdf.hkdf import HKDF as _HKDF
+    from cryptography.hazmat.primitives import hashes as _crypto_hashes
+    from cryptography.fernet import Fernet as _Fernet
+    _CRYPTO_OK = True
+except ImportError:
+    _CRYPTO_OK = False
+
+def _decrypt_api_key(encrypted: str, session_token: str) -> Optional[str]:
+    if not _CRYPTO_OK or not encrypted or not session_token:
+        return encrypted  # fallback: treat as plaintext
+    try:
+        hkdf = _HKDF(
+            algorithm=_crypto_hashes.SHA256(),
+            length=32,
+            salt=b"pan-copilot-apikey-v1",
+            info=b"api-key-encryption",
+        )
+        key = base64.urlsafe_b64encode(hkdf.derive(session_token.encode()))
+        return _Fernet(key).decrypt(encrypted.encode()).decode()
+    except Exception:
+        return None  # decryption failed — key not usable
+
+# ---------------------------------------------------------------------------
+# Session token encryption via Windows DPAPI
+# ---------------------------------------------------------------------------
+def _protect_token(token: str) -> str:
+    """Encrypt token with Windows DPAPI (user-scoped). Falls back to plaintext."""
+    try:
+        import win32crypt
+        encrypted = win32crypt.CryptProtectData(token.encode(), None, None, None, None, 0)
+        return "dpapi:" + base64.b64encode(encrypted).decode()
+    except Exception:
+        return token
+
+def _unprotect_token(stored: str) -> str:
+    """Decrypt DPAPI-protected token. Falls back to treating as plaintext."""
+    if not stored.startswith("dpapi:"):
+        return stored
+    try:
+        import win32crypt
+        encrypted = base64.b64decode(stored[6:])
+        _, decrypted = win32crypt.CryptUnprotectData(encrypted, None, None, None, 0)
+        return decrypted.decode()
+    except Exception:
+        return stored  # return raw if decryption fails
 
 # ---------------------------------------------------------------------------
 # In-memory session cache
@@ -81,14 +140,26 @@ _session_cache: dict = {
 def load_config() -> dict:
     if CONFIG_FILE.exists():
         try:
-            return json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+            raw = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+            if "session_token" in raw:
+                raw["session_token"] = _unprotect_token(raw["session_token"])
+            return raw
         except Exception:
             return {}
     return {}
 
 def save_config(data: dict):
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    CONFIG_FILE.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    stored = dict(data)
+    if "session_token" in stored and stored["session_token"]:
+        stored["session_token"] = _protect_token(stored["session_token"])
+    CONFIG_FILE.write_text(json.dumps(stored, indent=2), encoding="utf-8")
+    # Restrict file to owner read/write only (best-effort on Windows)
+    try:
+        import stat
+        CONFIG_FILE.chmod(stat.S_IRUSR | stat.S_IWUSR)
+    except Exception:
+        pass
 
 # ---------------------------------------------------------------------------
 # FastAPI app
@@ -176,6 +247,12 @@ class Message(BaseModel):
     role: str
     content: str
 
+_ALLOWED_MODELS = {
+    "claude-sonnet-4-6",
+    "claude-haiku-4-5-20251001",
+}
+_MAX_TOKENS_CAP = 4096
+
 class ChatRequest(BaseModel):
     message: str
     config_text: Optional[str] = None
@@ -183,6 +260,16 @@ class ChatRequest(BaseModel):
     model: Optional[str] = "claude-sonnet-4-6"
     max_tokens: Optional[int] = 2048
     conversation_id: Optional[str] = None
+
+    @validator("model", pre=True, always=True)
+    def validate_model(cls, v):
+        if v not in _ALLOWED_MODELS:
+            return "claude-sonnet-4-6"
+        return v
+
+    @validator("max_tokens", pre=True, always=True)
+    def cap_tokens(cls, v):
+        return min(int(v or 2048), _MAX_TOKENS_CAP)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -276,25 +363,31 @@ def _license_post(path: str, body: dict) -> dict:
         except Exception:
             pass
         raise HTTPException(status_code=e.response.status_code, detail=detail)
-    except Exception as e:
+    except Exception:
         raise HTTPException(
             status_code=503,
-            detail=f"License server unreachable: {str(e)}. If this is your first sign-in today, wait 30 seconds and try again."
+            detail="License server unreachable. If this is your first sign-in today, wait 30 seconds and try again."
         )
 
 def _populate_session(data: dict):
     """Write license server response into the in-memory session cache."""
-    _session_cache["token"]         = data.get("token") or _session_cache["token"]
-    _session_cache["email"]         = data.get("email")
-    _session_cache["tier"]          = data.get("tier", "free")
-    _session_cache["anthropic_key"] = data.get("anthropic_key")
-    _session_cache["period"]        = data.get("period", "weekly")
-    _session_cache["queries_used"]       = data.get("queries_used", 0) or 0
-    _session_cache["queries_limit"]      = data.get("queries_limit", 10) or 10
-    _session_cache["queries_remaining"]  = data.get("queries_remaining", 10) or 10
-    # Legacy aliases
-    _session_cache["weekly_used"]   = data.get("weekly_used") or data.get("queries_used", 0) or 0
-    _session_cache["weekly_limit"]  = data.get("weekly_limit") or data.get("queries_limit", 10) or 10
+    token = data.get("token") or _session_cache["token"]
+    _session_cache["token"]        = token
+    _session_cache["email"]        = data.get("email")
+    _session_cache["tier"]         = data.get("tier", "free")
+    _session_cache["period"]       = data.get("period", "weekly")
+    _session_cache["queries_used"]      = data.get("queries_used", 0) or 0
+    _session_cache["queries_limit"]     = data.get("queries_limit", 10) or 10
+    _session_cache["queries_remaining"] = data.get("queries_remaining", 10) or 10
+    _session_cache["weekly_used"]  = data.get("weekly_used") or data.get("queries_used", 0) or 0
+    _session_cache["weekly_limit"] = data.get("weekly_limit") or data.get("queries_limit", 10) or 10
+
+    # Decrypt the API key using the session token as key material
+    encrypted_key = data.get("anthropic_key")
+    if encrypted_key and token:
+        _session_cache["anthropic_key"] = _decrypt_api_key(encrypted_key, token)
+    else:
+        _session_cache["anthropic_key"] = None
 
 # ---------------------------------------------------------------------------
 # Auth endpoints
@@ -382,8 +475,13 @@ def auth_status():
 # Conversation endpoints
 # ---------------------------------------------------------------------------
 
+def _require_session():
+    if not _session_cache.get("token"):
+        raise HTTPException(status_code=401, detail="Not logged in.")
+
 @app.get("/conversations")
 def list_conversations():
+    _require_session()
     with get_db() as db:
         rows = db.execute(
             "SELECT id, title, updated_at FROM conversations ORDER BY updated_at DESC LIMIT 50"
@@ -392,6 +490,7 @@ def list_conversations():
 
 @app.get("/conversations/{conv_id}")
 def get_conversation(conv_id: str):
+    _require_session()
     with get_db() as db:
         conv = db.execute(
             "SELECT * FROM conversations WHERE id = ?", (conv_id,)
@@ -406,6 +505,7 @@ def get_conversation(conv_id: str):
 
 @app.delete("/conversations/{conv_id}")
 def delete_conversation(conv_id: str):
+    _require_session()
     with get_db() as db:
         db.execute("DELETE FROM messages WHERE conversation_id = ?", (conv_id,))
         db.execute("DELETE FROM conversations WHERE id = ?", (conv_id,))
@@ -522,11 +622,27 @@ def health():
         "authenticated": _session_cache.get("email") is not None,
     }
 
+_CSP = (
+    "default-src 'self'; "
+    "script-src 'self' 'unsafe-inline'; "
+    "style-src 'self' 'unsafe-inline'; "
+    "connect-src 'self'; "
+    "img-src 'self' data: blob:; "
+    "font-src 'self' data:; "
+    "object-src 'none'; "
+    "frame-src 'none'; "
+    "base-uri 'self';"
+)
+
 @app.get("/", response_class=HTMLResponse)
 def serve_frontend():
-    if FRONTEND_PATH.exists():
-        return HTMLResponse(content=FRONTEND_PATH.read_text(encoding="utf-8"))
-    return HTMLResponse("<h1>PAN Copilot</h1><p>Frontend not found.</p>", status_code=404)
+    if not FRONTEND_PATH.exists():
+        return HTMLResponse("<h1>PAN Copilot</h1><p>Frontend not found.</p>", status_code=404)
+    html = FRONTEND_PATH.read_text(encoding="utf-8")
+    # Inject shutdown token as a JS global so sendBeacon can authenticate
+    inject = f'<script>window.__SHUTDOWN_TOKEN__="{SHUTDOWN_TOKEN}";</script>'
+    html = html.replace("</head>", inject + "\n</head>", 1)
+    return HTMLResponse(content=html, headers={"Content-Security-Policy": _CSP})
 
 
 # ---------------------------------------------------------------------------
@@ -534,8 +650,14 @@ def serve_frontend():
 # ---------------------------------------------------------------------------
 _uvicorn_server = None
 
+class ShutdownRequest(BaseModel):
+    shutdown_token: str = ""
+
 @app.post("/api/shutdown")
-def request_shutdown():
+def request_shutdown(req: ShutdownRequest):
+    import hmac as _hmac
+    if not _hmac.compare_digest(req.shutdown_token, SHUTDOWN_TOKEN):
+        raise HTTPException(status_code=403, detail="Forbidden.")
     import threading
     def _do_exit():
         import time

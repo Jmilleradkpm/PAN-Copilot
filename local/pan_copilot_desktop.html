@@ -1013,7 +1013,7 @@ function selectProduct(id) {
   document.getElementById('context-desc').textContent = `Focused on ${p.name}. Ask about config, troubleshooting, best practices, or paste output below.`;
 
   const chips = document.getElementById('context-chips');
-  chips.innerHTML = p.chips.map(c => `<button class="ctx-chip" onclick="quickAsk('${c}')">${c}</button>`).join('');
+  chips.innerHTML = p.chips.map(c => `<button class="ctx-chip" onclick="quickAsk(${JSON.stringify(c)})">${escHtml(c)}</button>`).join('');
 }
 
 // ── Conversation list ─────────────────────────────────────────────
@@ -1032,9 +1032,9 @@ function renderConvList(list) {
     return;
   }
   el.innerHTML = list.map(c => `
-    <div class="conv-item${c.id === currentConvId ? ' active' : ''}" onclick="loadConv('${c.id}')">
+    <div class="conv-item${c.id === currentConvId ? ' active' : ''}" onclick="loadConv(${JSON.stringify(c.id)})">
       <span class="conv-item-title">${escHtml(c.title)}</span>
-      <button class="conv-item-del" onclick="deleteConv(event,'${c.id}')" title="Delete">✕</button>
+      <button class="conv-item-del" onclick="deleteConv(event,${JSON.stringify(c.id)})" title="Delete">✕</button>
     </div>
   `).join('');
 }
@@ -1355,7 +1355,11 @@ function copyCode(btn) {
 
 <script>
   window.addEventListener('beforeunload', function () {
-    navigator.sendBeacon('/api/shutdown', '{}');
+    const token = window.__SHUTDOWN_TOKEN__ || '';
+    navigator.sendBeacon('/api/shutdown', new Blob(
+      [JSON.stringify({shutdown_token: token})],
+      {type: 'application/json'}
+    ));
   });
 </script>
 </body>

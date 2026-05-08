@@ -1,30 +1,26 @@
 """
 PAN Copilot — License Server
 ============================
-Lightweight FastAPI service deployed to Railway.
+Lightweight FastAPI service deployed to Render.
 
 Responsibilities:
-  1. User registration / login (email + password)
+  1. User registration / login (email + password, argon2id hashed)
   2. Session token issuance and validation
-  3. Query counting with tier-appropriate limits:
-       Free  — 10 / week
-       Pro   — 1,000 / month  (~$20 API cost ceiling)
-       MAX   — 2,500 / month  (~$50 API cost ceiling)
-  4. Returning ADK Cyber's Anthropic API key to authenticated users
+  3. Query counting with tier-appropriate limits
+  4. Returning ADK Cyber's Anthropic API key (encrypted with session-token-derived key)
   5. Tier management (free / pro / max)
 
 Data that NEVER passes through here:
   - Firewall configs
   - PAN-OS CLI output
   - Any chat message content
-
-The local app calls Anthropic directly using the key returned by /auth/login.
-Configs go: user machine → Anthropic only.
-This server only sees: email, hashed password, session tokens, query counts.
 """
 
+import base64
 import hashlib
 import hmac
+import json
+import logging
 import os
 import secrets
 import sqlite3
@@ -33,31 +29,109 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Header
 from fastapi.middleware.cors import CORSMiddleware
+from passlib.context import CryptContext
 from pydantic import BaseModel
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 
 # ---------------------------------------------------------------------------
-# Config from environment variables (set these in Railway)
+# Logging
 # ---------------------------------------------------------------------------
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("pan_copilot_license")
 
-ANTHROPIC_API_KEY       = os.environ.get("ANTHROPIC_API_KEY", "")
-SECRET_PEPPER           = os.environ.get("SECRET_PEPPER", "change-me-in-production")
-ADMIN_TOKEN             = os.environ.get("ADMIN_TOKEN", "")
-LS_WEBHOOK_SECRET       = os.environ.get("LS_WEBHOOK_SECRET", "")  # Lemon Squeezy webhook secret
+# ---------------------------------------------------------------------------
+# Config from environment variables
+# ---------------------------------------------------------------------------
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+SECRET_PEPPER     = os.environ.get("SECRET_PEPPER", "change-me-in-production")
+ADMIN_TOKEN       = os.environ.get("ADMIN_TOKEN", "")
+LS_WEBHOOK_SECRET = os.environ.get("LS_WEBHOOK_SECRET", "")
 
-# Map Lemon Squeezy variant UUIDs → tier strings
+# Startup warnings for unset critical secrets
+if SECRET_PEPPER == "change-me-in-production":
+    logger.critical("SECRET_PEPPER is using the default value — set a real value in your environment.")
+if not LS_WEBHOOK_SECRET:
+    logger.critical("LS_WEBHOOK_SECRET is not set — webhook endpoint will reject all requests.")
+if not ADMIN_TOKEN:
+    logger.warning("ADMIN_TOKEN is not set — admin endpoints are disabled.")
+if not ANTHROPIC_API_KEY:
+    logger.warning("ANTHROPIC_API_KEY is not set.")
+
+# ---------------------------------------------------------------------------
+# Password hashing — argon2id with legacy SHA-256 migration path
+# ---------------------------------------------------------------------------
+pwd_ctx = CryptContext(schemes=["argon2"], deprecated="auto")
+
+def hash_password(password: str) -> str:
+    return pwd_ctx.hash(password)
+
+def _legacy_hash(password: str) -> str:
+    return hashlib.sha256((SECRET_PEPPER + password).encode()).hexdigest()
+
+def verify_password(password: str, stored_hash: str) -> bool:
+    if stored_hash.startswith("$argon2"):
+        return pwd_ctx.verify(password, stored_hash)
+    # Legacy SHA-256 + pepper
+    return hmac.compare_digest(_legacy_hash(password), stored_hash)
+
+# ---------------------------------------------------------------------------
+# API key encryption (Fernet, key derived from session token via HKDF)
+# ---------------------------------------------------------------------------
+try:
+    from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+    from cryptography.hazmat.primitives import hashes as _crypto_hashes
+    from cryptography.fernet import Fernet
+    _CRYPTO_OK = True
+except ImportError:
+    _CRYPTO_OK = False
+    logger.warning("cryptography package not available — API key will not be encrypted in transit.")
+
+def _derive_fernet_key(session_token: str) -> bytes:
+    hkdf = HKDF(
+        algorithm=_crypto_hashes.SHA256(),
+        length=32,
+        salt=b"pan-copilot-apikey-v1",
+        info=b"api-key-encryption",
+    )
+    return base64.urlsafe_b64encode(hkdf.derive(session_token.encode()))
+
+def encrypt_api_key(api_key: str, session_token: str) -> Optional[str]:
+    if not _CRYPTO_OK or not api_key or not session_token:
+        return None
+    try:
+        return Fernet(_derive_fernet_key(session_token)).encrypt(api_key.encode()).decode()
+    except Exception as e:
+        logger.error(f"API key encryption failed: {e}")
+        return None
+
+# ---------------------------------------------------------------------------
+# Rate limiter
+# ---------------------------------------------------------------------------
+def _real_ip(request: Request) -> str:
+    forwarded = request.headers.get("X-Forwarded-For")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+limiter = Limiter(key_func=_real_ip)
+
+# ---------------------------------------------------------------------------
+# Lemon Squeezy variant map
+# ---------------------------------------------------------------------------
 LS_VARIANT_TIER = {
     "1c4c4370-4557-4651-a684-fadaf1a44404": "pro",
     "0475eb28-6e6b-4f68-adcc-9de6045192d6": "max",
 }
 
-FREE_WEEKLY_LIMIT  = 10        # ~40 / month
-PRO_MONTHLY_LIMIT  = 1_000     # API cost ≈ $20 at this volume
-MAX_MONTHLY_LIMIT  = 2_500     # API cost ≈ $50 at this volume
-OWNER_LIMIT        = 999_999   # Effectively unlimited
-
-SESSION_TTL_DAYS = 30
+FREE_WEEKLY_LIMIT  = 10
+PRO_MONTHLY_LIMIT  = 1_000
+MAX_MONTHLY_LIMIT  = 2_500
+OWNER_LIMIT        = 999_999
+SESSION_TTL_DAYS   = 30
 
 TIER_LIMITS = {
     "free":  FREE_WEEKLY_LIMIT,
@@ -69,8 +143,13 @@ TIER_LIMITS = {
 # ---------------------------------------------------------------------------
 # Database
 # ---------------------------------------------------------------------------
-
 DB_PATH = Path(os.environ.get("DB_PATH", "/tmp/license_server.db"))
+
+if str(DB_PATH).startswith("/tmp"):
+    logger.warning(
+        "DB_PATH is /tmp — data will be lost on every Render restart. "
+        "Set DB_PATH to a persistent volume path in production."
+    )
 
 def get_db():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -90,7 +169,6 @@ def init_db():
                 seats_allowed INTEGER NOT NULL DEFAULT 1,
                 created_at    TEXT NOT NULL
             );
-
             CREATE TABLE IF NOT EXISTS sessions (
                 token      TEXT PRIMARY KEY,
                 user_id    TEXT NOT NULL,
@@ -98,26 +176,12 @@ def init_db():
                 expires_at TEXT NOT NULL,
                 FOREIGN KEY (user_id) REFERENCES users(id)
             );
-
-            -- Reused for both weekly (free) and monthly (paid) counts.
-            -- The `period_key` column stores:
-            --   • free  → ISO date of the week's Monday  (e.g. 2025-06-02)
-            --   • paid  → ISO date of month's first day  (e.g. 2025-06-01)
             CREATE TABLE IF NOT EXISTS query_counts (
                 user_id    TEXT NOT NULL,
                 period_key TEXT NOT NULL,
                 count      INTEGER NOT NULL DEFAULT 0,
                 PRIMARY KEY (user_id, period_key)
             );
-
-            -- Keep legacy column name working during migration
-            CREATE TABLE IF NOT EXISTS query_counts_legacy (
-                user_id    TEXT NOT NULL,
-                week_start TEXT NOT NULL,
-                count      INTEGER NOT NULL DEFAULT 0,
-                PRIMARY KEY (user_id, week_start)
-            );
-
             CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
             CREATE INDEX IF NOT EXISTS idx_qc_user      ON query_counts(user_id);
         """)
@@ -128,50 +192,31 @@ init_db()
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 def week_start() -> str:
-    """ISO date of the most recent Monday (UTC)."""
     today = datetime.now(timezone.utc).date()
-    monday = today - timedelta(days=today.weekday())
-    return monday.isoformat()
+    return (today - timedelta(days=today.weekday())).isoformat()
 
 def month_start() -> str:
-    """ISO date of the first day of the current UTC month."""
-    today = datetime.now(timezone.utc).date()
-    return today.replace(day=1).isoformat()
+    return datetime.now(timezone.utc).date().replace(day=1).isoformat()
 
 def period_key(tier: str) -> str:
-    """Return the appropriate counting period key for this tier."""
-    if tier == "free":
-        return week_start()
-    return month_start()  # pro, max, owner all use monthly window
-
-def hash_password(password: str) -> str:
-    salted = SECRET_PEPPER + password
-    return hashlib.sha256(salted.encode()).hexdigest()
-
-def verify_password(password: str, stored_hash: str) -> bool:
-    return hmac.compare_digest(hash_password(password), stored_hash)
+    return week_start() if tier == "free" else month_start()
 
 def make_token() -> str:
     return secrets.token_urlsafe(40)
 
 def get_user_by_token(token: str) -> Optional[sqlite3.Row]:
-    now = now_iso()
     with get_db() as db:
-        row = db.execute("""
-            SELECT u.*, s.expires_at
-            FROM sessions s
+        return db.execute("""
+            SELECT u.*, s.expires_at FROM sessions s
             JOIN users u ON s.user_id = u.id
             WHERE s.token = ? AND s.expires_at > ?
-        """, (token, now)).fetchone()
-    return row
+        """, (token, now_iso())).fetchone()
 
 def get_query_count(user_id: str, tier: str) -> int:
-    """Current query count for the relevant period."""
     pk = period_key(tier)
     with get_db() as db:
         row = db.execute(
@@ -183,48 +228,53 @@ def get_query_count(user_id: str, tier: str) -> int:
 def query_limit_for(tier: str) -> int:
     return TIER_LIMITS.get(tier, FREE_WEEKLY_LIMIT)
 
-def usage_response(user: sqlite3.Row, queries_used: int = None) -> dict:
-    """Build the consistent usage payload returned by all auth/query endpoints."""
-    tier = user["tier"]
-    limit = query_limit_for(tier)
-    used  = queries_used if queries_used is not None else get_query_count(user["id"], tier)
-    period = "weekly" if tier == "free" else "monthly"
-
+def usage_response(user, queries_used: int = None, session_token: str = None) -> dict:
+    tier    = user["tier"]
+    limit   = query_limit_for(tier)
+    used    = queries_used if queries_used is not None else get_query_count(user["id"], tier)
+    period  = "weekly" if tier == "free" else "monthly"
     unlimited = (tier == "owner")
+
+    encrypted_key = encrypt_api_key(ANTHROPIC_API_KEY, session_token) if session_token else None
+
     return {
-        "email":         user["email"],
-        "tier":          tier,
-        "seats_allowed": user["seats_allowed"],
-        "period":        period,
-        "queries_used":  used,
-        "queries_limit": limit,
+        "email":             user["email"],
+        "tier":              tier,
+        "seats_allowed":     user["seats_allowed"],
+        "period":            period,
+        "queries_used":      used,
+        "queries_limit":     limit,
         "queries_remaining": OWNER_LIMIT if unlimited else max(0, limit - used),
-        "unlimited":     unlimited,
-        # Legacy keys kept for older local-app versions
-        "weekly_used":  used  if tier == "free" else None,
-        "weekly_limit": limit if tier == "free" else None,
-        "monthly_used":  used  if tier != "free" else None,
-        "monthly_limit": limit if tier != "free" else None,
-        "anthropic_key": ANTHROPIC_API_KEY if ANTHROPIC_API_KEY else None,
+        "unlimited":         unlimited,
+        "weekly_used":       used  if tier == "free" else None,
+        "weekly_limit":      limit if tier == "free" else None,
+        "monthly_used":      used  if tier != "free" else None,
+        "monthly_limit":     limit if tier != "free" else None,
+        "anthropic_key":     encrypted_key,  # Fernet-encrypted, never plaintext
     }
 
 # ---------------------------------------------------------------------------
 # FastAPI
 # ---------------------------------------------------------------------------
-
-app = FastAPI(title="PAN Copilot License Server", version="2.0.0")
+app = FastAPI(title="PAN Copilot License Server", version="2.1.0")
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=[
+        "http://127.0.0.1",
+        "http://localhost",
+        "null",
+    ],
+    allow_origin_regex=r"http://(127\.0\.0\.1|localhost)(:\d+)?",
+    allow_methods=["POST", "GET"],
+    allow_headers=["Content-Type", "Authorization"],
 )
 
 # ---------------------------------------------------------------------------
 # Pydantic models
 # ---------------------------------------------------------------------------
-
 class AuthRequest(BaseModel):
     email: str
     password: str
@@ -233,7 +283,6 @@ class TokenRequest(BaseModel):
     token: str
 
 class AdminTierRequest(BaseModel):
-    admin_token: str
     email: str
     tier: str
     seats_allowed: int = 1
@@ -241,9 +290,9 @@ class AdminTierRequest(BaseModel):
 # ---------------------------------------------------------------------------
 # Auth endpoints
 # ---------------------------------------------------------------------------
-
 @app.post("/auth/register")
-def register(req: AuthRequest):
+@limiter.limit("3/hour")
+def register(request: Request, req: AuthRequest):
     email = req.email.strip().lower()
     if not email or "@" not in email:
         raise HTTPException(status_code=400, detail="Invalid email address.")
@@ -252,7 +301,7 @@ def register(req: AuthRequest):
 
     user_id = str(uuid.uuid4())
     pw_hash = hash_password(req.password)
-    ts = now_iso()
+    ts      = now_iso()
 
     try:
         with get_db() as db:
@@ -265,7 +314,7 @@ def register(req: AuthRequest):
     except sqlite3.IntegrityError:
         raise HTTPException(status_code=409, detail="An account with that email already exists.")
 
-    token = make_token()
+    token   = make_token()
     expires = (datetime.now(timezone.utc) + timedelta(days=SESSION_TTL_DAYS)).isoformat()
     with get_db() as db:
         db.execute(
@@ -274,30 +323,40 @@ def register(req: AuthRequest):
         )
         db.commit()
 
-    # Fabricate a minimal Row-like object for usage_response
     class _User:
         def __getitem__(self, k):
-            return {"id": user_id, "email": email, "tier": "free",
-                    "seats_allowed": 1}[k]
+            return {"id": user_id, "email": email, "tier": "free", "seats_allowed": 1}[k]
 
-    payload = usage_response(_User(), queries_used=0)
+    payload = usage_response(_User(), queries_used=0, session_token=token)
     payload["token"] = token
     return payload
 
 
 @app.post("/auth/login")
-def login(req: AuthRequest):
+@limiter.limit("5/minute")
+def login(request: Request, req: AuthRequest):
     email = req.email.strip().lower()
     with get_db() as db:
-        user = db.execute(
-            "SELECT * FROM users WHERE email = ?", (email,)
-        ).fetchone()
+        user = db.execute("SELECT * FROM users WHERE email = ?", (email,)).fetchone()
 
     if not user or not verify_password(req.password, user["password_hash"]):
+        logger.warning(f"Failed login attempt for: {email} from {_real_ip(request)}")
         raise HTTPException(status_code=401, detail="Incorrect email or password.")
 
-    token = make_token()
-    ts = now_iso()
+    # Migrate legacy SHA-256 hash to argon2id on successful login
+    if not user["password_hash"].startswith("$argon2"):
+        new_hash = hash_password(req.password)
+        with get_db() as db:
+            db.execute("UPDATE users SET password_hash = ? WHERE id = ?", (new_hash, user["id"]))
+            db.commit()
+
+    # Invalidate previous sessions for this user
+    with get_db() as db:
+        db.execute("DELETE FROM sessions WHERE user_id = ?", (user["id"],))
+        db.commit()
+
+    token   = make_token()
+    ts      = now_iso()
     expires = (datetime.now(timezone.utc) + timedelta(days=SESSION_TTL_DAYS)).isoformat()
     with get_db() as db:
         db.execute(
@@ -306,35 +365,27 @@ def login(req: AuthRequest):
         )
         db.commit()
 
-    payload = usage_response(user)
+    payload = usage_response(user, session_token=token)
     payload["token"] = token
     return payload
 
 
 @app.post("/auth/validate")
-def validate_token(req: TokenRequest):
-    """Validate a session token and return current tier + query status."""
+@limiter.limit("30/minute")
+def validate_token(request: Request, req: TokenRequest):
     user = get_user_by_token(req.token)
     if not user:
         raise HTTPException(status_code=401, detail="Session expired or invalid. Please log in again.")
-
-    payload = usage_response(user)
+    payload = usage_response(user, session_token=req.token)
     payload["valid"] = True
     return payload
 
 # ---------------------------------------------------------------------------
-# Query counting — called before every chat message
+# Query counting
 # ---------------------------------------------------------------------------
-
 @app.post("/query/check")
-def check_and_count(req: TokenRequest):
-    """
-    Check and increment the query counter.
-    • Free  — weekly window, limit 10
-    • Pro   — monthly window, limit 1,000
-    • MAX   — monthly window, limit 2,500
-    Returns {allowed, tier, period, queries_used, queries_limit, queries_remaining}.
-    """
+@limiter.limit("120/minute")
+def check_and_count(request: Request, req: TokenRequest):
     user = get_user_by_token(req.token)
     if not user:
         raise HTTPException(status_code=401, detail="Session expired. Please log in again.")
@@ -343,26 +394,37 @@ def check_and_count(req: TokenRequest):
     limit = query_limit_for(tier)
     pk    = period_key(tier)
 
-    # Owner tier bypasses all query limits
     if tier == "owner":
         return {
-            "allowed": True,
-            "tier": "owner",
-            "period": "monthly",
-            "queries_used": 0,
-            "queries_limit": OWNER_LIMIT,
-            "queries_remaining": OWNER_LIMIT,
-            "unlimited": True,
+            "allowed": True, "tier": "owner", "period": "monthly",
+            "queries_used": 0, "queries_limit": OWNER_LIMIT,
+            "queries_remaining": OWNER_LIMIT, "unlimited": True,
         }
 
+    # Atomic check-and-increment to prevent TOCTOU race
     with get_db() as db:
-        row = db.execute(
-            "SELECT count FROM query_counts WHERE user_id = ? AND period_key = ?",
-            (user["id"], pk)
-        ).fetchone()
-        current = row["count"] if row else 0
+        # Try to increment only if under limit
+        db.execute("""
+            INSERT INTO query_counts (user_id, period_key, count) VALUES (?, ?, 0)
+            ON CONFLICT(user_id, period_key) DO NOTHING
+        """, (user["id"], pk))
+        db.commit()
 
-    if current >= limit:
+        result = db.execute("""
+            UPDATE query_counts SET count = count + 1
+            WHERE user_id = ? AND period_key = ? AND count < ?
+            RETURNING count
+        """, (user["id"], pk, limit)).fetchone()
+        db.commit()
+
+    if result is None:
+        # Limit already reached — fetch current count for the response
+        with get_db() as db:
+            row = db.execute(
+                "SELECT count FROM query_counts WHERE user_id = ? AND period_key = ?",
+                (user["id"], pk)
+            ).fetchone()
+        current = row["count"] if row else limit
         period_label = "week" if tier == "free" else "month"
         tier_label   = {"free": "Free", "pro": "Pro", "max": "MAX"}.get(tier, tier.title())
         upgrade_msg  = (
@@ -370,37 +432,20 @@ def check_and_count(req: TokenRequest):
             if tier == "free" else ""
         )
         return {
-            "allowed":            False,
-            "tier":               tier,
-            "period":             "weekly" if tier == "free" else "monthly",
-            "queries_used":       current,
-            "queries_limit":      limit,
-            "queries_remaining":  0,
-            "detail": (
-                f"{tier_label} tier limit reached ({current:,}/{limit:,} this {period_label}).{upgrade_msg}"
-            ),
-            # Legacy
-            "weekly_used":  current if tier == "free" else None,
-            "weekly_limit": limit   if tier == "free" else None,
+            "allowed": False, "tier": tier,
+            "period": "weekly" if tier == "free" else "monthly",
+            "queries_used": current, "queries_limit": limit, "queries_remaining": 0,
+            "detail": f"{tier_label} tier limit reached ({current:,}/{limit:,} this {period_label}).{upgrade_msg}",
+            "weekly_used": current if tier == "free" else None,
+            "weekly_limit": limit  if tier == "free" else None,
         }
 
-    # Increment
-    with get_db() as db:
-        db.execute("""
-            INSERT INTO query_counts (user_id, period_key, count) VALUES (?, ?, 1)
-            ON CONFLICT(user_id, period_key) DO UPDATE SET count = count + 1
-        """, (user["id"], pk))
-        db.commit()
-
-    new_count = current + 1
+    new_count = result["count"]
     return {
-        "allowed":           True,
-        "tier":              tier,
-        "period":            "weekly" if tier == "free" else "monthly",
-        "queries_used":      new_count,
-        "queries_limit":     limit,
+        "allowed": True, "tier": tier,
+        "period": "weekly" if tier == "free" else "monthly",
+        "queries_used": new_count, "queries_limit": limit,
         "queries_remaining": limit - new_count,
-        # Legacy
         "weekly_used":  new_count if tier == "free" else None,
         "weekly_limit": limit     if tier == "free" else None,
         "monthly_used":  new_count if tier != "free" else None,
@@ -408,16 +453,18 @@ def check_and_count(req: TokenRequest):
     }
 
 # ---------------------------------------------------------------------------
-# Admin
+# Admin — token via Authorization: Bearer header
 # ---------------------------------------------------------------------------
+def _check_admin(authorization: str):
+    token = authorization.replace("Bearer ", "").strip()
+    if not ADMIN_TOKEN or token != ADMIN_TOKEN:
+        raise HTTPException(status_code=403, detail="Forbidden.")
 
 @app.post("/admin/set-tier")
-def set_tier(req: AdminTierRequest):
-    if not ADMIN_TOKEN or req.admin_token != ADMIN_TOKEN:
-        raise HTTPException(status_code=403, detail="Forbidden.")
+def set_tier(req: AdminTierRequest, authorization: str = Header(default="")):
+    _check_admin(authorization)
     if req.tier not in ("free", "pro", "max", "owner"):
         raise HTTPException(status_code=400, detail="tier must be free, pro, max, or owner.")
-
     with get_db() as db:
         result = db.execute(
             "UPDATE users SET tier = ?, seats_allowed = ? WHERE email = ?",
@@ -426,14 +473,12 @@ def set_tier(req: AdminTierRequest):
         db.commit()
         if result.rowcount == 0:
             raise HTTPException(status_code=404, detail="No user found with that email.")
-
     return {"ok": True, "email": req.email, "tier": req.tier, "seats_allowed": req.seats_allowed}
 
 
 @app.get("/admin/users")
-def list_users(admin_token: str = ""):
-    if not ADMIN_TOKEN or admin_token != ADMIN_TOKEN:
-        raise HTTPException(status_code=403, detail="Forbidden.")
+def list_users(authorization: str = Header(default="")):
+    _check_admin(authorization)
     with get_db() as db:
         rows = db.execute(
             "SELECT id, email, tier, seats_allowed, created_at FROM users ORDER BY created_at DESC"
@@ -441,85 +486,66 @@ def list_users(admin_token: str = ""):
     return [dict(r) for r in rows]
 
 # ---------------------------------------------------------------------------
-# Lemon Squeezy webhook
+# Lemon Squeezy webhook — signature always verified
 # ---------------------------------------------------------------------------
-
 @app.post("/webhook/lemonsqueezy")
 async def lemonsqueezy_webhook(request: Request):
-    """
-    Receives Lemon Squeezy subscription events and updates user tiers.
-    Verifies HMAC-SHA256 signature using LS_WEBHOOK_SECRET.
-    """
     body = await request.body()
 
-    # Verify signature
-    if LS_WEBHOOK_SECRET:
-        sig = request.headers.get("X-Signature", "")
-        expected = hmac.new(
-            LS_WEBHOOK_SECRET.encode(), body, hashlib.sha256
-        ).hexdigest()
-        if not hmac.compare_digest(expected, sig):
-            raise HTTPException(status_code=401, detail="Invalid webhook signature.")
+    # Always verify — endpoint is disabled if secret not configured
+    if not LS_WEBHOOK_SECRET:
+        raise HTTPException(status_code=503, detail="Webhook not configured.")
 
-    import json
+    sig      = request.headers.get("X-Signature", "")
+    expected = hmac.new(LS_WEBHOOK_SECRET.encode(), body, hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(expected, sig):
+        logger.warning("Webhook signature mismatch — possible forgery attempt.")
+        raise HTTPException(status_code=401, detail="Invalid webhook signature.")
+
     payload = json.loads(body)
     event   = payload.get("meta", {}).get("event_name", "")
-    data    = payload.get("data", {})
-    attrs   = data.get("attributes", {})
+    attrs   = payload.get("data", {}).get("attributes", {})
 
-    # Extract email and determine tier
-    email         = (attrs.get("user_email") or "").strip().lower()
-    variant_name  = (attrs.get("variant_name") or "").lower()
-    product_name  = (attrs.get("product_name") or "").lower()
+    email        = (attrs.get("user_email") or "").strip().lower()
+    variant_name = (attrs.get("variant_name") or "").lower()
+    product_name = (attrs.get("product_name") or "").lower()
 
-    # Determine tier from variant/product name (most reliable)
     if "max" in variant_name or "max" in product_name:
         tier = "max"
     elif "pro" in variant_name or "pro" in product_name:
         tier = "pro"
     else:
-        # Fallback: try integer variant_id map (update these from LS dashboard if needed)
         tier = LS_VARIANT_TIER.get(str(attrs.get("variant_id", ""))) or "pro"
 
     if event in ("subscription_created", "subscription_updated", "subscription_resumed"):
         if not email:
             return {"ok": False, "reason": "no email in payload"}
-        new_tier = tier if tier else "pro"  # safe default
         with get_db() as db:
-            db.execute(
-                "UPDATE users SET tier = ? WHERE email = ?",
-                (new_tier, email)
-            )
+            db.execute("UPDATE users SET tier = ? WHERE email = ?", (tier, email))
             db.commit()
-        return {"ok": True, "event": event, "email": email, "tier": new_tier}
+        return {"ok": True, "event": event, "email": email, "tier": tier}
 
     elif event in ("subscription_cancelled", "subscription_expired", "subscription_paused"):
         if not email:
             return {"ok": False, "reason": "no email in payload"}
         with get_db() as db:
-            db.execute(
-                "UPDATE users SET tier = 'free' WHERE email = ?",
-                (email,)
-            )
+            db.execute("UPDATE users SET tier = 'free' WHERE email = ?", (email,))
             db.commit()
         return {"ok": True, "event": event, "email": email, "tier": "free"}
 
-    # Ignore all other events (order_created, etc.)
     return {"ok": True, "event": event, "handled": False}
-
 
 # ---------------------------------------------------------------------------
 # Health
 # ---------------------------------------------------------------------------
-
 @app.get("/health")
 def health():
     return {
         "status": "ok",
-        "version": "2.0.0",
+        "version": "2.1.0",
         "limits": {
-            "free_weekly":  FREE_WEEKLY_LIMIT,
-            "pro_monthly":  PRO_MONTHLY_LIMIT,
-            "max_monthly":  MAX_MONTHLY_LIMIT,
+            "free_weekly": FREE_WEEKLY_LIMIT,
+            "pro_monthly": PRO_MONTHLY_LIMIT,
+            "max_monthly": MAX_MONTHLY_LIMIT,
         }
     }
