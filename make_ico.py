@@ -1,5 +1,5 @@
 # Generate pan_copilot.ico and write it to the PAN Copilot_APP repo.
-import struct, math, os
+import struct, os
 
 try:
     from PIL import Image, ImageDraw
@@ -10,32 +10,74 @@ except ImportError:
 DEST = r"C:\Users\jmill\Downloads\PAN Copilot_APP\local\pan_copilot.ico"
 
 def draw_icon_pillow(size):
-    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    d = ImageDraw.Draw(img)
     s = size
-    bg = (11, 25, 41, 255)
-    cy = (0, 212, 228, 255)
-    pad = max(1, s // 16)
-    cx_, cy_ = s / 2, s / 2
-    r = s / 2 - pad
-    hex_pts = [(cx_ + r * math.cos(math.radians(a - 30)),
-                cy_ + r * math.sin(math.radians(a - 30))) for a in range(0, 360, 60)]
-    d.polygon(hex_pts, fill=bg)
-    bw = max(1, s // 24)
-    d.polygon(hex_pts, outline=(0, 212, 228, 255), width=bw)
-    inner = r * 0.65
-    left  = cx_ - inner
-    right = cx_ + inner
-    base  = cy_ + inner * 0.45
-    pts_x = [left, left+inner*0.3, left+inner*0.6, cx_, cx_+inner*0.4, right]
-    pts_y = [base, base-inner*0.25, base-inner*0.55, base-inner*0.80, base-inner*0.45, base]
-    chart_pts = list(zip(pts_x, pts_y)) + [(right, base), (left, base)]
-    d.polygon(chart_pts, fill=(0, 212, 228, 180))
-    lw = max(1, s // 32)
-    d.line(list(zip(pts_x, pts_y)), fill=cy, width=lw)
-    pk_x, pk_y = cx_, cy_ - inner * 0.80
-    dr = max(1, s // 18)
-    d.ellipse([pk_x-dr, pk_y-dr, pk_x+dr, pk_y+dr], fill=cy)
+    img = Image.new("RGBA", (s, s), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+
+    NAVY        = (11,  25,  41,  255)   # #0B1929
+    CYAN        = (0,  212, 228, 255)    # #00D4E4
+    CYAN_FILL   = (0,  212, 228,  50)    # area under zigzag
+    CYAN_BASE   = (0,  212, 228,  90)    # baseline stroke
+    CYAN_BORDER = (0,  212, 228,  55)    # rounded-square border
+
+    # Background: rounded square
+    radius = max(2, s // 7)
+    try:
+        d.rounded_rectangle([0, 0, s - 1, s - 1], radius=radius, fill=NAVY)
+    except AttributeError:
+        d.rectangle([0, 0, s - 1, s - 1], fill=NAVY)
+
+    # Subtle cyan border
+    if s >= 32:
+        bw = max(1, s // 64)
+        try:
+            d.rounded_rectangle([0, 0, s - 1, s - 1], radius=radius,
+                                 outline=CYAN_BORDER, width=bw)
+        except (AttributeError, TypeError):
+            pass
+
+    # ── ADK Cyber zigzag ──────────────────────────────────────────
+    # Source: site SVG 32×32 viewbox
+    #   Zigzag:  M4 26  L12 8  L20 22  L28 12
+    #   Baseline: M4 26  L28 26  (opacity .5)
+    # Map x∈[4,28] and y∈[7,28] to the icon canvas with 16% padding.
+    # y_src starts at 7 (just above the highest point at 8) so the peak
+    # sits comfortably inside the top padding band.
+    PAD   = s * 0.16
+    X0, X1 = 4.0, 28.0
+    Y0, Y1 = 7.0, 28.0
+
+    def to_px(xr, yr):
+        x = PAD + (xr - X0) / (X1 - X0) * (s - 2 * PAD)
+        y = PAD + (yr - Y0) / (Y1 - Y0) * (s - 2 * PAD)
+        return (x, y)
+
+    z  = [to_px(4, 26), to_px(12, 8), to_px(20, 22), to_px(28, 12)]
+    bl = [to_px(4, 26), to_px(28, 26)]
+
+    lw = max(2, round(s / 24))
+
+    # Filled area under zigzag — drawn as per-segment trapezoids to avoid
+    # PIL's even-odd rule creating holes in the concave polygon
+    baseline_y = bl[0][1]
+    for i in range(len(z) - 1):
+        x0, y0 = z[i]
+        x1, y1 = z[i + 1]
+        d.polygon([(x0, y0), (x1, y1), (x1, baseline_y), (x0, baseline_y)],
+                  fill=CYAN_FILL)
+
+    # Baseline
+    d.line(bl, fill=CYAN_BASE, width=max(1, round(lw * 0.55)))
+
+    # Zigzag line
+    d.line(z, fill=CYAN, width=lw)
+
+    # Peak dot (highest point = z[1]) for sizes where it reads well
+    if s >= 32:
+        dr = max(1, round(s / 30))
+        px, py = z[1]
+        d.ellipse([px - dr, py - dr, px + dr, py + dr], fill=CYAN)
+
     return img.convert("RGBA")
 
 
