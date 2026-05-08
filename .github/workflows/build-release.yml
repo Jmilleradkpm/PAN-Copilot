@@ -29,6 +29,9 @@ jobs:
   build-windows:
     name: Build Windows .exe and upload to R2
     runs-on: windows-latest
+    permissions:
+      id-token: write   # required for OIDC auth with Azure
+      contents: read
 
     steps:
       # ── 1. Checkout ────────────────────────────────────────
@@ -77,37 +80,19 @@ jobs:
 
       # ── 6. Sign the main executable ────────────────────────
       - name: Sign PAN Copilot.exe
-        working-directory: local
-        shell: pwsh
-        env:
-          CERT_PFX_BASE64: ${{ secrets.CODE_SIGNING_CERT_PFX }}
-          CERT_PASSWORD:   ${{ secrets.CODE_SIGNING_CERT_PASSWORD }}
-        run: |
-          if (-not $env:CERT_PFX_BASE64) {
-            Write-Host "CODE_SIGNING_CERT_PFX not set — skipping signing"
-            exit 0
-          }
-          # Decode PFX from base64 secret
-          $pfxBytes = [Convert]::FromBase64String($env:CERT_PFX_BASE64)
-          $pfxPath  = Join-Path $env:TEMP "pan_copilot_sign.pfx"
-          [IO.File]::WriteAllBytes($pfxPath, $pfxBytes)
-
-          # Find signtool.exe
-          $signtool = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin" -Recurse -Filter "signtool.exe" |
-                      Where-Object { $_.FullName -like "*x64*" } |
-                      Sort-Object FullName -Descending |
-                      Select-Object -First 1 -ExpandProperty FullName
-          Write-Host "Using signtool: $signtool"
-
-          $exePath = "dist\PAN Copilot\PAN Copilot.exe"
-          & $signtool sign `
-            /fd SHA256 /td SHA256 `
-            /tr http://timestamp.digicert.com `
-            /f $pfxPath /p $env:CERT_PASSWORD `
-            $exePath
-
-          Remove-Item $pfxPath -Force
-          Write-Host "✅ Signed: $exePath"
+        uses: azure/trusted-signing-action@v0.5.0
+        with:
+          azure-tenant-id:               ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id:               ${{ secrets.AZURE_CLIENT_ID }}
+          azure-subscription-id:         ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          endpoint:                      https://eus.codesigning.azure.net/
+          trusted-signing-account-name:  adkcyber-signing
+          certificate-profile-name:      pan-copilot
+          files-folder:                  local/dist/PAN Copilot
+          files-folder-filter:           exe
+          file-digest:                   SHA256
+          timestamp-rfc3161:             http://timestamp.acs.microsoft.com
+          timestamp-digest:              SHA256
 
       # ── 7. Zip the dist folder ─────────────────────────────
       - name: Package distribution
@@ -135,35 +120,19 @@ jobs:
 
       # ── 9. Sign the installer ──────────────────────────────
       - name: Sign installer exe
-        working-directory: local
-        shell: pwsh
-        env:
-          CERT_PFX_BASE64: ${{ secrets.CODE_SIGNING_CERT_PFX }}
-          CERT_PASSWORD:   ${{ secrets.CODE_SIGNING_CERT_PASSWORD }}
-        run: |
-          if (-not $env:CERT_PFX_BASE64) {
-            Write-Host "CODE_SIGNING_CERT_PFX not set — skipping signing"
-            exit 0
-          }
-          $version  = "${{ github.ref_name }}"
-          $pfxBytes = [Convert]::FromBase64String($env:CERT_PFX_BASE64)
-          $pfxPath  = Join-Path $env:TEMP "pan_copilot_sign.pfx"
-          [IO.File]::WriteAllBytes($pfxPath, $pfxBytes)
-
-          $signtool = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin" -Recurse -Filter "signtool.exe" |
-                      Where-Object { $_.FullName -like "*x64*" } |
-                      Sort-Object FullName -Descending |
-                      Select-Object -First 1 -ExpandProperty FullName
-
-          $installer = "Output\PAN_Copilot_Setup_${version}.exe"
-          & $signtool sign `
-            /fd SHA256 /td SHA256 `
-            /tr http://timestamp.digicert.com `
-            /f $pfxPath /p $env:CERT_PASSWORD `
-            $installer
-
-          Remove-Item $pfxPath -Force
-          Write-Host "✅ Signed: $installer"
+        uses: azure/trusted-signing-action@v0.5.0
+        with:
+          azure-tenant-id:               ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id:               ${{ secrets.AZURE_CLIENT_ID }}
+          azure-subscription-id:         ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          endpoint:                      https://eus.codesigning.azure.net/
+          trusted-signing-account-name:  adkcyber-signing
+          certificate-profile-name:      pan-copilot
+          files-folder:                  local/Output
+          files-folder-filter:           exe
+          file-digest:                   SHA256
+          timestamp-rfc3161:             http://timestamp.acs.microsoft.com
+          timestamp-digest:              SHA256
 
       # ── 10. Write version manifest ─────────────────────────
       - name: Create version.json
