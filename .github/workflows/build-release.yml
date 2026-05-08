@@ -1,7 +1,8 @@
 # ============================================================
 # PAN Copilot — Build & Release
 # ============================================================
-# Triggers on any version tag (e.g. git tag v1.0.0 && git push --tags)
+# Triggered manually via workflow_dispatch (Actions → Run workflow).
+# Tag the repo first, then trigger the workflow with the matching version.
 #
 # Outputs uploaded to Cloudflare R2:
 #   /releases/v1.0.0/PAN_Copilot_v1.0.0.zip            ← zip (portable)
@@ -22,13 +23,10 @@
 name: Build & Upload to R2
 
 on:
-  push:
-    tags:
-      - 'v*.*.*'
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version (e.g. v1.0.31)'
+        description: 'Version (e.g. v1.0.33)'
         required: true
 
 jobs:
