@@ -54,7 +54,7 @@ UninstallDisplayIcon={app}\PAN Copilot.exe
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
-Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription: "Additional icons:"; Flags: unchecked
+Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription: "Additional icons:"; Flags: checkedonce
 
 [Files]
 ; Everything from the PyInstaller dist folder

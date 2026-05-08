@@ -154,10 +154,16 @@ def main():
             "--disable-default-apps",
             f"--window-size=1280,820",
         ]
+        _launch_time = time.time()
         proc = subprocess.Popen(browser + app_flags)
-
-        # Wait for the browser window to close, then shut down the server
         proc.wait()
+        _browser_lifetime = time.time() - _launch_time
+
+        if _browser_lifetime < 5.0:
+            # Browser delegated to an existing instance — keep server alive.
+            # /api/shutdown (called by beforeunload) will set should_exit.
+            # Safety net: auto-exit after 60 minutes.
+            server_thread.join(timeout=3600)
         server.should_exit = True
     else:
         # No supported browser found â€” fall back to default browser
