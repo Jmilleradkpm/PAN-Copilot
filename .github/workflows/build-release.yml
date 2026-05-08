@@ -24,6 +24,11 @@ on:
   push:
     tags:
       - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version (e.g. v1.0.31)'
+        required: true
 
 jobs:
   build-windows:
@@ -107,7 +112,7 @@ jobs:
         working-directory: local
         shell: pwsh
         run: |
-          $version = "${{ github.ref_name }}"
+          $version = "${{ inputs.version || github.ref_name }}"
           $zipName = "PAN_Copilot_${version}.zip"
           Compress-Archive -Path "dist\PAN Copilot\*" -DestinationPath $zipName -Force
           Write-Host "Created: $zipName ($('{0:N1} MB' -f ((Get-Item $zipName).Length / 1MB)))"
@@ -117,7 +122,7 @@ jobs:
         working-directory: local
         shell: pwsh
         run: |
-          $version = "${{ github.ref_name }}"
+          $version = "${{ inputs.version || github.ref_name }}"
           $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
           & $iscc /DAppVersion=$version installer.iss
           $installer = "Output\PAN_Copilot_Setup_${version}.exe"
@@ -147,7 +152,7 @@ jobs:
         working-directory: local
         shell: pwsh
         run: |
-          $version = "${{ github.ref_name }}"
+          $version = "${{ inputs.version || github.ref_name }}"
           $ts      = (Get-Date -Format "yyyy-MM-ddTHH:mm:ssZ")
           $json = [ordered]@{
             version       = $version
@@ -174,7 +179,7 @@ jobs:
         env:
           R2_ENDPOINT: "https://${{ secrets.CF_R2_ACCOUNT_ID }}.r2.cloudflarestorage.com"
           BUCKET: ${{ secrets.CF_R2_BUCKET }}
-          VERSION: ${{ github.ref_name }}
+          VERSION: ${{ inputs.version || github.ref_name }}
         run: |
           $ep     = $env:R2_ENDPOINT
           $bucket = $env:BUCKET
