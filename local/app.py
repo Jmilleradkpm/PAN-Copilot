@@ -18,11 +18,20 @@ import os
 import re
 import secrets
 import sqlite3
+import subprocess
 import sys
+import tempfile
+import threading
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+
+# ---------------------------------------------------------------------------
+# App version — replaced by CI at build time
+# ---------------------------------------------------------------------------
+APP_VERSION = "0.0.0"
 
 import anthropic
 import httpx
@@ -610,6 +619,82 @@ def chat_stream(req: ChatRequest):
     )
 
 # ---------------------------------------------------------------------------
+# Auto-update
+# ---------------------------------------------------------------------------
+
+_VERSION_JSON_URL = "https://downloads.adkcyber.com/version.json"
+_update_cache: dict = {}
+_update_cache_ts: float = 0.0
+_UPDATE_CACHE_TTL = 3600.0  # re-check at most once per hour
+
+
+def _parse_version(v: str) -> tuple:
+    try:
+        return tuple(int(x) for x in v.lstrip("v").split("."))
+    except Exception:
+        return (0, 0, 0)
+
+
+def _fetch_update_info() -> dict:
+    global _update_cache, _update_cache_ts
+    now = time.time()
+    if _update_cache and now - _update_cache_ts < _UPDATE_CACHE_TTL:
+        return _update_cache
+    try:
+        r = httpx.get(_VERSION_JSON_URL, timeout=5.0, follow_redirects=True)
+        r.raise_for_status()
+        data = r.json()
+        latest = data.get("version", APP_VERSION)
+        installer_url = data.get("installer_url", "")
+        _update_cache = {
+            "current_version": APP_VERSION,
+            "latest_version": latest,
+            "update_available": _parse_version(latest) > _parse_version(APP_VERSION),
+            "installer_url": installer_url,
+        }
+        _update_cache_ts = now
+    except Exception:
+        _update_cache = {
+            "current_version": APP_VERSION,
+            "latest_version": APP_VERSION,
+            "update_available": False,
+            "installer_url": "",
+        }
+        _update_cache_ts = now
+    return _update_cache
+
+
+@app.get("/api/version")
+def get_version():
+    return _fetch_update_info()
+
+
+@app.post("/api/update")
+def install_update():
+    info = _fetch_update_info()
+    if not info.get("update_available"):
+        raise HTTPException(status_code=400, detail="No update available.")
+    installer_url = info.get("installer_url", "")
+    if not installer_url.startswith("https://downloads.adkcyber.com/"):
+        raise HTTPException(status_code=400, detail="Invalid installer source.")
+
+    def _download_and_run():
+        try:
+            r = httpx.get(installer_url, timeout=180.0, follow_redirects=True)
+            r.raise_for_status()
+            version = info.get("latest_version", "update")
+            tmp = Path(tempfile.gettempdir()) / f"PAN_Copilot_Setup_{version}.exe"
+            tmp.write_bytes(r.content)
+            time.sleep(1.0)
+            subprocess.Popen([str(tmp), "/SILENT", "/CLOSEAPPLICATIONS", "/RESTARTAPPLICATIONS"])
+        except Exception:
+            pass
+
+    threading.Thread(target=_download_and_run, daemon=True).start()
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
 # Health + frontend
 # ---------------------------------------------------------------------------
 
@@ -617,7 +702,7 @@ def chat_stream(req: ChatRequest):
 def health():
     return {
         "status": "ok",
-        "version": "4.0.0",
+        "version": APP_VERSION,
         "mode": "local",
         "authenticated": _session_cache.get("email") is not None,
     }

@@ -73,7 +73,15 @@ jobs:
           pip install -r requirements.txt
           pip install pyinstaller
 
-      # ── 5. Build ───────────────────────────────────────────
+      # ── 5. Inject version into app.py ─────────────────────────
+      - name: Inject version
+        shell: pwsh
+        run: |
+          $version = "${{ inputs.version }}".TrimStart('v')
+          (Get-Content "local/app.py") -replace 'APP_VERSION = ".*"', "APP_VERSION = `"$version`"" | Set-Content "local/app.py" -Encoding UTF8
+          Write-Host "Injected APP_VERSION = $version"
+
+      # ── 6. Build ───────────────────────────────────────────
       - name: Build with PyInstaller
         working-directory: local
         shell: pwsh

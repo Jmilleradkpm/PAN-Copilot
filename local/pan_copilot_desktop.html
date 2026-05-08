@@ -507,6 +507,26 @@
       transition: all 0.15s;
     }
     #logout-btn:hover { border-color: #f85149; color: #f85149; }
+
+    /* ── Update banner ─────────────────────────────────────────── */
+    #update-banner {
+      display: none; align-items: center; gap: 10px;
+      background: #1a3a5c; border-bottom: 1px solid #2a5a8c;
+      padding: 7px 16px; font-size: 13px; color: #90caf9;
+      position: fixed; top: var(--header-h); left: 0; right: 0; z-index: 90;
+    }
+    #update-banner-msg { flex: 1; }
+    #update-install-btn {
+      background: #1976d2; color: #fff; border: none; border-radius: 5px;
+      padding: 4px 14px; font-size: 12px; font-weight: 600; cursor: pointer;
+    }
+    #update-install-btn:disabled { opacity: 0.6; cursor: default; }
+    #update-install-btn:hover:not(:disabled) { background: #1565c0; }
+    .update-dismiss {
+      background: none; border: none; color: #90caf9; cursor: pointer;
+      font-size: 14px; padding: 2px 6px; opacity: 0.7;
+    }
+    .update-dismiss:hover { opacity: 1; }
   </style>
 </head>
 <body>
@@ -594,6 +614,13 @@
 
     <button id="logout-btn" onclick="logout()">Sign Out</button>
   </div>
+</div>
+
+<!-- ── UPDATE BANNER ───────────────────────────────────────────── -->
+<div id="update-banner">
+  <span id="update-banner-msg">Update available</span>
+  <button id="update-install-btn" onclick="installUpdate()">Update Now</button>
+  <button class="update-dismiss" onclick="document.getElementById('update-banner').style.display='none'" title="Dismiss">✕</button>
 </div>
 
 <div id="app">
@@ -810,6 +837,35 @@ let authMode          = 'login'; // 'login' | 'register'
 async function init() {
   applyTheme();
   await checkAuthStatus();
+  checkForUpdate();
+}
+
+// ── Auto-update ───────────────────────────────────────────────────
+async function checkForUpdate() {
+  try {
+    const res = await fetch(`${API}/api/version`);
+    if (!res.ok) return;
+    const data = await res.json();
+    if (data.update_available) {
+      document.getElementById('update-banner-msg').textContent =
+        `Update available: v${data.latest_version} — install and restart automatically.`;
+      document.getElementById('update-banner').style.display = 'flex';
+    }
+  } catch (e) { /* silent — app works fine without update check */ }
+}
+
+async function installUpdate() {
+  const btn = document.getElementById('update-install-btn');
+  btn.textContent = 'Downloading…';
+  btn.disabled = true;
+  document.getElementById('update-banner-msg').textContent = 'Downloading update — installer will launch shortly and restart the app…';
+  try {
+    await fetch(`${API}/api/update`, { method: 'POST' });
+  } catch (e) {
+    btn.textContent = 'Update Now';
+    btn.disabled = false;
+    document.getElementById('update-banner-msg').textContent = 'Download failed. Try again later.';
+  }
 }
 
 async function checkAuthStatus() {
