@@ -36,8 +36,6 @@ push_now.bat
 do_push.vbs
 
 # Legacy files (superseded by local/ and license_server/)
-backend/
-landing.html
 pan_copilot.html
 /Procfile
 /nixpacks.toml
