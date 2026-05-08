@@ -103,9 +103,11 @@ def draw_icon_stdlib(size):
 
 def rgba_to_bmp_dib_pillow(img):
     w, h = img.size
-    hdr = struct.pack('<IiiHHIIiiII', 40, w, -(h*2), 1, 32, 0, 0, 0, 0, 0, 0)
+    # ICO BMP DIB spec: height must be positive h*2 (XOR rows + AND rows),
+    # pixels stored bottom-up. Negative height breaks Windows shell icon loading.
+    hdr = struct.pack('<IiiHHIIiiII', 40, w, h * 2, 1, 32, 0, 0, 0, 0, 0, 0)
     pixels = bytearray()
-    for y in range(h):
+    for y in range(h - 1, -1, -1):  # bottom-up
         for x in range(w):
             r, g, b, a = img.getpixel((x, y))
             pixels += bytes([b, g, r, a])
@@ -116,9 +118,9 @@ def rgba_to_bmp_dib_pillow(img):
 
 def rgba_to_bmp_dib_stdlib(pixel_rows, size):
     w = h = size
-    hdr = struct.pack('<IiiHHIIiiII', 40, w, -(h*2), 1, 32, 0, 0, 0, 0, 0, 0)
+    hdr = struct.pack('<IiiHHIIiiII', 40, w, h * 2, 1, 32, 0, 0, 0, 0, 0, 0)
     pixels = bytearray()
-    for row in pixel_rows:
+    for row in reversed(pixel_rows):  # bottom-up
         for (r, g, b, a) in row:
             pixels += bytes([b, g, r, a])
     row_bytes = ((w + 31) // 32) * 4
