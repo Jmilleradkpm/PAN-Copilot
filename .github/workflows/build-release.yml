@@ -14,8 +14,9 @@
 #   CF_R2_ACCOUNT_ID            Your Cloudflare account ID (32 hex chars)
 #   CF_R2_BUCKET                Bucket name, e.g. pan-copilot-downloads
 #   PAN_COPILOT_SYSTEM_PROMPT   Full text of PAN_Copilot_Master_System_Prompt.md
-#   CODE_SIGNING_CERT_PFX       Base64-encoded .pfx certificate file
-#   CODE_SIGNING_CERT_PASSWORD  Password for the .pfx file
+#   AZURE_TENANT_ID             Azure AD tenant ID (for Trusted Signing)
+#   AZURE_CLIENT_ID             Azure app registration client ID
+#   AZURE_SUBSCRIPTION_ID       Azure subscription ID
 # ============================================================
 
 name: Build & Upload to R2

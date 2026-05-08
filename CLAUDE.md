@@ -91,16 +91,19 @@ ADK Cyber Cloud
 2. Write `PAN_Copilot_Master_System_Prompt.md` from GitHub Secret `PAN_COPILOT_SYSTEM_PROMPT`
 3. `pip install` deps + PyInstaller
 4. `pyinstaller pan_copilot.spec --clean`
-5. Sign `PAN Copilot.exe` with EV cert via `signtool` (cert from Secret `CODE_SIGNING_CERT_PFX`)
-6. Build Inno Setup installer (`PAN_Copilot_Setup_vX.X.X.exe`) and sign it
-7. Zip portable version (`PAN_Copilot_vX.X.X.zip`)
-8. Upload both to R2 under `/releases/vX.X.X/`
-9. Write `version.json` to R2 root with `download_url`, `installer_url`, `version`
+5. Azure login via OIDC (federated credential `pan-copilot-main` on app `pan-copilot-github-actions`)
+6. Sign `PAN Copilot.exe` via Azure Trusted Signing (`adkcyber-signing` account, `pan-copilot` cert profile)
+7. Build Inno Setup installer (`PAN_Copilot_Setup_vX.X.X.exe`) and sign it the same way
+8. Zip portable version (`PAN_Copilot_vX.X.X.zip`)
+9. Upload both to R2 under `/releases/vX.X.X/`
+10. Write `version.json` to R2 root with `download_url`, `installer_url`, `version`
+
+**Triggering a release:** GitHub Actions → Build & Upload to R2 → Run workflow → enter version (e.g. `v1.0.32`)
 
 **Required GitHub Secrets:**
 - `CF_R2_ACCESS_KEY_ID` / `CF_R2_SECRET_ACCESS_KEY` / `CF_R2_ACCOUNT_ID` / `CF_R2_BUCKET`
 - `PAN_COPILOT_SYSTEM_PROMPT`
-- `CODE_SIGNING_CERT_PFX` / `CODE_SIGNING_CERT_PASSWORD`
+- `AZURE_TENANT_ID` / `AZURE_CLIENT_ID` / `AZURE_SUBSCRIPTION_ID`
 
 ---
 
