@@ -78,7 +78,15 @@ jobs:
           Write-Host "Build output:"
           Get-ChildItem dist -Recurse | Select-Object FullName | Format-Table
 
-      # ── 6. Sign the main executable ────────────────────────
+      # ── 6. Azure login for signing ─────────────────────────
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          client-id:       ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id:       ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # ── 7. Sign the main executable ────────────────────────
       - name: Sign PAN Copilot.exe
         uses: azure/trusted-signing-action@v0.5.0
         with:
@@ -94,7 +102,7 @@ jobs:
           timestamp-rfc3161:             http://timestamp.acs.microsoft.com
           timestamp-digest:              SHA256
 
-      # ── 7. Zip the dist folder ─────────────────────────────
+      # ── 8. Zip the dist folder ─────────────────────────────
       - name: Package distribution
         working-directory: local
         shell: pwsh
@@ -104,7 +112,7 @@ jobs:
           Compress-Archive -Path "dist\PAN Copilot\*" -DestinationPath $zipName -Force
           Write-Host "Created: $zipName ($('{0:N1} MB' -f ((Get-Item $zipName).Length / 1MB)))"
 
-      # ── 8. Build Inno Setup installer ─────────────────────
+      # ── 9. Build Inno Setup installer ─────────────────────
       - name: Build Windows installer
         working-directory: local
         shell: pwsh
@@ -118,7 +126,7 @@ jobs:
           }
           Write-Host "Installer built: $installer ($('{0:N1} MB' -f ((Get-Item $installer).Length / 1MB)))"
 
-      # ── 9. Sign the installer ──────────────────────────────
+      # ── 10. Sign the installer ─────────────────────────────
       - name: Sign installer exe
         uses: azure/trusted-signing-action@v0.5.0
         with:
@@ -134,7 +142,7 @@ jobs:
           timestamp-rfc3161:             http://timestamp.acs.microsoft.com
           timestamp-digest:              SHA256
 
-      # ── 10. Write version manifest ─────────────────────────
+      # ── 11. Write version manifest ─────────────────────────
       - name: Create version.json
         working-directory: local
         shell: pwsh
@@ -152,7 +160,7 @@ jobs:
           Set-Content -Path "version.json" -Value $json -Encoding UTF8
           Write-Host $json
 
-      # ── 11. Upload to R2 ───────────────────────────────────
+      # ── 12. Upload to R2 ───────────────────────────────────
       - name: Configure AWS CLI for R2
         shell: pwsh
         run: |
