@@ -1111,10 +1111,32 @@ async function _pollForUpdateShutdown() {
     try {
       await fetch(`${API}/health`, { cache: 'no-store', signal: AbortSignal.timeout(1500) });
     } catch {
-      // Server is down — navigate away first (releases page resources) then close
-      try { window.location.href = 'about:blank'; } catch(e) {}
-      await new Promise(r => setTimeout(r, 300));
-      window.close();
+      // Server is down — installer is now running and will close this window.
+      // Show a clean waiting screen; do NOT navigate away (causes about:blank flash).
+      document.body.innerHTML = `
+        <div style="
+          display:flex; flex-direction:column; align-items:center; justify-content:center;
+          height:100vh; background:#0d1520; color:#fff; font-family:system-ui,sans-serif;
+          gap:18px; text-align:center; padding:32px;">
+          <svg viewBox="0 0 32 32" width="48" height="48" fill="none" stroke="#00D4E4"
+               stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round">
+            <path d="M4 26 L12 8 L20 22 L28 12"/>
+            <path d="M4 26 L28 26" opacity=".5"/>
+          </svg>
+          <div style="font-size:18px; font-weight:700;">Installing update…</div>
+          <div style="font-size:13px; color:rgba(255,255,255,0.55); max-width:320px; line-height:1.6;">
+            ADK Cyber AI is updating. This window will close automatically.<br>
+            The app will relaunch when installation is complete.
+          </div>
+          <div style="width:40px; height:3px; background:#00D4E4; border-radius:2px;
+                      animation:pulse 1.2s ease-in-out infinite;"></div>
+        </div>
+        <style>
+          @keyframes pulse {
+            0%,100% { opacity:0.3; transform:scaleX(0.6); }
+            50%      { opacity:1;   transform:scaleX(1);   }
+          }
+        </style>`;
       return;
     }
   }
