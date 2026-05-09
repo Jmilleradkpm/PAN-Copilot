@@ -14,9 +14,9 @@
       --surface2:    #1c2128;
       --border:      #30363d;
       --border-dim:  #21262d;
-      --accent:      #e8412f;
-      --accent-hover:#c93526;
-      --accent-dim:  #3d1208;
+      --accent:      #00D4E4;
+      --accent-hover:#00B4C2;
+      --accent-dim:  rgba(0,212,228,0.12);
       --text:        #e6edf3;
       --text-sub:    #8b949e;
       --text-dim:    #484f58;
@@ -40,9 +40,9 @@
       --surface2:    #f0f2f5;
       --border:      #d0d7de;
       --border-dim:  #e4e8ec;
-      --accent:      #e8412f;
-      --accent-hover:#c93526;
-      --accent-dim:  #fce8e6;
+      --accent:      #00B4C2;
+      --accent-hover:#009AA8;
+      --accent-dim:  rgba(0,212,228,0.10);
       --text:        #1f2328;
       --text-sub:    #57606a;
       --text-dim:    #a8b1ba;
@@ -160,7 +160,7 @@
     }
     .nav-item:hover { background: var(--surface2); color: var(--text); }
     .nav-item.active { background: var(--accent-dim); color: var(--accent); font-weight: 600; }
-    [data-theme="light"] .nav-item.active { background: #fce8e6; }
+    [data-theme="light"] .nav-item.active { background: rgba(0,212,228,0.10); }
     .nav-icon { font-size: 14px; flex-shrink: 0; width: 18px; text-align: center; }
     .nav-divider { height: 1px; background: var(--border-dim); margin: 6px 8px; }
 
@@ -625,7 +625,7 @@
 <div id="auth-overlay" style="display:none;">
   <div id="auth-card">
     <div class="auth-logo"><svg viewBox="0 0 32 32" width="22" height="22" fill="none" stroke="white" stroke-width="2.6" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true"><path d="M4 26 L12 8 L20 22 L28 12"/><path d="M4 26 L28 26" opacity=".55"/></svg></div>
-    <div style="font-size:20px;font-weight:700;margin-bottom:4px">ADK Cyber AI <span style="font-size:10px;font-weight:600;background:rgba(232,65,47,0.15);color:var(--accent);border:1px solid rgba(232,65,47,0.3);padding:2px 6px;border-radius:10px;vertical-align:middle;">BETA</span></div>
+    <div style="font-size:20px;font-weight:700;margin-bottom:4px">ADK Cyber AI <span style="font-size:10px;font-weight:600;background:rgba(0,212,228,0.12);color:var(--accent);border:1px solid rgba(0,212,228,0.30);padding:2px 6px;border-radius:10px;vertical-align:middle;">BETA</span></div>
     <div style="font-size:13px;color:var(--text-sub);margin-bottom:18px">Sign in to access your PAN-OS AI assistant.</div>
 
     <div class="auth-tabs">
