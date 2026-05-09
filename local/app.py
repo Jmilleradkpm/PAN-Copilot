@@ -828,8 +828,26 @@ def install_update():
             version = info.get("latest_version", "update")
             tmp = Path(tempfile.gettempdir()) / f"PAN_Copilot_Setup_{version}.exe"
             tmp.write_bytes(r.content)
-            time.sleep(1.0)
-            subprocess.Popen([str(tmp), "/SILENT", "/CLOSEAPPLICATIONS", "/RESTARTAPPLICATIONS"])
+
+            # Launch installer first, then shut down this process so the installer
+            # can overwrite all bundled files without hitting locked-file errors.
+            subprocess.Popen([str(tmp), "/SILENT", "/RESTARTAPPLICATIONS"])
+
+            # Give the installer process a moment to start up.
+            time.sleep(1.5)
+
+            # Signal uvicorn to stop gracefully — the frontend polls /health and
+            # calls window.close() when it sees the server go away.
+            if _uvicorn_server:
+                _uvicorn_server.should_exit = True
+
+            # Hard-exit after 4 s as a safety net to guarantee all file locks
+            # held by this process are released before the installer overwrites them.
+            def _force_exit():
+                time.sleep(4.0)
+                os._exit(0)
+            threading.Thread(target=_force_exit, daemon=True).start()
+
         except Exception:
             pass
 

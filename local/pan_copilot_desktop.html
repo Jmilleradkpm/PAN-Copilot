@@ -1086,15 +1086,34 @@ async function checkForUpdate() {
 
 async function installUpdate() {
   const btn = document.getElementById('update-install-btn');
+  const msg = document.getElementById('update-banner-msg');
   btn.textContent = 'Downloading…';
   btn.disabled = true;
-  document.getElementById('update-banner-msg').textContent = 'Downloading update — installer will launch shortly and restart the app…';
+  msg.textContent = 'Downloading update — do not close this window…';
   try {
     await fetch(`${API}/api/update`, { method: 'POST' });
+    // Server acknowledged the download. Poll /health until the server shuts
+    // itself down (after launching the installer), then close this window so
+    // the installer can overwrite all bundled files without lock conflicts.
+    msg.textContent = 'Installer launching — this window will close automatically…';
+    _pollForUpdateShutdown();
   } catch (e) {
     btn.textContent = 'Update Now';
     btn.disabled = false;
-    document.getElementById('update-banner-msg').textContent = 'Download failed. Try again later.';
+    msg.textContent = 'Download failed. Try again later.';
+  }
+}
+
+async function _pollForUpdateShutdown() {
+  for (let i = 0; i < 90; i++) {        // poll up to ~3 minutes
+    await new Promise(r => setTimeout(r, 2000));
+    try {
+      await fetch(`${API}/health`, { cache: 'no-store', signal: AbortSignal.timeout(1500) });
+    } catch {
+      // Server is down — close this window so the installer has no file locks
+      window.close();
+      return;
+    }
   }
 }
 
