@@ -222,9 +222,9 @@
     }
     .msg-row.user .msg-bubble {
       background: var(--user-bg); border: 1px solid var(--user-border);
-      white-space: pre-wrap; font-size: 13.5px;
-      min-width: 160px; padding: 8px 15px;
+      font-size: 13.5px; min-width: 160px; padding: 8px 15px;
     }
+    .msg-row.user .msg-text { white-space: pre-wrap; }
     .msg-row.assistant .msg-bubble {
       background: var(--ai-bg); border: 1px solid var(--ai-border); width: 100%;
     }
@@ -1149,11 +1149,7 @@ function appendUserMessage(text) {
   hideWelcome();
   const div = document.createElement('div');
   div.className = 'msg-row user';
-  div.innerHTML = `
-    <div class="msg-bubble">
-      <div class="msg-label">You</div>
-      <div>${escHtml(text)}</div>
-    </div>`;
+  div.innerHTML = `<div class="msg-bubble"><div class="msg-label">You</div><div class="msg-text">${escHtml(text)}</div></div>`;
   document.getElementById('messages').appendChild(div);
   scrollBottom();
 }
