@@ -1570,7 +1570,7 @@ async function sendMessage() {
       body: JSON.stringify({
         message:         msg,
         config_text:     cfgText,
-        history:         [],          // history loaded from conversation
+        history:         [],          // backend loads history from DB; this field is unused
         conversation_id: currentConvId,
         product_id:      currentProduct,
         model:           selectedModel,

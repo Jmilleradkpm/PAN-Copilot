@@ -322,11 +322,35 @@ class ChatRequest(BaseModel):
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
-def build_messages(req: ChatRequest) -> list:
+_MAX_HISTORY_TURNS = 40  # cap at 20 user/assistant pairs to stay well within context limits
+
+def load_conversation_history(conversation_id: str) -> list:
+    """
+    Load recent messages for a conversation from SQLite.
+    Returns a list of {"role": ..., "content": ...} dicts in chronological order.
+    The frontend always sends history=[] as a placeholder; the DB is the source of truth.
+    """
+    with get_db() as db:
+        rows = db.execute(
+            "SELECT role, content FROM messages "
+            "WHERE conversation_id = ? ORDER BY created_at DESC LIMIT ?",
+            (conversation_id, _MAX_HISTORY_TURNS),
+        ).fetchall()
+    # fetchall is newest-first (DESC); reverse for chronological order
+    return [{"role": r["role"], "content": r["content"]} for r in reversed(rows)]
+
+def build_messages(req: ChatRequest, db_history: list = None) -> list:
+    """
+    Build the messages list for the Anthropic API call.
+    db_history (from SQLite) is preferred over req.history (from client).
+    """
     messages = []
-    for turn in (req.history or []):
-        if turn.role in ("user", "assistant"):
-            messages.append({"role": turn.role, "content": turn.content})
+    history_source = db_history if db_history is not None else []
+    for turn in history_source:
+        role    = turn.get("role")    if isinstance(turn, dict) else turn.role
+        content = turn.get("content") if isinstance(turn, dict) else turn.content
+        if role in ("user", "assistant"):
+            messages.append({"role": role, "content": content})
     user_content = req.message
     if req.config_text and req.config_text.strip():
         user_content = (
@@ -720,8 +744,9 @@ def chat_stream(req: ChatRequest):
         "message":     msg_sanitized,
     })
 
-    conv_id  = get_or_create_conversation(req.conversation_id)
-    messages = build_messages(sanitized_req)
+    conv_id    = get_or_create_conversation(req.conversation_id)
+    db_history = load_conversation_history(conv_id)   # source of truth for memory
+    messages   = build_messages(sanitized_req, db_history=db_history)
     client   = anthropic.Anthropic(api_key=api_key)
 
     # Resolve model: "auto" → pick based on complexity
