@@ -57,7 +57,7 @@ def _show_crash_dialog(message: str) -> None:
     try:
         import ctypes
         ctypes.windll.user32.MessageBoxW(
-            0, message, “ADK Cyber AI — Startup Error”, 0x10
+            0, message, "ADK Cyber AI - Startup Error", 0x10
         )
     except Exception:
         pass
