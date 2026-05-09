@@ -1,5 +1,5 @@
 ﻿"""
-PAN Copilot â€” Desktop Launcher
+PAN Copilot â€" Desktop Launcher
 ================================
 This is the PyInstaller entry point.
 
@@ -8,7 +8,7 @@ What it does:
   2. Starts the FastAPI server on 127.0.0.1:<port> (background thread)
   3. Waits for the server to be ready
   4. Opens Edge (or Chrome) in --app mode: a borderless window with no URL bar,
-     no tabs, no bookmark bar â€” indistinguishable from a native desktop app
+     no tabs, no bookmark bar â€" indistinguishable from a native desktop app
   5. Monitors the browser process; when it exits, the server shuts down cleanly
 
 Everything runs on your machine. Your configs never leave.
@@ -36,7 +36,7 @@ import logging.config as _logging_config
 import uvicorn
 import uvicorn.config
 
-# â”€â”€ isatty() crash fix â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# â"€â"€ isatty() crash fix â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 _orig_dictConfig = _logging_config.dictConfig
 
 def _safe_dictConfig(cfg):
@@ -50,7 +50,7 @@ def _safe_dictConfig(cfg):
 
 _logging_config.dictConfig = _safe_dictConfig
 uvicorn.config.Config.configure_logging = lambda self: None
-# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
 
 def _show_crash_dialog(message: str) -> None:
@@ -90,10 +90,10 @@ def find_browser() -> list:
     Prefers Edge (always present on Win10/11), then Chrome.
     """
     candidates = [
-        # Edge â€” standard install paths
+        # Edge â€" standard install paths
         r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
         r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
-        # Chrome â€” standard install paths
+        # Chrome â€" standard install paths
         r"C:\Program Files\Google\Chrome\Application\chrome.exe",
         r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
         os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"),
@@ -150,29 +150,29 @@ def main():
     # delegating to an existing Edge instance. This means proc.pid is the real
     # window PID, which we write to a file so the installer can kill it cleanly.
     _edge_profile = os.path.join(
-        os.environ.get(“LOCALAPPDATA”, os.path.expanduser(“~”)),
-        “ADKCyberAI”, “EdgeProfile”
+        os.environ.get("LOCALAPPDATA", os.path.expanduser("~")),
+        "ADKCyberAI", "EdgeProfile"
     )
 
     # PID file — installer reads this to kill the browser window before
-    # overwriting files (avoids “unable to close applications” dialog).
-    _pid_file = os.path.join(os.environ.get(“TEMP”, “”), “adk_cyber_ai_edge.pid”)
+    # overwriting files (avoids "unable to close applications" dialog).
+    _pid_file = os.path.join(os.environ.get("TEMP", ""), "adk_cyber_ai_edge.pid")
 
     if browser:
         app_flags = [
-            f”--app={url}”,
-            f”--user-data-dir={_edge_profile}”,
-            “--disable-extensions”,
-            “--no-first-run”,
-            “--disable-default-apps”,
-            f”--window-size=1280,820”,
+            f"--app={url}",
+            f"--user-data-dir={_edge_profile}",
+            "--disable-extensions",
+            "--no-first-run",
+            "--disable-default-apps",
+            f"--window-size=1280,820",
         ]
         _launch_time = time.time()
         proc = subprocess.Popen(browser + app_flags)
 
         # Write browser PID so the installer can kill it precisely
         try:
-            with open(_pid_file, “w”) as _f:
+            with open(_pid_file, "w") as _f:
                 _f.write(str(proc.pid))
         except Exception:
             pass
@@ -193,7 +193,7 @@ def main():
             server_thread.join(timeout=3600)
         server.should_exit = True
     else:
-        # No supported browser found â€” fall back to default browser
+        # No supported browser found â€" fall back to default browser
         import webbrowser
         webbrowser.open(url)
         # Keep alive until interrupted
