@@ -83,8 +83,9 @@
       display: flex; align-items: center; justify-content: center;
       font-weight: 800; font-size: 12px; color: #fff; flex-shrink: 0;
     }
-    .h-title { font-size: 14px; font-weight: 700; }
-    .h-sub   { font-size: 11px; color: var(--text-sub); }
+    .h-text-stack { display: flex; flex-direction: column; gap: 2px; }
+    .h-eyebrow { font-size: 9px; font-weight: 700; color: var(--accent); text-transform: uppercase; letter-spacing: 0.12em; line-height: 1; }
+    .h-sub   { font-size: 12.5px; font-weight: 600; color: var(--text); line-height: 1; }
     .h-spacer { flex: 1; }
 
     /* Local indicator */
@@ -535,10 +536,10 @@
 <!-- ── Header ──────────────────────────────────────────────────── -->
 <header id="header">
   <div class="h-logo">PAN</div>
-  <div>
-    <div class="h-title">PAN Copilot <span style="font-size:10px;font-weight:600;background:rgba(232,65,47,0.15);color:var(--accent);border:1px solid rgba(232,65,47,0.3);padding:2px 6px;border-radius:10px;vertical-align:middle;letter-spacing:0.05em;">BETA</span></div>
+  <div class="h-text-stack">
+    <div class="h-eyebrow">PAN COPILOT</div>
+    <div class="h-sub" id="h-sub">PAN Copilot online. Ready to assist with your PAN-OS environment.</div>
   </div>
-  <div class="h-sub" style="margin-left:2px">Full Portfolio AI Assistant</div>
   <div class="h-spacer"></div>
 
   <div id="local-badge" title="Configs never leave your machine">
