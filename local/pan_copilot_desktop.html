@@ -130,6 +130,65 @@
     }
     #settings-btn:hover { border-color: var(--accent); color: var(--text); }
 
+    /* ── History dropdown ─────────────────────────────────────────── */
+    #history-wrap { position: relative; }
+    #history-btn {
+      background: var(--surface2); border: 1px solid var(--border-dim);
+      border-radius: 20px; color: var(--text-sub); cursor: pointer;
+      font-size: 12px; padding: 4px 10px;
+      display: flex; align-items: center; gap: 5px; transition: all 0.15s;
+    }
+    #history-btn:hover, #history-btn.open { border-color: var(--accent); color: var(--text); }
+    #history-drop {
+      position: absolute; top: calc(100% + 8px); right: 0;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      box-shadow: 0 8px 30px rgba(0,0,0,0.28);
+      width: 290px; max-height: 380px;
+      display: none; flex-direction: column;
+      z-index: 300; overflow: hidden;
+    }
+    #history-drop.open { display: flex; }
+    #history-drop-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 10px 12px 8px;
+      border-bottom: 1px solid var(--border-dim);
+      font-size: 11px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.08em; color: var(--text-dim);
+      flex-shrink: 0;
+    }
+    #history-drop-new {
+      background: var(--accent); color: #0a1520; border: none;
+      border-radius: 6px; padding: 3px 9px; font-size: 11px; font-weight: 600;
+      cursor: pointer; transition: background 0.15s;
+    }
+    #history-drop-new:hover { background: var(--accent-hover); }
+    #history-drop-list { overflow-y: auto; flex: 1; padding: 5px; }
+    .hdrop-item {
+      display: flex; align-items: center; gap: 6px;
+      padding: 7px 8px; border-radius: 6px; cursor: pointer;
+      transition: background 0.12s;
+    }
+    .hdrop-item:hover { background: var(--surface2); }
+    .hdrop-item.active { background: var(--accent-dim); }
+    .hdrop-title {
+      flex: 1; font-size: 12.5px; color: var(--text);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .hdrop-del {
+      background: none; border: none; color: var(--text-dim);
+      cursor: pointer; font-size: 12px; padding: 2px 5px;
+      border-radius: 4px; opacity: 0; transition: opacity 0.1s, color 0.1s;
+      flex-shrink: 0;
+    }
+    .hdrop-item:hover .hdrop-del { opacity: 1; }
+    .hdrop-del:hover { color: #f85149; }
+    #history-drop-empty {
+      color: var(--text-dim); font-size: 12px;
+      padding: 20px 12px; text-align: center;
+    }
+
     /* ── 3-col layout ──────────────────────────────────────────── */
     #app {
       display: flex;
@@ -627,6 +686,19 @@
     <div class="h-sub" id="h-sub">ADK Cyber AI online. Ready to assist with your PAN-OS environment.</div>
   </div>
   <div class="h-spacer"></div>
+
+  <div id="history-wrap">
+    <button id="history-btn" onclick="toggleHistoryDrop()" title="Chat history">
+      🕐 History
+    </button>
+    <div id="history-drop">
+      <div id="history-drop-header">
+        <span>Chat History</span>
+        <button id="history-drop-new" onclick="newChat(); closeHistoryDrop()">+ New chat</button>
+      </div>
+      <div id="history-drop-list"></div>
+    </div>
+  </div>
 
   <div id="local-badge" title="App runs locally · configs go directly to Anthropic's API, never to ADK Cyber">
     <div id="local-dot"></div>
@@ -1288,6 +1360,70 @@ async function deleteConv(e, id) {
   if (currentConvId === id) { currentConvId = null; newChat(); }
   loadConversations();
 }
+
+// ── History header dropdown ───────────────────────────────────────
+function toggleHistoryDrop() {
+  const drop = document.getElementById('history-drop');
+  const isOpen = drop.classList.contains('open');
+  if (isOpen) { closeHistoryDrop(); } else { openHistoryDrop(); }
+}
+
+function openHistoryDrop() {
+  document.getElementById('history-drop').classList.add('open');
+  document.getElementById('history-btn').classList.add('open');
+  renderHistoryDrop();
+}
+
+function closeHistoryDrop() {
+  document.getElementById('history-drop').classList.remove('open');
+  document.getElementById('history-btn').classList.remove('open');
+}
+
+async function renderHistoryDrop() {
+  const list = document.getElementById('history-drop-list');
+  list.innerHTML = '<div id="history-drop-empty">Loading…</div>';
+  try {
+    const res  = await fetch(`${API}/conversations`);
+    const convs = await res.json();
+    if (!convs.length) {
+      list.innerHTML = '<div id="history-drop-empty">No history yet. Start a chat below.</div>';
+      return;
+    }
+    list.innerHTML = convs.map(c => `
+      <div class="hdrop-item${c.id === currentConvId ? ' active' : ''}"
+           onclick="hdropLoad(${JSON.stringify(c.id).replace(/"/g,'&quot;')})">
+        <span class="hdrop-title">${escHtml(c.title)}</span>
+        <button class="hdrop-del"
+                onclick="hdropDelete(event,${JSON.stringify(c.id).replace(/"/g,'&quot;')})"
+                title="Delete">✕</button>
+      </div>
+    `).join('');
+  } catch {
+    list.innerHTML = '<div id="history-drop-empty">Could not load history.</div>';
+  }
+}
+
+async function hdropLoad(id) {
+  closeHistoryDrop();
+  await loadConv(id);
+}
+
+async function hdropDelete(e, id) {
+  e.stopPropagation();
+  await fetch(`${API}/conversations/${id}`, { method: 'DELETE' });
+  if (currentConvId === id) { currentConvId = null; newChat(); }
+  loadConversations();
+  renderHistoryDrop();
+}
+
+// Close history dropdown on outside click or Escape
+document.addEventListener('click', function (e) {
+  const wrap = document.getElementById('history-wrap');
+  if (wrap && !wrap.contains(e.target)) closeHistoryDrop();
+});
+document.addEventListener('keydown', function (e) {
+  if (e.key === 'Escape') closeHistoryDrop();
+});
 
 function newChat() {
   currentConvId = null;
