@@ -510,6 +510,18 @@
     }
     #logout-btn:hover { border-color: #f85149; color: #f85149; }
 
+    /* ── Model picker ───────────────────────────────────────────── */
+    #model-picker { display: flex; gap: 5px; padding: 6px 0 2px; align-items: center; }
+    #model-picker-label { font-size: 10px; color: var(--text-dim); margin-right: 2px; }
+    .model-pill {
+      background: none; border: 1px solid var(--border); border-radius: 12px;
+      color: var(--text-sub); cursor: pointer; font-size: 11px; font-weight: 500;
+      padding: 3px 11px; transition: all 0.12s; line-height: 1.5;
+    }
+    .model-pill:hover { border-color: var(--accent); color: var(--text); }
+    .model-pill.active { background: var(--accent-dim); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+    .meta-model { color: var(--accent); font-weight: 600; }
+
     /* ── Update banner ─────────────────────────────────────────── */
     #update-banner {
       display: none; align-items: center; gap: 10px;
@@ -730,6 +742,13 @@
           </svg>
         </button>
       </div>
+      <div id="model-picker">
+        <span id="model-picker-label">Model:</span>
+        <button class="model-pill active" data-model="auto"                    onclick="setModel('auto')">⚡ Auto</button>
+        <button class="model-pill"        data-model="claude-haiku-4-5-20251001" onclick="setModel('claude-haiku-4-5-20251001')">Haiku</button>
+        <button class="model-pill"        data-model="claude-sonnet-4-6"         onclick="setModel('claude-sonnet-4-6')">Sonnet</button>
+        <button class="model-pill"        data-model="claude-opus-4-7"           onclick="setModel('claude-opus-4-7')">Opus</button>
+      </div>
       <div id="input-hint">
         <span>Shift+Enter for newline · Enter to send</span>
         <span id="config-ind"></span>
@@ -834,6 +853,24 @@ let currentConvId     = null;
 let configText        = '';
 let isStreaming       = false;
 let authMode          = 'login'; // 'login' | 'register'
+
+// ── Model selection ───────────────────────────────────────────────
+let selectedModel = 'auto';
+
+function setModel(model) {
+  selectedModel = model;
+  document.querySelectorAll('.model-pill').forEach(p => {
+    p.classList.toggle('active', p.dataset.model === model);
+  });
+}
+
+function modelLabel(m) {
+  if (!m) return '';
+  if (m.includes('opus'))   return 'Opus';
+  if (m.includes('sonnet')) return 'Sonnet';
+  if (m.includes('haiku'))  return 'Haiku';
+  return m;
+}
 
 // ── Init ─────────────────────────────────────────────────────────
 async function init() {
@@ -1216,6 +1253,7 @@ async function sendMessage() {
         history:         [],          // history loaded from conversation
         conversation_id: currentConvId,
         product_id:      currentProduct,
+        model:           selectedModel,
       }),
     });
 
@@ -1257,7 +1295,8 @@ async function sendMessage() {
           contentEl.innerHTML = renderMarkdown(raw);
           const meta = document.createElement('div');
           meta.className = 'token-meta';
-          meta.innerHTML = `<span>${data.input_tokens} in</span><span>${data.output_tokens} out</span>`;
+          const mLabel = modelLabel(data.model);
+          meta.innerHTML = `${mLabel ? `<span class="meta-model">${mLabel}</span>` : ''}<span>${data.input_tokens} in</span><span>${data.output_tokens} out</span>`;
           placeholder.querySelector('.msg-bubble').appendChild(meta);
           // Refresh query counter in header for all tiers
           if (data.queries_used != null) {

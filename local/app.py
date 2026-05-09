@@ -257,23 +257,58 @@ class Message(BaseModel):
     content: str
 
 _ALLOWED_MODELS = {
+    "auto",
+    "claude-opus-4-7",
     "claude-sonnet-4-6",
     "claude-haiku-4-5-20251001",
 }
 _MAX_TOKENS_CAP = 4096
 
+# ---------------------------------------------------------------------------
+# Model routing — picks the best model based on question complexity
+# ---------------------------------------------------------------------------
+
+_COMPLEX_KEYWORDS = {
+    "audit", "analyze", "analyse", "review", "migrate", "migration",
+    "shadow", "rulebase", "rule base", "security posture", "convert",
+    "compliance", "assessment", "inventory", "all rules", "all policies",
+    "best practices", "troubleshoot", "diagnose", "forensic",
+}
+
+def _select_model(message: str, config_text: Optional[str]) -> str:
+    """Route to the right model based on message and config complexity."""
+    config_len = len(config_text or "")
+    msg_lower  = message.lower()
+    has_keyword = any(kw in msg_lower for kw in _COMPLEX_KEYWORDS)
+
+    # Large config paste → deep analysis needed
+    if config_len > 5000:
+        return "claude-opus-4-7"
+    # Complex keyword + any config → Opus
+    if config_len > 0 and has_keyword:
+        return "claude-opus-4-7"
+    # Any config pasted → at least Sonnet
+    if config_len > 0:
+        return "claude-sonnet-4-6"
+    # Complex keyword or long question → Sonnet
+    if has_keyword or len(message) > 200:
+        return "claude-sonnet-4-6"
+    # Short simple question → Haiku
+    return "claude-haiku-4-5-20251001"
+
+
 class ChatRequest(BaseModel):
     message: str
     config_text: Optional[str] = None
     history: Optional[list[Message]] = []
-    model: Optional[str] = "claude-sonnet-4-6"
+    model: Optional[str] = "auto"
     max_tokens: Optional[int] = 2048
     conversation_id: Optional[str] = None
 
     @validator("model", pre=True, always=True)
     def validate_model(cls, v):
         if v not in _ALLOWED_MODELS:
-            return "claude-sonnet-4-6"
+            return "auto"
         return v
 
     @validator("max_tokens", pre=True, always=True)
@@ -588,11 +623,18 @@ def chat_stream(req: ChatRequest):
     messages = build_messages(req)
     client   = anthropic.Anthropic(api_key=api_key)
 
+    # Resolve model: "auto" → pick based on complexity
+    resolved_model = (
+        _select_model(req.message, req.config_text)
+        if req.model == "auto"
+        else req.model
+    )
+
     def event_generator():
         full_reply = []
         try:
             with client.messages.stream(
-                model=req.model,
+                model=resolved_model,
                 max_tokens=req.max_tokens,
                 system=SYSTEM_PROMPT,
                 messages=messages,
@@ -604,7 +646,7 @@ def chat_stream(req: ChatRequest):
                 reply_text = "".join(full_reply)
                 save_messages(conv_id, req.message, reply_text)
                 auto_title(conv_id, req.message)
-                yield f"data: {json.dumps({'type': 'done', 'input_tokens': final.usage.input_tokens, 'output_tokens': final.usage.output_tokens, 'conversation_id': conv_id, 'queries_used': _session_cache.get('queries_used'), 'queries_limit': _session_cache.get('queries_limit'), 'queries_remaining': _session_cache.get('queries_remaining'), 'period': _session_cache.get('period', 'weekly'), 'tier': _session_cache.get('tier')})}\n\n"
+                yield f"data: {json.dumps({'type': 'done', 'model': resolved_model, 'input_tokens': final.usage.input_tokens, 'output_tokens': final.usage.output_tokens, 'conversation_id': conv_id, 'queries_used': _session_cache.get('queries_used'), 'queries_limit': _session_cache.get('queries_limit'), 'queries_remaining': _session_cache.get('queries_remaining'), 'period': _session_cache.get('period', 'weekly'), 'tier': _session_cache.get('tier')})}\n\n"
         except anthropic.AuthenticationError:
             yield f"data: {json.dumps({'type': 'error', 'detail': 'API key error. Please contact support@adkcyber.com.'})}\n\n"
         except anthropic.RateLimitError:
