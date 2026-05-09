@@ -242,7 +242,21 @@ def load_system_prompt() -> str:
         "analyze it carefully before answering."
     )
 
-SYSTEM_PROMPT = load_system_prompt()
+_RESPONSE_STYLE_ADDENDUM = """
+
+## Response Length and Style — Non-Negotiable Rules
+
+Read the user's question carefully and match response length to the complexity of what was actually asked.
+
+- **Conceptual / "why" questions** (e.g. "why would I use X instead of Y?"): answer in 2–5 sentences. Explain the core reason. Stop. Do not add implementation steps, decision trees, comparison tables, or "bottom line" sections unless the user asks for them.
+- **"How do I" / implementation questions**: provide the relevant steps or CLI. Do not pad with conceptual background the user did not request.
+- **Short clarification questions** ("what does X mean?"): one short paragraph maximum.
+- **Never volunteer information beyond what was asked.** If the user wants more depth they will ask a follow-up.
+- Do not add headers, tables, bullet-point comparisons, or decision trees to a simple conceptual question.
+- Default to the shortest accurate answer. Expand only when the question is explicitly broad.
+"""
+
+SYSTEM_PROMPT = load_system_prompt() + _RESPONSE_STYLE_ADDENDUM
 
 # ---------------------------------------------------------------------------
 # Pydantic models
