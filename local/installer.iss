@@ -77,47 +77,60 @@ Filename: "{app}\PAN Copilot.exe"; Description: "Launch ADK Cyber AI"; Flags: no
 
 [Code]
 // Shut down any running ADK Cyber AI instance before installation begins.
-// This runs before Inno Setup touches a single file, preventing locked-file
-// errors on ALL versions — including old installs that lack self-shutdown logic.
+// Runs before Inno Setup touches a single file.
 //
-// Steps:
-//   1. Close the browser app window gracefully via PowerShell (finds the Edge/
-//      Chrome window whose title starts with "ADK Cyber AI" and sends WM_CLOSE)
-//   2. Kill the PAN Copilot.exe server process (graceful, then force)
-//   3. Force-kill the browser window if it is still open after step 1
-//   4. Sleep 2 s so Windows fully releases file handles before copying begins
+// Strategy (layered, most-reliable first):
+//   1. Read the browser PID written by pan_copilot.py to %TEMP%\adk_cyber_ai_edge.pid
+//      and kill that specific process — precise, works even when Edge is shared.
+//   2. Kill PAN Copilot.exe by image name (graceful then force).
+//   3. Write a PowerShell script to a temp file and execute it — avoids command-line
+//      quoting issues; finds any remaining Edge/Chrome window titled "ADK Cyber AI*"
+//      and sends WM_CLOSE, then force-kills if still alive.
+//   4. Sleep 2 s for Windows to release all file handles.
 
 function InitializeSetup(): Boolean;
 var
-  ResultCode: Integer;
+  ResultCode : Integer;
+  PidFile    : String;
+  PidStr     : String;
+  ScriptFile : String;
 begin
-  // Step 1 — gracefully close the browser app window by window title
-  Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
-    '-NonInteractive -WindowStyle Hidden -Command ' +
-    '"Get-Process msedge,chrome -ErrorAction SilentlyContinue | ' +
-    'Where-Object { $_.MainWindowTitle -like ''ADK Cyber AI*'' } | ' +
-    'ForEach-Object { $_.CloseMainWindow() | Out-Null }"',
-    '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  // ── Step 1: kill browser by saved PID ──────────────────────────────────────
+  PidFile := ExpandConstant('{%TEMP}') + '\adk_cyber_ai_edge.pid';
+  if FileExists(PidFile) then begin
+    if LoadStringFromFile(PidFile, PidStr) then begin
+      PidStr := Trim(PidStr);
+      if PidStr <> '' then
+        Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /PID ' + PidStr,
+          '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+    end;
+    DeleteFile(PidFile);
+  end;
 
-  // Step 2 — kill the backend server process
+  // ── Step 2: kill server process by image name ───────────────────────────────
   Exec(ExpandConstant('{sys}\taskkill.exe'), '/IM "PAN Copilot.exe"',
     '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM "PAN Copilot.exe"',
     '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
 
-  // Brief pause — give the browser window time to respond to WM_CLOSE
-  Sleep(1000);
-
-  // Step 3 — force-kill the browser window if still alive
+  // ── Step 3: PowerShell fallback — close any remaining ADK Cyber AI window ──
+  // Write script to a temp file so no command-line quoting issues arise.
+  ScriptFile := ExpandConstant('{tmp}') + '\close_adk.ps1';
+  SaveStringToFile(ScriptFile,
+    'Get-Process msedge,chrome -ErrorAction SilentlyContinue |' + #13#10 +
+    '  Where-Object { $_.MainWindowTitle -like "ADK Cyber AI*" } |' + #13#10 +
+    '  ForEach-Object { $_.CloseMainWindow() | Out-Null }' + #13#10 +
+    'Start-Sleep -Milliseconds 600' + #13#10 +
+    'Get-Process msedge,chrome -ErrorAction SilentlyContinue |' + #13#10 +
+    '  Where-Object { $_.MainWindowTitle -like "ADK Cyber AI*" } |' + #13#10 +
+    '  Stop-Process -Force -ErrorAction SilentlyContinue',
+    False);
   Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
-    '-NonInteractive -WindowStyle Hidden -Command ' +
-    '"Get-Process msedge,chrome -ErrorAction SilentlyContinue | ' +
-    'Where-Object { $_.MainWindowTitle -like ''ADK Cyber AI*'' } | ' +
-    'Stop-Process -Force -ErrorAction SilentlyContinue"',
+    '-NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + ScriptFile + '"',
     '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
 
-  // Step 4 — final pause to let Windows release all file handles
-  Sleep(1500);
+  // ── Step 4: final pause for file-handle release ─────────────────────────────
+  Sleep(2000);
 
   Result := True;
 end;

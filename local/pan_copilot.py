@@ -143,21 +143,48 @@ def main():
         )
         sys.exit(1)
 
-    # â”€â”€ Open browser in app mode (no URL bar, no tabs) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # ── Open browser in app mode (no URL bar, no tabs) ──────────────────────────
     browser = find_browser()
+
+    # Isolated Edge profile — forces Edge to run as its own process rather than
+    # delegating to an existing Edge instance. This means proc.pid is the real
+    # window PID, which we write to a file so the installer can kill it cleanly.
+    _edge_profile = os.path.join(
+        os.environ.get(“LOCALAPPDATA”, os.path.expanduser(“~”)),
+        “ADKCyberAI”, “EdgeProfile”
+    )
+
+    # PID file — installer reads this to kill the browser window before
+    # overwriting files (avoids “unable to close applications” dialog).
+    _pid_file = os.path.join(os.environ.get(“TEMP”, “”), “adk_cyber_ai_edge.pid”)
 
     if browser:
         app_flags = [
-            f"--app={url}",
-            "--disable-extensions",
-            "--no-first-run",
-            "--disable-default-apps",
-            f"--window-size=1280,820",
+            f”--app={url}”,
+            f”--user-data-dir={_edge_profile}”,
+            “--disable-extensions”,
+            “--no-first-run”,
+            “--disable-default-apps”,
+            f”--window-size=1280,820”,
         ]
         _launch_time = time.time()
         proc = subprocess.Popen(browser + app_flags)
+
+        # Write browser PID so the installer can kill it precisely
+        try:
+            with open(_pid_file, “w”) as _f:
+                _f.write(str(proc.pid))
+        except Exception:
+            pass
+
         proc.wait()
         _browser_lifetime = time.time() - _launch_time
+
+        # Clean up PID file
+        try:
+            os.remove(_pid_file)
+        except Exception:
+            pass
 
         if _browser_lifetime < 5.0:
             # Browser delegated to an existing instance — keep server alive.
