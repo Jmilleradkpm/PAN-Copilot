@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>PAN Copilot Beta — Local Desktop</title>
+  <title>ADK Cyber AI — Local Desktop</title>
   <link rel="icon" type="image/png" sizes="64x64" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAABrElEQVR4nO2bQW6DMBBFP1/ZcYUeoIvuZpFewKfo+XoKLtDuOUKu4H2VlEQoBQTEDI5/n5QIhGJnvj9jm2QqTNGejiiBt5fvsUuHqcDrEL5QALE9vY8JUZUc+D2xaf4IUd2utqdjqYEPCtGJQIhDtdE/c4m1u90JcSq10b/PBYQ4hDiHLRuPTXM7rkOAlANiL/ih81wgxCHEIcShZ2c55gE6BGrIGDr1Y7m6gBCHjvZ3ccHStomCuAa/RATCF7dcMLd9lpL97wOeu/cg/EnugkfaYaFzv+WeBC2VCwY+bzKzQExwC3GDL2I7zgiLbz3iSXnU+rkIYGtckHINwUKy/+p+if1Z5IJU1k8iQHQe/S2Wz0QerJ0RrBQB3K3/sAAxvf1HXbDlzpF4TqxUAWzGw42kyZY5Z3+PB6hEfkwJarsLEPdb+ZmKA1yFJfLFekJYFgLEfexvqg5wgRCHT7bvTw4hDpVHf+3f5F6h5oD693e2j+4FSQfUIXyiQAhxCHEIcQhxCHF4rp66lZMJca0cI8Th5V3MBf91gz2q/ol26WzBQgwFPi0AOgTK538AIPO7tHwSzTwAAAAASUVORK5CYII=">
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -601,8 +601,8 @@
 <header id="header">
   <div class="h-logo">PAN</div>
   <div class="h-text-stack">
-    <div class="h-eyebrow">PAN COPILOT</div>
-    <div class="h-sub" id="h-sub">PAN Copilot online. Ready to assist with your PAN-OS environment.</div>
+    <div class="h-eyebrow">ADK CYBER AI</div>
+    <div class="h-sub" id="h-sub">ADK Cyber AI online. Ready to assist with your PAN-OS environment.</div>
   </div>
   <div class="h-spacer"></div>
 
@@ -625,7 +625,7 @@
 <div id="auth-overlay" style="display:none;">
   <div id="auth-card">
     <div class="auth-logo">PAN</div>
-    <div style="font-size:20px;font-weight:700;margin-bottom:4px">PAN Copilot <span style="font-size:10px;font-weight:600;background:rgba(232,65,47,0.15);color:var(--accent);border:1px solid rgba(232,65,47,0.3);padding:2px 6px;border-radius:10px;vertical-align:middle;">BETA</span></div>
+    <div style="font-size:20px;font-weight:700;margin-bottom:4px">ADK Cyber AI <span style="font-size:10px;font-weight:600;background:rgba(232,65,47,0.15);color:var(--accent);border:1px solid rgba(232,65,47,0.3);padding:2px 6px;border-radius:10px;vertical-align:middle;">BETA</span></div>
     <div style="font-size:13px;color:var(--text-sub);margin-bottom:18px">Sign in to access your PAN-OS AI assistant.</div>
 
     <div class="auth-tabs">
@@ -645,7 +645,7 @@
 
     <div class="auth-note">
       🔒 Credentials in your configs are automatically redacted. Config data goes directly from your machine to Anthropic's API for AI inference — ADK Cyber's servers only ever see your email and session token.<br><br>
-      Free tier: <strong style="color:var(--text-sub);">10 queries / week</strong> · Upgrade at <a href="https://www.adkcyber.com/pan-copilot.html" target="_blank">adkcyber.com/pan-copilot.html</a>
+      Free tier: <strong style="color:var(--text-sub);">10 queries / week</strong> · Upgrade at <a href="https://www.adkcyber.com/adk-cyber-ai.html" target="_blank">adkcyber.com/adk-cyber-ai.html</a>
     </div>
   </div>
 </div>
@@ -788,7 +788,7 @@
     <div id="context-bar">
       <div id="context-product">
         <span id="context-icon">🔥</span>
-        <span id="context-name">PAN Copilot</span>
+        <span id="context-name">ADK Cyber AI</span>
         <span id="context-desc">· Select a product from the left to focus the chat, or ask anything below.</span>
       </div>
       <div id="context-chips"></div>
@@ -902,7 +902,7 @@
 
 <script>
 /* ================================================================
-   PAN Copilot — Local Desktop JS
+   ADK Cyber AI — Local Desktop JS
    ================================================================ */
 
 const API = 'http://127.0.0.1:' + (window.location.port || 80);
@@ -1145,7 +1145,7 @@ async function submitAuth() {
       onAuthenticated(data);
     }
   } catch (e) {
-    showAuthError('Could not reach local server. Is PAN Copilot running?');
+    showAuthError('Could not reach local server. Is ADK Cyber AI running?');
   } finally {
     btn.disabled = false;
     btn.textContent = authMode === 'login' ? 'Sign In' : 'Create Account';
@@ -1264,7 +1264,7 @@ function newChat() {
   document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
   currentProduct = null;
   document.getElementById('context-icon').textContent = '🔥';
-  document.getElementById('context-name').textContent = 'PAN Copilot';
+  document.getElementById('context-name').textContent = 'ADK Cyber AI';
   document.getElementById('context-desc').textContent = '· Select a product from the left to focus the chat, or ask anything below.';
   document.getElementById('context-chips').innerHTML = '';
   loadConversations();
@@ -1307,7 +1307,7 @@ function appendAssistantMessage(text, tokenMeta) {
   div.className = 'msg-row assistant';
   div.innerHTML = `
     <div class="msg-bubble">
-      <div class="msg-label">PAN Copilot</div>
+      <div class="msg-label">ADK Cyber AI</div>
       <div class="msg-content">${renderMarkdown(text)}</div>
       ${tokenMeta ? `<div class="token-meta"><span>${tokenMeta.in_tokens} in</span><span>${tokenMeta.out_tokens} out</span></div>` : ''}
     </div>`;
@@ -1323,7 +1323,7 @@ function appendThinking() {
   div.innerHTML = `
     <div class="thinking-bubble">
       <div class="dots"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div>
-      <span style="font-size:12px;color:var(--text-dim)">PAN Copilot is thinking…</span>
+      <span style="font-size:12px;color:var(--text-dim)">ADK Cyber AI is thinking…</span>
     </div>`;
   document.getElementById('messages').appendChild(div);
   scrollBottom();
@@ -1392,7 +1392,7 @@ async function sendMessage() {
     placeholder.className = 'msg-row assistant';
     placeholder.innerHTML = `
       <div class="msg-bubble">
-        <div class="msg-label">PAN Copilot</div>
+        <div class="msg-label">ADK Cyber AI</div>
         <div class="msg-content"></div>
       </div>`;
     document.getElementById('messages').appendChild(placeholder);
@@ -1436,7 +1436,7 @@ async function sendMessage() {
     }
   } catch (e) {
     thinking.remove();
-    appendAssistantMessage(`⚠️ Lost connection to local server. Is PAN Copilot still running?`, null);
+    appendAssistantMessage(`⚠️ Lost connection to local server. Is ADK Cyber AI still running?`, null);
   } finally {
     isStreaming = false;
     document.getElementById('send-btn').disabled = false;
@@ -1567,7 +1567,7 @@ function copyCode(btn) {
 <!-- Upgrade modal -->
 <div id="upgrade-modal-backdrop" onclick="closeUpgradeModal(event)">
   <div id="upgrade-modal">
-    <h3>Upgrade PAN Copilot Beta</h3>
+    <h3>Upgrade ADK Cyber AI</h3>
     <p>Choose a plan to unlock more queries. Your session will update automatically after payment.</p>
     <a id="upgrade-pro-btn" class="upgrade-plan-card pro" href="#" target="_blank">
       <div class="plan-name">Pro — $20 / month</div>

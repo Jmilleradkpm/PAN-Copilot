@@ -57,7 +57,7 @@ def _show_crash_dialog(message: str) -> None:
     try:
         import ctypes
         ctypes.windll.user32.MessageBoxW(
-            0, message, "PAN Copilot â€” Startup Error", 0x10
+            0, message, “ADK Cyber AI — Startup Error”, 0x10
         )
     except Exception:
         pass
@@ -138,7 +138,7 @@ def main():
 
     if not wait_for_server(port):
         _show_crash_dialog(
-            "PAN Copilot server did not start in time.\n"
+            "ADK Cyber AI server did not start in time.\n"
             f"Try opening manually: {url}"
         )
         sys.exit(1)
@@ -183,7 +183,7 @@ if __name__ == "__main__":
         main()
     except Exception:
         _show_crash_dialog(
-            "PAN Copilot failed to start.\n\n"
+            "ADK Cyber AI failed to start.\n\n"
             f"{traceback.format_exc()}\n\n"
             "Please report this error to support@adkcyber.com."
         )

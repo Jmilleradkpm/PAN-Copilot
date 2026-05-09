@@ -9,16 +9,16 @@
 
 [Setup]
 AppId={{A3F7C2D1-84BE-4E9F-B6A2-1D5C3E8F0247}
-AppName=PAN Copilot
+AppName=ADK Cyber AI
 AppVersion={#AppVersion}
 AppPublisher=ADK Cyber, LLC
-AppPublisherURL=https://adkcyber.com/pan-copilot.html
+AppPublisherURL=https://adkcyber.com/adk-cyber-ai.html
 AppSupportURL=mailto:support@adkcyber.com
-AppUpdatesURL=https://adkcyber.com/pan-copilot.html
+AppUpdatesURL=https://adkcyber.com/adk-cyber-ai.html
 
-; Install to Program Files\PAN Copilot
-DefaultDirName={autopf}\PAN Copilot
-DefaultGroupName=PAN Copilot
+; Install to Program Files\ADK Cyber AI
+DefaultDirName={autopf}\ADK Cyber AI
+DefaultGroupName=ADK Cyber AI
 DisableProgramGroupPage=yes
 
 ; Output installer exe
@@ -47,7 +47,7 @@ PrivilegesRequiredOverridesAllowed=dialog
 RestartIfNeededByRun=no
 
 ; Uninstaller
-UninstallDisplayName=PAN Copilot
+UninstallDisplayName=ADK Cyber AI
 UninstallDisplayIcon={app}\PAN Copilot.exe
 
 [Languages]
@@ -62,15 +62,15 @@ Source: "dist\PAN Copilot\*"; DestDir: "{app}"; Flags: ignoreversion recursesubd
 
 [Icons]
 ; Start Menu
-Name: "{group}\PAN Copilot"; Filename: "{app}\PAN Copilot.exe"; Comment: "AI Assistant for Palo Alto Networks Engineers"
-Name: "{group}\Uninstall PAN Copilot"; Filename: "{uninstallexe}"
+Name: "{group}\ADK Cyber AI"; Filename: "{app}\PAN Copilot.exe"; Comment: "AI Assistant for Palo Alto Networks Engineers"
+Name: "{group}\Uninstall ADK Cyber AI"; Filename: "{uninstallexe}"
 
 ; Desktop (optional)
-Name: "{autodesktop}\PAN Copilot"; Filename: "{app}\PAN Copilot.exe"; Comment: "AI Assistant for Palo Alto Networks Engineers"; Tasks: desktopicon
+Name: "{autodesktop}\ADK Cyber AI"; Filename: "{app}\PAN Copilot.exe"; Comment: "AI Assistant for Palo Alto Networks Engineers"; Tasks: desktopicon
 
 [Run]
 ; Offer to launch after install
-Filename: "{app}\PAN Copilot.exe"; Description: "Launch PAN Copilot"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\PAN Copilot.exe"; Description: "Launch ADK Cyber AI"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
 ; Nothing extra needed â€” standard uninstaller removes all installed files

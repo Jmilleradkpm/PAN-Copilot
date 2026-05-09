@@ -1,5 +1,5 @@
 ﻿"""
-PAN Copilot - Local Desktop Backend v4.0
+ADK Cyber AI - Local Desktop Backend v4.0
 =========================================
 Session-based auth. ADK Cyber's Anthropic key is returned by the license server
 after login and cached in memory — never written to disk.
@@ -174,7 +174,7 @@ def save_config(data: dict):
 # FastAPI app
 # ---------------------------------------------------------------------------
 
-app = FastAPI(title="PAN Copilot", version="4.0.0")
+app = FastAPI(title="ADK Cyber AI", version="4.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -233,7 +233,7 @@ def load_system_prompt() -> str:
             return re.sub(r"^[\s\-]+", "", raw.split(marker, 1)[1]).strip()
         return raw.strip()
     return (
-        "You are PAN Copilot, an expert AI assistant for Palo Alto Networks engineers. "
+        "You are ADK Cyber AI, an expert AI assistant for Palo Alto Networks engineers. "
         "You have deep knowledge of the full PAN portfolio including PAN-OS 8.x through 11.x, "
         "Panorama, Cortex XDR, XSIAM, XSOAR, Prisma Access, Prisma Cloud, Prisma SD-WAN, "
         "GlobalProtect, WildFire, Advanced Threat Prevention, DNS Security, URL Filtering, "
@@ -676,7 +676,7 @@ def chat_stream(req: ChatRequest):
     if not _session_cache.get("token"):
         raise HTTPException(
             status_code=401,
-            detail="Not logged in. Please sign in to use PAN Copilot."
+            detail="Not logged in. Please sign in to use ADK Cyber AI."
         )
 
     api_key = _session_cache.get("anthropic_key")
@@ -696,7 +696,7 @@ def chat_stream(req: ChatRequest):
             status_code=429,
             detail=check.get(
                 "detail",
-                f"Query limit reached. Upgrade at adkcyber.com/pan-copilot.html"
+                f"Query limit reached. Upgrade at adkcyber.com/adk-cyber-ai.html"
             )
         )
 
@@ -865,7 +865,7 @@ _CSP = (
 @app.get("/", response_class=HTMLResponse)
 def serve_frontend():
     if not FRONTEND_PATH.exists():
-        return HTMLResponse("<h1>PAN Copilot</h1><p>Frontend not found.</p>", status_code=404)
+        return HTMLResponse("<h1>ADK Cyber AI</h1><p>Frontend not found.</p>", status_code=404)
     html = FRONTEND_PATH.read_text(encoding="utf-8")
     # Inject shutdown token as a JS global so sendBeacon can authenticate
     inject = f'<script>window.__SHUTDOWN_TOKEN__="{SHUTDOWN_TOKEN}";</script>'
