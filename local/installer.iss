@@ -76,22 +76,49 @@ Filename: "{app}\PAN Copilot.exe"; Description: "Launch ADK Cyber AI"; Flags: no
 ; Nothing extra needed â€” standard uninstaller removes all installed files
 
 [Code]
-// Force-kill any running instance before installation begins so that all
-// file locks on PAN Copilot.exe and its bundled DLLs are released.
-// This runs before Inno Setup touches a single file, preventing the
-// "Setup was unable to automatically close all applications" dialog.
+// Shut down any running ADK Cyber AI instance before installation begins.
+// This runs before Inno Setup touches a single file, preventing locked-file
+// errors on ALL versions — including old installs that lack self-shutdown logic.
+//
+// Steps:
+//   1. Close the browser app window gracefully via PowerShell (finds the Edge/
+//      Chrome window whose title starts with "ADK Cyber AI" and sends WM_CLOSE)
+//   2. Kill the PAN Copilot.exe server process (graceful, then force)
+//   3. Force-kill the browser window if it is still open after step 1
+//   4. Sleep 2 s so Windows fully releases file handles before copying begins
+
 function InitializeSetup(): Boolean;
 var
   ResultCode: Integer;
 begin
-  // Graceful attempt first (sends WM_CLOSE)
+  // Step 1 — gracefully close the browser app window by window title
+  Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
+    '-NonInteractive -WindowStyle Hidden -Command ' +
+    '"Get-Process msedge,chrome -ErrorAction SilentlyContinue | ' +
+    'Where-Object { $_.MainWindowTitle -like ''ADK Cyber AI*'' } | ' +
+    'ForEach-Object { $_.CloseMainWindow() | Out-Null }"',
+    '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+
+  // Step 2 — kill the backend server process
   Exec(ExpandConstant('{sys}\taskkill.exe'), '/IM "PAN Copilot.exe"',
     '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-  // Hard kill in case the graceful attempt was not enough
   Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM "PAN Copilot.exe"',
     '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-  // Give Windows 2 seconds to release all file handles before we start copying
-  Sleep(2000);
+
+  // Brief pause — give the browser window time to respond to WM_CLOSE
+  Sleep(1000);
+
+  // Step 3 — force-kill the browser window if still alive
+  Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
+    '-NonInteractive -WindowStyle Hidden -Command ' +
+    '"Get-Process msedge,chrome -ErrorAction SilentlyContinue | ' +
+    'Where-Object { $_.MainWindowTitle -like ''ADK Cyber AI*'' } | ' +
+    'Stop-Process -Force -ErrorAction SilentlyContinue"',
+    '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+
+  // Step 4 — final pause to let Windows release all file handles
+  Sleep(1500);
+
   Result := True;
 end;
 

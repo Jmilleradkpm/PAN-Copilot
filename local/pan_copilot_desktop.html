@@ -1110,7 +1110,9 @@ async function _pollForUpdateShutdown() {
     try {
       await fetch(`${API}/health`, { cache: 'no-store', signal: AbortSignal.timeout(1500) });
     } catch {
-      // Server is down — close this window so the installer has no file locks
+      // Server is down — navigate away first (releases page resources) then close
+      try { window.location.href = 'about:blank'; } catch(e) {}
+      await new Promise(r => setTimeout(r, 300));
       window.close();
       return;
     }
