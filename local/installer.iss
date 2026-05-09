@@ -76,12 +76,22 @@ Filename: "{app}\PAN Copilot.exe"; Description: "Launch ADK Cyber AI"; Flags: no
 ; Nothing extra needed â€” standard uninstaller removes all installed files
 
 [Code]
-// Show a friendly finish message
-procedure CurStepChanged(CurStep: TSetupStep);
+// Force-kill any running instance before installation begins so that all
+// file locks on PAN Copilot.exe and its bundled DLLs are released.
+// This runs before Inno Setup touches a single file, preventing the
+// "Setup was unable to automatically close all applications" dialog.
+function InitializeSetup(): Boolean;
+var
+  ResultCode: Integer;
 begin
-  if CurStep = ssPostInstall then
-  begin
-    // Nothing extra needed
-  end;
+  // Graceful attempt first (sends WM_CLOSE)
+  Exec(ExpandConstant('{sys}\taskkill.exe'), '/IM "PAN Copilot.exe"',
+    '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  // Hard kill in case the graceful attempt was not enough
+  Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM "PAN Copilot.exe"',
+    '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  // Give Windows 2 seconds to release all file handles before we start copying
+  Sleep(2000);
+  Result := True;
 end;
 

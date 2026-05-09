@@ -831,7 +831,7 @@ def install_update():
 
             # Launch installer first, then shut down this process so the installer
             # can overwrite all bundled files without hitting locked-file errors.
-            subprocess.Popen([str(tmp), "/SILENT", "/RESTARTAPPLICATIONS"])
+            subprocess.Popen([str(tmp), "/SILENT", "/FORCECLOSEAPPLICATIONS", "/RESTARTAPPLICATIONS"])
 
             # Give the installer process a moment to start up.
             time.sleep(1.5)
