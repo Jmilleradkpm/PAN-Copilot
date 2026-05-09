@@ -502,6 +502,28 @@
       color: var(--text-dim); font-size: 12px; cursor: pointer; padding: 6px;
     }
     #upgrade-modal-close:hover { color: var(--text-sub); }
+
+    /* Data disclosure modal (one-time) */
+    #data-disclosure-backdrop {
+      display: none; position: fixed; inset: 0; z-index: 2000;
+      background: rgba(0,0,0,0.78); align-items: center; justify-content: center;
+    }
+    #data-disclosure-backdrop.open { display: flex; }
+    #data-disclosure-modal {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 12px; padding: 24px 22px; width: 400px; max-width: 94vw;
+    }
+    #data-disclosure-modal h3 { font-size: 14px; font-weight: 700; margin-bottom: 10px; color: var(--text); }
+    #data-disclosure-modal p  { font-size: 12px; color: var(--text-sub); margin-bottom: 10px; line-height: 1.6; }
+    .disclosure-list { font-size: 12px; color: var(--text-sub); margin: 6px 0 14px 14px; line-height: 1.9; }
+    .disclosure-list li { margin-bottom: 1px; }
+    #disclosure-ack-btn {
+      width: 100%; background: var(--accent); border: none; border-radius: 7px;
+      color: #fff; font-size: 13px; font-weight: 600; padding: 10px 0;
+      cursor: pointer; font-family: inherit; transition: background .15s; margin-top: 4px;
+    }
+    #disclosure-ack-btn:hover { background: var(--accent-hover); }
+
     #logout-btn {
       margin-top: 20px; width: 100%; background: none;
       border: 1px solid var(--border); border-radius: 8px; color: var(--text-sub);
@@ -584,7 +606,7 @@
   </div>
   <div class="h-spacer"></div>
 
-  <div id="local-badge" title="Configs never leave your machine">
+  <div id="local-badge" title="App runs locally · configs go directly to Anthropic's API, never to ADK Cyber">
     <div id="local-dot"></div>
     Local · Private
   </div>
@@ -622,7 +644,7 @@
     <button id="auth-submit" onclick="submitAuth()">Sign In</button>
 
     <div class="auth-note">
-      🔒 Your firewall configs stay on your machine. The only data that reaches ADK Cyber's servers is your email and session token — never your PAN-OS configs or CLI output.<br><br>
+      🔒 Credentials in your configs are automatically redacted. Config data goes directly from your machine to Anthropic's API for AI inference — ADK Cyber's servers only ever see your email and session token.<br><br>
       Free tier: <strong style="color:var(--text-sub);">10 queries / week</strong> · Upgrade at <a href="https://www.adkcyber.com/pan-copilot.html" target="_blank">adkcyber.com/pan-copilot.html</a>
     </div>
   </div>
@@ -783,7 +805,7 @@
           <button class="example" onclick="prefillInput(&quot;Traffic from 10.1.0.0/24 to the DMZ is getting dropped. Help me diagnose why.&quot;)"><b>Troubleshoot a drop</b>Traffic from 10.1.0.0/24 to DMZ getting dropped</button>
           <button class="example" onclick="prefillInput(&quot;What are the pre-flight checks for a PAN-OS 10.2 to 11.1 upgrade?&quot;)"><b>PAN-OS migration</b>Pre-flight checks for 10.2 → 11.1 upgrade</button>
         </div>
-        <div class="privacy-note">🔒 Runs 100% locally — your configs never leave this machine</div>
+        <div class="privacy-note">🔒 Credentials auto-redacted · configs go directly to Anthropic's API, never to ADK Cyber</div>
       </div>
     </div>
 
@@ -846,7 +868,7 @@
     <!-- File / Config paste area -->
     <div id="config-section" class="rs-section" style="padding:8px 12px 6px;flex-shrink:0;">
       <span class="rs-label">Paste Config / CLI Output</span>
-      <div id="config-hint">Paste PAN-OS config, CLI output, or log entries here. It will be sent with your next question.</div>
+      <div id="config-hint">Paste PAN-OS config, CLI output, or log entries here. For best privacy, paste only the section relevant to your question. Credentials are auto-redacted before sending.</div>
 
       <label id="upload-btn" for="upload-file">
         <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
@@ -856,7 +878,7 @@
       <div id="upload-status"></div>
 
       <textarea id="config-paste" rows="5"
-        placeholder="# paste your config or CLI output here…"
+        placeholder="# paste the relevant section — e.g., a specific policy rule, BGP neighbor config, or IKE profile…"
         oninput="updateConfigStatus()"></textarea>
       <div id="config-status"></div>
     </div>
@@ -1021,6 +1043,21 @@ function closeUpgradeModal(e) {
   if (!e || e.target === document.getElementById('upgrade-modal-backdrop') || e.target.id === 'upgrade-modal-close') {
     document.getElementById('upgrade-modal-backdrop').classList.remove('open');
   }
+}
+
+// ── Data disclosure (one-time acknowledgment) ────────────────────
+function showDataDisclosure() {
+  document.getElementById('data-disclosure-backdrop').classList.add('open');
+}
+function closeDataDisclosure(e) {
+  if (!e || e.target === document.getElementById('data-disclosure-backdrop')) {
+    document.getElementById('data-disclosure-backdrop').classList.remove('open');
+  }
+}
+function ackDataDisclosure() {
+  localStorage.setItem('pcop_data_ack', '1');
+  document.getElementById('data-disclosure-backdrop').classList.remove('open');
+  sendMessage();
 }
 
 function updateTierUI(tier, queriesUsed, queriesLimit, period) {
@@ -1247,7 +1284,7 @@ function clearMessages() {
         <button class="example" onclick="prefillInput(&quot;Traffic from 10.1.0.0/24 to the DMZ is getting dropped. Help me diagnose why.&quot;)"><b>Troubleshoot a drop</b>Traffic from 10.1.0.0/24 to DMZ getting dropped</button>
         <button class="example" onclick="prefillInput(&quot;What are the pre-flight checks for a PAN-OS 10.2 to 11.1 upgrade?&quot;)"><b>PAN-OS migration</b>Pre-flight checks for 10.2 to 11.1 upgrade</button>
       </div>
-      <div class="privacy-note">🔒 Runs 100% locally &mdash; your configs never leave this machine</div>
+      <div class="privacy-note">🔒 Credentials auto-redacted &mdash; configs go directly to Anthropic's API, never to ADK Cyber</div>
     </div>`;
 }
 
@@ -1311,6 +1348,13 @@ async function sendMessage() {
   const input = document.getElementById('user-input');
   const msg   = input.value.trim();
   if (!msg) return;
+
+  // One-time disclosure before first config submission
+  const hasCfg = document.getElementById('config-paste').value.trim() || configText;
+  if (hasCfg && !localStorage.getItem('pcop_data_ack')) {
+    showDataDisclosure();
+    return; // user must acknowledge; ackDataDisclosure() will re-call sendMessage()
+  }
 
   input.value = '';
   autoResize(input);
@@ -1504,6 +1548,21 @@ function copyCode(btn) {
   });
 }
 </script>
+
+<!-- Data disclosure modal (shown once before first config submission) -->
+<div id="data-disclosure-backdrop" onclick="closeDataDisclosure(event)">
+  <div id="data-disclosure-modal">
+    <h3>🔒 What gets sent when you submit a config</h3>
+    <p>Before you send your first config, here's exactly what happens:</p>
+    <ul class="disclosure-list">
+      <li><strong style="color:var(--green)">Auto-redacted before sending:</strong> passwords, shared secrets, pre-shared keys, API keys, private keys</li>
+      <li><strong style="color:var(--yellow)">Sent to Anthropic's API:</strong> network topology, IP addresses, zone architecture, management access rules — the AI needs this to diagnose your config</li>
+      <li><strong style="color:var(--text)">Never touches ADK Cyber's servers:</strong> only your email and session token reach ADK Cyber</li>
+    </ul>
+    <p><strong>Recommendation:</strong> paste only the section relevant to your question — a specific policy rule, BGP neighbor config, or IKE profile — rather than a full <code style="font-size:11px;color:#79c0ff;background:var(--code-bg);padding:1px 5px;border-radius:3px;">show config running</code> export.</p>
+    <button id="disclosure-ack-btn" onclick="ackDataDisclosure()">Got it — send my message</button>
+  </div>
+</div>
 
 <!-- Upgrade modal -->
 <div id="upgrade-modal-backdrop" onclick="closeUpgradeModal(event)">
