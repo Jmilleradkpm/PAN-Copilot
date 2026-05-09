@@ -92,16 +92,16 @@ function InitializeSetup(): Boolean;
 var
   ResultCode : Integer;
   PidFile    : String;
-  PidStr     : String;
+  PidStr     : AnsiString;  { LoadStringFromFile requires AnsiString }
   ScriptFile : String;
 begin
   // ── Step 1: kill browser by saved PID ──────────────────────────────────────
   PidFile := ExpandConstant('{%TEMP}') + '\adk_cyber_ai_edge.pid';
   if FileExists(PidFile) then begin
     if LoadStringFromFile(PidFile, PidStr) then begin
-      PidStr := Trim(PidStr);
+      PidStr := Trim(String(PidStr));
       if PidStr <> '' then
-        Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /PID ' + PidStr,
+        Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /PID ' + String(PidStr),
           '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
     end;
     DeleteFile(PidFile);
