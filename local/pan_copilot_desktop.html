@@ -84,7 +84,8 @@
       flex-shrink: 0;
     }
     .h-text-stack { display: flex; flex-direction: column; gap: 5px; }
-    .h-eyebrow { font-size: 9px; font-weight: 700; color: var(--accent); text-transform: uppercase; letter-spacing: 0.14em; line-height: 1; }
+    .h-eyebrow { font-size: 9px; font-weight: 700; color: var(--accent); text-transform: uppercase; letter-spacing: 0.14em; line-height: 1; display: flex; align-items: center; gap: 5px; }
+    .h-beta { font-size: 8px; font-weight: 700; letter-spacing: 0.06em; background: rgba(0,212,228,0.12); color: var(--accent); border: 1px solid rgba(0,212,228,0.30); padding: 1px 5px; border-radius: 8px; text-transform: uppercase; }
     .h-sub   { font-size: 12.5px; font-weight: 500; color: var(--text-sub); line-height: 1; }
     .h-spacer { flex: 1; }
 
@@ -682,7 +683,7 @@
 <header id="header">
   <div class="h-logo"><svg viewBox="0 0 32 32" width="16" height="16" fill="none" stroke="white" stroke-width="2.8" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true"><path d="M4 26 L12 8 L20 22 L28 12"/><path d="M4 26 L28 26" opacity=".55"/></svg></div>
   <div class="h-text-stack">
-    <div class="h-eyebrow">ADK CYBER AI</div>
+    <div class="h-eyebrow">ADK CYBER AI <span class="h-beta">BETA</span></div>
     <div class="h-sub" id="h-sub">ADK Cyber AI online. Ready to assist with your PAN-OS environment.</div>
   </div>
   <div class="h-spacer"></div>
