@@ -521,6 +521,7 @@
     .model-pill:hover { border-color: var(--accent); color: var(--text); }
     .model-pill.active { background: var(--accent-dim); border-color: var(--accent); color: var(--accent); font-weight: 600; }
     .meta-model { color: var(--accent); font-weight: 600; }
+    .meta-redacted { color: var(--green); }
 
     /* ── Welcome example grid ─────────────────────────────────── */
     .example-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; max-width: 480px; margin-top: 12px; }
@@ -1374,7 +1375,7 @@ async function sendMessage() {
           const meta = document.createElement('div');
           meta.className = 'token-meta';
           const mLabel = modelLabel(data.model);
-          meta.innerHTML = `${mLabel ? `<span class="meta-model">${mLabel}</span>` : ''}<span>${data.input_tokens} in</span><span>${data.output_tokens} out</span>`;
+          meta.innerHTML = `${mLabel ? `<span class="meta-model">${mLabel}</span>` : ''}<span>${data.input_tokens} in</span><span>${data.output_tokens} out</span>${data.redactions > 0 ? `<span class="meta-redacted">🔒 ${data.redactions} credential${data.redactions === 1 ? '' : 's'} auto-redacted</span>` : ''}`;
           placeholder.querySelector('.msg-bubble').appendChild(meta);
           // Refresh query counter in header for all tiers
           if (data.queries_used != null) {

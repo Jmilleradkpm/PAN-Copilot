@@ -386,6 +386,94 @@ def auto_title(conversation_id: str, first_message: str):
             db.commit()
 
 # ---------------------------------------------------------------------------
+# Config sanitization — strip credential values before sending to Anthropic
+# ---------------------------------------------------------------------------
+
+_SENSITIVE_XML_TAGS = (
+    "phash", "password", "password-hash", "secret", "shared-secret",
+    "pre-shared-key", "auth-key", "authentication-key", "api-key",
+    "private-key", "passphrase", "bind-password", "community", "key",
+)
+
+_CLI_SET_KEYWORDS = (
+    "password", "secret", "pre-shared-key", "shared-secret",
+    "auth-key", "authentication-key", "api-key", "passphrase",
+    "bind-password", "community",
+)
+
+_CLI_DISPLAY_KEYWORDS = (
+    "password", "secret", "shared-secret", "pre-shared-key",
+    "auth-key", "authentication-key", "api-key", "passphrase",
+    "bind-password", "community", "phash",
+)
+
+
+def _build_sanitize_patterns():
+    """Compile regex patterns once at startup."""
+    patterns = []
+
+    # XML / candidate-config: <tag>value</tag> (single-line values)
+    for tag in _SENSITIVE_XML_TAGS:
+        patterns.append((
+            re.compile(
+                rf"(<{re.escape(tag)}>)[^<]+(</{re.escape(tag)}>)",
+                re.IGNORECASE,
+            ),
+            r"\1[REDACTED]\2",
+        ))
+
+    # PEM private key blocks (multi-line)
+    patterns.append((
+        re.compile(
+            r"-----BEGIN (?:[A-Z]+ )?PRIVATE KEY-----[\s\S]*?-----END (?:[A-Z]+ )?PRIVATE KEY-----",
+            re.IGNORECASE,
+        ),
+        "[PRIVATE KEY REDACTED]",
+    ))
+
+    # CLI set format: "set ... <keyword> <value>"
+    patterns.append((
+        re.compile(
+            r"(?m)(^\s*set\s+\S.*?\s+(?:"
+            + "|".join(re.escape(k) for k in _CLI_SET_KEYWORDS)
+            + r")\s+)\S+",
+            re.IGNORECASE,
+        ),
+        r"\1[REDACTED]",
+    ))
+
+    # CLI display / show output: "keyword: value"
+    patterns.append((
+        re.compile(
+            r"(?m)(^\s*(?:"
+            + "|".join(re.escape(k) for k in _CLI_DISPLAY_KEYWORDS)
+            + r")\s*:\s*)\S+",
+            re.IGNORECASE,
+        ),
+        r"\1[REDACTED]",
+    ))
+
+    return patterns
+
+
+_SANITIZE_PATTERNS = _build_sanitize_patterns()
+
+
+def sanitize_config_text(text: str):
+    """Strip credential values from PAN-OS config/CLI output.
+
+    Returns (sanitized_text, redaction_count). Only credential *values*
+    are removed — IPs, zones, policy rules, and all structural tags are
+    preserved so the AI can still diagnose configuration problems.
+    """
+    count = 0
+    for pattern, replacement in _SANITIZE_PATTERNS:
+        text, n = pattern.subn(replacement, text)
+        count += n
+    return text, count
+
+
+# ---------------------------------------------------------------------------
 # License server calls
 # ---------------------------------------------------------------------------
 
@@ -619,8 +707,21 @@ def chat_stream(req: ChatRequest):
     if check.get("weekly_used") is not None:
         _session_cache["weekly_used"] = check["weekly_used"]
 
+    # Strip credential values from config and message before sending to Anthropic
+    cfg_sanitized, cfg_redactions = (
+        sanitize_config_text(req.config_text)
+        if req.config_text and req.config_text.strip()
+        else (req.config_text or "", 0)
+    )
+    msg_sanitized, msg_redactions = sanitize_config_text(req.message)
+    total_redactions = cfg_redactions + msg_redactions
+    sanitized_req = req.copy(update={
+        "config_text": cfg_sanitized,
+        "message":     msg_sanitized,
+    })
+
     conv_id  = get_or_create_conversation(req.conversation_id)
-    messages = build_messages(req)
+    messages = build_messages(sanitized_req)
     client   = anthropic.Anthropic(api_key=api_key)
 
     # Resolve model: "auto" → pick based on complexity
@@ -646,7 +747,7 @@ def chat_stream(req: ChatRequest):
                 reply_text = "".join(full_reply)
                 save_messages(conv_id, req.message, reply_text)
                 auto_title(conv_id, req.message)
-                yield f"data: {json.dumps({'type': 'done', 'model': resolved_model, 'input_tokens': final.usage.input_tokens, 'output_tokens': final.usage.output_tokens, 'conversation_id': conv_id, 'queries_used': _session_cache.get('queries_used'), 'queries_limit': _session_cache.get('queries_limit'), 'queries_remaining': _session_cache.get('queries_remaining'), 'period': _session_cache.get('period', 'weekly'), 'tier': _session_cache.get('tier')})}\n\n"
+                yield f"data: {json.dumps({'type': 'done', 'model': resolved_model, 'input_tokens': final.usage.input_tokens, 'output_tokens': final.usage.output_tokens, 'conversation_id': conv_id, 'queries_used': _session_cache.get('queries_used'), 'queries_limit': _session_cache.get('queries_limit'), 'queries_remaining': _session_cache.get('queries_remaining'), 'period': _session_cache.get('period', 'weekly'), 'tier': _session_cache.get('tier'), 'redactions': total_redactions})}\n\n"
         except anthropic.AuthenticationError:
             yield f"data: {json.dumps({'type': 'error', 'detail': 'API key error. Please contact support@adkcyber.com.'})}\n\n"
         except anthropic.RateLimitError:
