@@ -366,11 +366,125 @@ _KB_TRIGGER_MAP: dict = {
 }
 
 
+# Common English words that carry no topical signal — excluded from scoring.
+# Deliberately small: PAN-specific short tokens (ssl, tls, vpn, gre, nat, ca)
+# must NOT be in this list even though they're short.
+_STOPWORDS = frozenset({
+    "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
+    "have", "has", "had", "do", "does", "did", "will", "would", "could",
+    "should", "may", "might", "must", "shall", "can",
+    "i", "you", "he", "she", "it", "we", "they", "them", "their",
+    "his", "her", "its", "our", "my", "your",
+    "this", "that", "these", "those",
+    "what", "which", "who", "when", "where", "why", "how",
+    "and", "or", "but", "if", "then", "than", "so", "yet", "nor",
+    "in", "on", "at", "by", "for", "with", "about", "into", "through",
+    "to", "from", "up", "of", "out", "not", "no",
+    "very", "just", "also", "all", "any", "each", "every",
+    "more", "most", "other", "some", "such", "only", "own", "same",
+    "get", "use", "make", "see", "set", "used", "using", "made",
+    "one", "two", "new", "old", "good", "bad", "true", "false",
+})
+
+
+def _parse_kb_sections(content: str) -> list:
+    """
+    Split a markdown document into sections at the ## and ### header levels.
+    Each entry: {"heading": str, "level": int, "body": str}
+    where body is the raw markdown for that section (heading line included).
+    The document preamble (before the first ## header) is kept separately
+    with heading "__preamble__" and level 0.
+    """
+    lines = content.split("\n")
+    sections = []
+    current = {"heading": "__preamble__", "level": 0, "lines": []}
+
+    for line in lines:
+        m = re.match(r"^(#{2,3})\s+(.+)", line)
+        if m:
+            body = "\n".join(current["lines"]).strip()
+            if body:
+                sections.append({
+                    "heading": current["heading"],
+                    "level":   current["level"],
+                    "body":    body,
+                })
+            current = {
+                "heading": m.group(2).strip(),
+                "level":   len(m.group(1)),
+                "lines":   [line],
+            }
+        else:
+            current["lines"].append(line)
+
+    body = "\n".join(current["lines"]).strip()
+    if body:
+        sections.append({
+            "heading": current["heading"],
+            "level":   current["level"],
+            "body":    body,
+        })
+
+    return sections
+
+
+def _kb_relevant_sections(kb_entry: dict, message: str) -> str:
+    """
+    Return only the sections of a KB article that are relevant to the question.
+
+    Algorithm:
+      1. Tokenise the question into meaningful 3-char+ words (minus stopwords).
+      2. Score each ## / ### section by counting how many question words appear
+         in it (case-insensitive substring match — so "cert" matches "certificate").
+      3. Threshold = max(2, 30% of the top section's score).
+      4. Return all sections at or above the threshold.
+      5. Fall back to the full article when:
+         - No sections are parsed (shouldn't happen with current KB files)
+         - No question words could be extracted (very short / single-word query)
+         - No sections score above the threshold (no signal → return all)
+         - ≥ 70% of sections qualify (question is broad → return all)
+    """
+    # Exclude preamble entries from scoring; keep only ## / ### content sections
+    sections = [s for s in kb_entry.get("sections", []) if s["heading"] != "__preamble__"]
+    if not sections:
+        return kb_entry["content"]
+
+    # Tokenise: lowercase alpha-numeric words ≥ 3 chars, not in stopwords
+    raw_words = re.findall(r"[a-z][a-z0-9/.-]{2,}", message.lower())
+    question_words = frozenset(w for w in raw_words if w not in _STOPWORDS)
+    if not question_words:
+        return kb_entry["content"]
+
+    # Score: count unique question words found anywhere in the section text
+    def _score(sec: dict) -> int:
+        text = (sec["heading"] + " " + sec["body"]).lower()
+        return sum(1 for w in question_words if w in text)
+
+    scored = [(sec, _score(sec)) for sec in sections]
+    max_score = max(s for _, s in scored)
+
+    if max_score == 0:
+        return kb_entry["content"]
+
+    threshold = max(2, int(max_score * 0.30))
+    relevant = [sec for sec, s in scored if s >= threshold]
+
+    # Broad question → return the full article
+    if len(relevant) >= len(sections) * 0.70:
+        return kb_entry["content"]
+
+    if not relevant:
+        # Safety net: return the single best-scoring section
+        relevant = [max(scored, key=lambda x: x[1])[0]]
+
+    return "\n\n---\n\n".join(sec["body"] for sec in relevant)
+
+
 def _build_kb_index() -> list:
     """
-    Load KB .md files from KB_DIR, pairing each with its trigger phrases.
-    Only files listed in _KB_TRIGGER_MAP are loaded.
-    Returns a list of dicts: {kb_id, title, content, triggers (frozenset of lowercase strings)}.
+    Load KB .md files from KB_DIR, pairing each with its trigger phrases and
+    parsed sections. Only files listed in _KB_TRIGGER_MAP are loaded.
+    Returns list of dicts: {kb_id, title, content, sections, triggers}.
     """
     if not KB_DIR.exists():
         return []
@@ -387,6 +501,7 @@ def _build_kb_index() -> list:
                 "kb_id":    meta["kb_id"],
                 "title":    meta["title"],
                 "content":  content,
+                "sections": _parse_kb_sections(content),
                 "triggers": frozenset(t.lower() for t in meta["triggers"]),
             })
         except Exception:
@@ -400,8 +515,7 @@ _KB_INDEX: list = _build_kb_index()
 def _kb_match(message: str) -> Optional[dict]:
     """
     Return the first KB entry whose trigger phrases appear in the user's message,
-    or None if no article matches.
-    Matching is case-insensitive substring search.
+    or None if no article matches. Case-insensitive substring search.
     """
     msg_lower = message.lower()
     for entry in _KB_INDEX:
@@ -875,10 +989,13 @@ def chat_stream(req: ChatRequest):
     kb_entry = _kb_match(req.message)
     if kb_entry:
         conv_id = get_or_create_conversation(req.conversation_id)
+
+        # Extract only the sections relevant to this specific question
+        relevant_content = _kb_relevant_sections(kb_entry, req.message)
         kb_response = (
-            f"📚 *Answered from local knowledge base · {kb_entry['kb_id']} · 0 tokens used*\n\n"
+            f"📚 *{kb_entry['kb_id']} · Local knowledge base · 0 tokens used*\n\n"
             "---\n\n"
-            + kb_entry["content"]
+            + relevant_content
         )
 
         def kb_event_generator():
