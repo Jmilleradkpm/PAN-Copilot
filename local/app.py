@@ -602,6 +602,7 @@ def _kb_relevant_sections(kb_entry: dict, message: str) -> str:
       5. Fall back to the full article when:
          - No sections are parsed (shouldn't happen with current KB files)
          - No question words could be extracted (very short / single-word query)
+         - max_score ≤ 1 (single keyword hit — not enough signal to filter)
          - No sections score above the threshold (no signal → return all)
          - ≥ 70% of sections qualify (question is broad → return all)
     """
@@ -627,6 +628,11 @@ def _kb_relevant_sections(kb_entry: dict, message: str) -> str:
     if max_score == 0:
         return kb_entry["content"]
 
+    # A max score of 1 means only one keyword appeared once across all sections —
+    # not enough signal to meaningfully filter. Return the full article.
+    if max_score <= 1:
+        return kb_entry["content"]
+
     threshold = max(2, int(max_score * 0.30))
     relevant = [sec for sec, s in scored if s >= threshold]
 
@@ -635,8 +641,9 @@ def _kb_relevant_sections(kb_entry: dict, message: str) -> str:
         return kb_entry["content"]
 
     if not relevant:
-        # Safety net: return the single best-scoring section
-        relevant = [max(scored, key=lambda x: x[1])[0]]
+        # No sections cleared the threshold — not enough signal to pick sections.
+        # Return the full article rather than an arbitrary single section.
+        return kb_entry["content"]
 
     return "\n\n---\n\n".join(sec["body"] for sec in relevant)
 
