@@ -258,40 +258,92 @@ Read the user's question carefully and match response length to the complexity o
 """
 
 
-def load_kb_documents() -> str:
+SYSTEM_PROMPT = load_system_prompt() + _RESPONSE_STYLE_ADDENDUM
+
+# ---------------------------------------------------------------------------
+# KB index — zero-token local responses
+#
+# When a user's question matches a KB article's trigger phrases, the full
+# article is streamed back directly without any Anthropic API call.
+# This saves the user's query quota AND eliminates API latency entirely.
+#
+# To add a new KB article:
+#   1. Drop a .md file into local/kb/
+#   2. Add an entry below in _KB_TRIGGER_MAP keyed by filename
+#   3. List trigger phrases (any one match → serve this article)
+# ---------------------------------------------------------------------------
+
+_KB_TRIGGER_MAP: dict = {
+    "gp_always_prelogon.md": {
+        "kb_id": "KB-GP-PRELOGON-001",
+        "title": "GlobalProtect Always Pre-Logon (Always On) — Complete Setup Guide",
+        "triggers": [
+            "pre-logon",
+            "pre logon",
+            "prelogon",
+            "always pre-logon",
+            "always pre logon",
+            "gp pre-logon",
+            "gp pre logon",
+            "globalprotect pre-logon",
+            "globalprotect pre logon",
+            "globalprotect always on",
+            "always-on vpn",
+            "always on vpn",
+            "machine cert globalprotect",
+            "globalprotect machine cert",
+            "machine certificate globalprotect",
+            "globalprotect machine certificate",
+            "kb-gp-prelogon",
+            "kb-gp-prelogon-001",
+        ],
+    },
+}
+
+
+def _build_kb_index() -> list:
     """
-    Load all .md files from the kb/ directory (bundled alongside app.py).
-    Returns a formatted string appended to the system prompt so the model
-    can reference internal KB articles when answering questions.
-    Returns an empty string if the kb/ directory does not exist or is empty.
+    Load KB .md files from KB_DIR, pairing each with its trigger phrases.
+    Only files listed in _KB_TRIGGER_MAP are loaded.
+    Returns a list of dicts: {kb_id, title, content, triggers (frozenset of lowercase strings)}.
     """
     if not KB_DIR.exists():
-        return ""
-    sections = []
+        return []
+    entries = []
     for kb_file in sorted(KB_DIR.glob("*.md")):
+        meta = _KB_TRIGGER_MAP.get(kb_file.name)
+        if not meta:
+            continue
         try:
             content = kb_file.read_text(encoding="utf-8").strip()
-            if content:
-                sections.append(content)
+            if not content:
+                continue
+            entries.append({
+                "kb_id":    meta["kb_id"],
+                "title":    meta["title"],
+                "content":  content,
+                "triggers": frozenset(t.lower() for t in meta["triggers"]),
+            })
         except Exception:
             pass
-    if not sections:
-        return ""
-    joined = "\n\n---\n\n".join(sections)
-    return (
-        "\n\n"
-        "## Internal Knowledge Base\n\n"
-        "The following reference documents are internal ADK Cyber knowledge base articles. "
-        "Use them to answer user questions accurately and precisely. "
-        "When a user's question matches content in a KB article, draw on that article's "
-        "step-by-step guidance, CLI commands, and configuration values. "
-        "Replace placeholder values such as <GATEWAY-PUBLIC-IP> with a note that the user "
-        "should substitute their own values.\n\n"
-        + joined
-    )
+    return entries
 
 
-SYSTEM_PROMPT = load_system_prompt() + _RESPONSE_STYLE_ADDENDUM + load_kb_documents()
+_KB_INDEX: list = _build_kb_index()
+
+
+def _kb_match(message: str) -> Optional[dict]:
+    """
+    Return the first KB entry whose trigger phrases appear in the user's message,
+    or None if no article matches.
+    Matching is case-insensitive substring search.
+    """
+    msg_lower = message.lower()
+    for entry in _KB_INDEX:
+        for phrase in entry["triggers"]:
+            if phrase in msg_lower:
+                return entry
+    return None
 
 # ---------------------------------------------------------------------------
 # Pydantic models
@@ -751,6 +803,48 @@ def chat_stream(req: ChatRequest):
             status_code=401,
             detail="Not logged in. Please sign in to use ADK Cyber AI."
         )
+
+    # ── KB short-circuit ────────────────────────────────────────────────────
+    # If the user's question matches a local KB article, serve it directly.
+    # No Anthropic API call, no quota consumed, no latency.
+    kb_entry = _kb_match(req.message)
+    if kb_entry:
+        conv_id = get_or_create_conversation(req.conversation_id)
+        kb_response = (
+            f"📚 *Answered from local knowledge base · {kb_entry['kb_id']} · 0 tokens used*\n\n"
+            "---\n\n"
+            + kb_entry["content"]
+        )
+
+        def kb_event_generator():
+            # Stream in 512-character chunks so the frontend renders progressively
+            chunk_size = 512
+            for i in range(0, len(kb_response), chunk_size):
+                yield f"data: {json.dumps({'type': 'token', 'text': kb_response[i:i + chunk_size]})}\n\n"
+            save_messages(conv_id, req.message, kb_response)
+            auto_title(conv_id, req.message)
+            yield (
+                "data: " + json.dumps({
+                    "type":               "done",
+                    "model":              "local-kb",
+                    "input_tokens":       0,
+                    "output_tokens":      0,
+                    "conversation_id":    conv_id,
+                    "queries_used":       _session_cache.get("queries_used"),
+                    "queries_limit":      _session_cache.get("queries_limit"),
+                    "queries_remaining":  _session_cache.get("queries_remaining"),
+                    "period":             _session_cache.get("period", "weekly"),
+                    "tier":               _session_cache.get("tier"),
+                    "redactions":         0,
+                }) + "\n\n"
+            )
+
+        return StreamingResponse(
+            kb_event_generator(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+    # ── End KB short-circuit ────────────────────────────────────────────────
 
     api_key = _session_cache.get("anthropic_key")
     if not api_key:
