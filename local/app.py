@@ -55,6 +55,7 @@ def _base() -> Path:
 
 FRONTEND_PATH      = _base() / "pan_copilot_desktop.html"
 SYSTEM_PROMPT_PATH = _base() / "PAN_Copilot_Master_System_Prompt.md"
+KB_DIR             = _base() / "kb"
 
 # ---------------------------------------------------------------------------
 # License server URL
@@ -256,7 +257,41 @@ Read the user's question carefully and match response length to the complexity o
 - Default to the shortest accurate answer. Expand only when the question is explicitly broad.
 """
 
-SYSTEM_PROMPT = load_system_prompt() + _RESPONSE_STYLE_ADDENDUM
+
+def load_kb_documents() -> str:
+    """
+    Load all .md files from the kb/ directory (bundled alongside app.py).
+    Returns a formatted string appended to the system prompt so the model
+    can reference internal KB articles when answering questions.
+    Returns an empty string if the kb/ directory does not exist or is empty.
+    """
+    if not KB_DIR.exists():
+        return ""
+    sections = []
+    for kb_file in sorted(KB_DIR.glob("*.md")):
+        try:
+            content = kb_file.read_text(encoding="utf-8").strip()
+            if content:
+                sections.append(content)
+        except Exception:
+            pass
+    if not sections:
+        return ""
+    joined = "\n\n---\n\n".join(sections)
+    return (
+        "\n\n"
+        "## Internal Knowledge Base\n\n"
+        "The following reference documents are internal ADK Cyber knowledge base articles. "
+        "Use them to answer user questions accurately and precisely. "
+        "When a user's question matches content in a KB article, draw on that article's "
+        "step-by-step guidance, CLI commands, and configuration values. "
+        "Replace placeholder values such as <GATEWAY-PUBLIC-IP> with a note that the user "
+        "should substitute their own values.\n\n"
+        + joined
+    )
+
+
+SYSTEM_PROMPT = load_system_prompt() + _RESPONSE_STYLE_ADDENDUM + load_kb_documents()
 
 # ---------------------------------------------------------------------------
 # Pydantic models

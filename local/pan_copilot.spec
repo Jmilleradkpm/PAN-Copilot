@@ -23,6 +23,7 @@ datas = [
     ("pan_copilot_desktop.html",              "."),
     ("pan_copilot.ico",                       "."),
     ("../PAN_Copilot_Master_System_Prompt.md", "."),
+    ("kb",                                    "kb"),  # KB articles directory
 ]
 
 # Hidden imports that uvicorn/anyio need but PyInstaller misses
