@@ -298,6 +298,71 @@ _KB_TRIGGER_MAP: dict = {
             "kb-gp-prelogon-001",
         ],
     },
+    "pan_decryption_troubleshooting.md": {
+        "kb_id": "KB-PAN-DEC-001",
+        "title": "SSL/TLS Decryption Troubleshooting on Palo Alto Networks NGFW",
+        "triggers": [
+            # Decryption modes
+            "ssl decryption",
+            "tls decryption",
+            "ssl/tls decryption",
+            "ssl forward proxy",
+            "forward proxy",
+            "ssl inbound inspection",
+            "inbound inspection",
+            "ssh proxy",
+            # Policy/profile terminology
+            "decryption profile",
+            "decrypt rule",
+            "decryption policy",
+            "decryption rule",
+            "no-decrypt",
+            "no decrypt",
+            "nodecrypt",
+            "ssl exclusion",
+            "decryption exclusion",
+            # Trust & cert issues
+            "forward trust",
+            "forward trust ca",
+            "forward untrust",
+            "incomplete chain",
+            "certificate chain",
+            "cert chain",
+            # Failure modes
+            "decryption failure",
+            "decryption log",
+            "decryption troubleshoot",
+            "decrypt troubleshoot",
+            "decrypt broken",
+            "decryption broken",
+            "untrusted issuer",
+            "unsupported cipher",
+            "unsupported version",
+            "sni mismatch",
+            # Pinning & mTLS
+            "cert pinning",
+            "certificate pinning",
+            "pinned cert",
+            "mutual tls",
+            "mtls",
+            "client authentication required",
+            # QUIC
+            "block quic",
+            "quic bypass",
+            "quic decrypt",
+            "quic http",
+            "http/3",
+            "http3",
+            # OCSP/CRL
+            "ocsp firewall",
+            "ocsp decryption",
+            "crl firewall",
+            "unknown certificate status",
+            # Direct KB ID references
+            "kb-pan-dec",
+            "kb-pan-dec-001",
+        ],
+    },
 }
 
 
