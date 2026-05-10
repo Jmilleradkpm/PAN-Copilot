@@ -1160,10 +1160,9 @@ def chat_stream(req: ChatRequest):
         )
 
         def kb_event_generator():
-            # Stream in 512-character chunks so the frontend renders progressively
-            chunk_size = 512
-            for i in range(0, len(kb_response), chunk_size):
-                yield f"data: {json.dumps({'type': 'token', 'text': kb_response[i:i + chunk_size]})}\n\n"
+            # Send the full KB response as one token so the markdown renderer
+            # always receives complete tables and code blocks — never a mid-row slice.
+            yield f"data: {json.dumps({'type': 'token', 'text': kb_response})}\n\n"
             save_messages(conv_id, req.message, kb_response)
             auto_title(conv_id, req.message)
             yield (

@@ -340,8 +340,45 @@
     .msg-content em { color: var(--yellow); font-style: normal; }
     .msg-content ul, .msg-content ol { margin: 6px 0 9px 18px; }
     .msg-content li { margin: 3px 0; }
-    .msg-content h3 { font-size: 13.5px; font-weight: 700; color: var(--text); margin: 12px 0 5px; }
-    .msg-content h4 { font-size: 12px; font-weight: 600; color: var(--text-sub); margin: 9px 0 4px; text-transform: uppercase; letter-spacing: 0.05em; }
+    .msg-content h1 { font-size: 17px; font-weight: 700; color: var(--text); margin: 20px 0 10px; padding-bottom: 7px; border-bottom: 1px solid var(--border); }
+    .msg-content h2 { font-size: 14.5px; font-weight: 700; color: var(--text); margin: 18px 0 7px; padding-bottom: 5px; border-bottom: 1px solid var(--border-dim); }
+    .msg-content h3 { font-size: 13.5px; font-weight: 700; color: var(--text); margin: 14px 0 6px; }
+    .msg-content h4 { font-size: 11.5px; font-weight: 700; color: var(--accent); margin: 11px 0 4px; text-transform: uppercase; letter-spacing: 0.07em; }
+    .msg-content hr { border: none; border-top: 1px solid var(--border-dim); margin: 16px 0; }
+    .msg-content blockquote {
+      border-left: 3px solid var(--accent); padding: 9px 14px;
+      margin: 12px 0; background: var(--accent-dim); border-radius: 0 6px 6px 0;
+      color: var(--text-sub); font-size: 13px; line-height: 1.6;
+    }
+    .msg-content blockquote strong { color: var(--text); }
+    /* Tables */
+    .msg-content .md-table-wrap { overflow-x: auto; margin: 12px 0 16px; border-radius: var(--radius); border: 1px solid var(--border); }
+    .msg-content .md-table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+    .msg-content .md-table th {
+      background: var(--surface2); color: var(--text); font-weight: 600;
+      padding: 8px 12px; border-bottom: 1px solid var(--border);
+      border-right: 1px solid var(--border-dim); text-align: left;
+      white-space: nowrap; font-size: 12px;
+    }
+    .msg-content .md-table th:last-child { border-right: none; }
+    .msg-content .md-table td {
+      padding: 7px 12px; border-bottom: 1px solid var(--border-dim);
+      border-right: 1px solid var(--border-dim); color: var(--text);
+      vertical-align: top; line-height: 1.5; font-size: 12.5px;
+    }
+    .msg-content .md-table td:last-child { border-right: none; }
+    .msg-content .md-table tr:last-child td { border-bottom: none; }
+    .msg-content .md-table tr:nth-child(even) td { background: rgba(255,255,255,0.025); }
+    [data-theme="light"] .msg-content .md-table tr:nth-child(even) td { background: rgba(0,0,0,0.025); }
+    /* Checklist items */
+    .msg-content li.checklist-item { list-style: none; margin-left: -4px; display: flex; align-items: flex-start; gap: 8px; }
+    .msg-content .checkbox {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 13px; height: 13px; min-width: 13px;
+      border: 1px solid var(--border); border-radius: 2px;
+      font-size: 9px; font-weight: 900; margin-top: 4px; flex-shrink: 0;
+    }
+    .msg-content .checkbox.checked { background: var(--accent); border-color: var(--accent); color: #0a1520; }
     .msg-content code {
       background: var(--code-bg); border: 1px solid var(--code-border);
       border-radius: 3px; padding: 1px 5px;
@@ -1781,34 +1818,177 @@ function escHtml(str) {
   return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
+// ── Full GFM markdown renderer ────────────────────────────────────
 function renderMarkdown(md) {
-  let html = escHtml(md);
-  // Code blocks
-  html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => {
-    const l = lang || 'text';
-    return `<div class="code-block">
-      <div class="code-block-header">
-        <span class="code-lang">${escHtml(l)}</span>
-        <button class="copy-btn" onclick="copyCode(this)">Copy</button>
-      </div>
-      <pre>${code}</pre>
-    </div>`;
+  if (!md) return '';
+
+  // 1. Extract and protect fenced code blocks before any other processing
+  const codeBlocks = [];
+  let s = md.replace(/```([\w.-]*)\r?\n?([\s\S]*?)```/g, (_, lang, code) => {
+    const l = escHtml((lang || 'text').trim());
+    const c = escHtml(code.replace(/\n$/, ''));
+    const idx = codeBlocks.length;
+    codeBlocks.push(
+      `<div class="code-block">` +
+      `<div class="code-block-header">` +
+      `<span class="code-lang">${l}</span>` +
+      `<button class="copy-btn" onclick="copyCode(this)">Copy</button>` +
+      `</div><pre>${c}</pre></div>`
+    );
+    return `\x00CB${idx}\x00`;
   });
-  // Inline code
-  html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
-  // Bold
-  html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-  // H3/H4
-  html = html.replace(/^#### (.+)$/gm, '<h4>$1</h4>');
-  html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
-  // Lists
-  html = html.replace(/^[\*\-] (.+)$/gm, '<li>$1</li>');
-  html = html.replace(/(<li>.*<\/li>\n?)+/gs, m => `<ul>${m}</ul>`);
-  html = html.replace(/^\d+\. (.+)$/gm, '<li>$1</li>');
-  // Paragraphs
-  html = html.replace(/\n{2,}/g, '</p><p>');
-  html = html.replace(/\n/g, '<br>');
-  return `<p>${html}</p>`;
+
+  // 2. Process line-by-line for block elements
+  const lines = s.split('\n');
+  const out = [];
+  let i = 0;
+
+  while (i < lines.length) {
+    const raw  = lines[i];
+    const line = raw.trim();
+
+    // ── Code block placeholder (whole line)
+    if (/^\x00CB\d+\x00$/.test(line)) {
+      out.push(raw.replace(/\x00CB(\d+)\x00/, (_, n) => codeBlocks[+n]));
+      i++; continue;
+    }
+
+    // ── Horizontal rule
+    if (/^(-{3,}|\*{3,}|_{3,})$/.test(line)) {
+      out.push('<hr>');
+      i++; continue;
+    }
+
+    // ── ATX Headers (# through ####)
+    const hm = line.match(/^(#{1,4})\s+(.+)/);
+    if (hm) {
+      const level = hm[1].length;
+      out.push(`<h${level}>${inlineMd(hm[2].replace(/#*\s*$/, '').trim())}</h${level}>`);
+      i++; continue;
+    }
+
+    // ── Table (header row followed by separator row |---|---|)
+    if (/^\|/.test(line) && i + 1 < lines.length && /^\|[\s\-:| ]+\|$/.test(lines[i + 1].trim())) {
+      const headers = splitRow(lines[i]);
+      i += 2; // skip header + separator
+      const rows = [];
+      while (i < lines.length && /^\|/.test(lines[i].trim())) {
+        rows.push(splitRow(lines[i]));
+        i++;
+      }
+      let t = '<div class="md-table-wrap"><table class="md-table"><thead><tr>';
+      headers.forEach(h => { t += `<th>${inlineMd(h)}</th>`; });
+      t += '</tr></thead>';
+      if (rows.length) {
+        t += '<tbody>';
+        rows.forEach(row => {
+          t += '<tr>';
+          for (let ci = 0; ci < Math.max(row.length, headers.length); ci++) {
+            t += `<td>${inlineMd(row[ci] || '')}</td>`;
+          }
+          t += '</tr>';
+        });
+        t += '</tbody>';
+      }
+      t += '</table></div>';
+      out.push(t);
+      continue;
+    }
+
+    // ── Blockquote
+    if (/^>/.test(line)) {
+      const bq = [];
+      while (i < lines.length && /^>/.test(lines[i].trim())) {
+        bq.push(lines[i].trim().replace(/^>\s?/, ''));
+        i++;
+      }
+      out.push(`<blockquote>${inlineMd(bq.join('\n'))}</blockquote>`);
+      continue;
+    }
+
+    // ── Ordered list
+    if (/^\d+\.\s/.test(line)) {
+      const items = [];
+      while (i < lines.length && /^\d+\.\s/.test(lines[i].trim())) {
+        items.push(`<li>${inlineMd(lines[i].trim().replace(/^\d+\.\s+/, ''))}</li>`);
+        i++;
+      }
+      out.push(`<ol>${items.join('')}</ol>`);
+      continue;
+    }
+
+    // ── Unordered list (supports - [ ] checkbox syntax)
+    if (/^[-*]\s/.test(line)) {
+      const items = [];
+      while (i < lines.length && /^[-*]\s/.test(lines[i].trim())) {
+        const lt = lines[i].trim();
+        const ck = lt.match(/^[-*]\s\[([ xX])\]\s(.+)/);
+        if (ck) {
+          const done = ck[1].toLowerCase() === 'x';
+          items.push(
+            `<li class="checklist-item">` +
+            `<span class="checkbox${done ? ' checked' : ''}">${done ? '✓' : ''}</span>` +
+            `${inlineMd(ck[2])}</li>`
+          );
+        } else {
+          items.push(`<li>${inlineMd(lt.replace(/^[-*]\s+/, ''))}</li>`);
+        }
+        i++;
+      }
+      out.push(`<ul>${items.join('')}</ul>`);
+      continue;
+    }
+
+    // ── Blank line
+    if (line === '') { i++; continue; }
+
+    // ── Paragraph: accumulate non-blank, non-block lines
+    const paraLines = [];
+    while (i < lines.length) {
+      const pt = lines[i].trim();
+      if (pt === '') break;
+      if (/^(#{1,4}\s|-{3,}|\*{3,}|_{3,}|>\s?|\||\d+\.\s|[-*]\s|\x00CB)/.test(pt)) break;
+      paraLines.push(lines[i]);
+      i++;
+    }
+    if (paraLines.length) {
+      out.push(`<p>${inlineMd(paraLines.join('<br>'))}</p>`);
+    } else {
+      i++; // safety: never infinite-loop
+    }
+  }
+
+  // 3. Restore any code block placeholders that ended up inside paragraph text
+  return out.join('\n').replace(/\x00CB(\d+)\x00/g, (_, n) => codeBlocks[+n]);
+}
+
+// Split a markdown table row "| a | b | c |" → ["a","b","c"]
+function splitRow(line) {
+  return line.trim().replace(/^\||\|$/g, '').split('|').map(c => c.trim());
+}
+
+// Inline markdown: bold, italic, inline-code, escaping
+function inlineMd(text) {
+  if (!text) return '';
+  // Escape HTML entities
+  let t = text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+  // Protect inline code from bold/italic processing
+  const ic = [];
+  t = t.replace(/`([^`]+)`/g, (_, code) => {
+    ic.push(`<code>${code}</code>`);
+    return `\x00IC${ic.length - 1}\x00`;
+  });
+  // Bold (** or __)
+  t = t.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
+  t = t.replace(/__([^_\n]+)__/g,      '<strong>$1</strong>');
+  // Italic (* or _) — single, not at word boundary to avoid CIDR clashes
+  t = t.replace(/\*([^*\n]+)\*/g, '<em>$1</em>');
+  // Restore inline code
+  t = t.replace(/\x00IC(\d+)\x00/g, (_, n) => ic[+n]);
+  return t;
 }
 
 function copyCode(btn) {
