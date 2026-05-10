@@ -1,438 +1,922 @@
-# KB: SSL/TLS Decryption Troubleshooting on Palo Alto Networks NGFW
+# KB: SSL/TLS Decryption Breakage — Causes, Diagnostics, and Fixes
 
 **Article ID:** KB-PAN-DEC-001
-**Applies to:** PAN-OS 10.0 / 10.1 / 10.2 / 11.0 / 11.1 / 11.2; Panorama-managed and standalone NGFW; Prisma Access Cloud-Managed (where noted)
-**Audience:** Security/Network engineers responsible for SSL Forward Proxy, SSL Inbound Inspection, or SSH Proxy
-**Severity rating:** P2 (broken apps), P3 (partial breakage), informational (proactive hardening)
+**Revision:** 2.0 — Consolidated
+
+| Field | Value |
+|-------|-------|
+| **Primary Issue** | SSL/TLS Decryption is a high-volume, long-tail ticket driver because individual applications fail for different technical reasons: certificate-chain defects, cipher and protocol mismatches, certificate pinning, mutual TLS, QUIC/HTTP3, ECH, and policy design gaps |
+| **Audience** | Firewall engineers, SOC analysts, network security teams, help desk escalation teams |
+| **Scope** | SSL Forward Proxy, SSL Inbound Inspection, technical exclusions, no-decrypt policy, QUIC/HTTP3, ECH |
+| **Platforms** | Palo Alto Networks NGFW, Panorama-managed NGFW, Prisma Access (where noted) |
+| **PAN-OS Focus** | PAN-OS 10.x and 11.x |
+| **Outcome** | A repeatable workflow for identifying the failure reason and applying the narrowest safe fix |
+
+> **How to use this article:** Start with the Decryption log failure reason, then move to the SNI or hostname, then validate protocol, certificate chain, cipher negotiation, and application behavior. Avoid broad exceptions until the root cause is confirmed.
 
 ---
 
-## 1. Summary
+## Contents
 
-SSL/TLS decryption is consistently the largest source of long-tail support tickets on Palo Alto NGFWs. Symptoms range from a single SaaS app refusing to load to entire user populations losing access to a banking site. The root causes almost always fall into one of nine categories — and the diagnostic path is the same regardless of which category you're in.
-
-This article gives you:
-
-1. A repeatable diagnostic workflow ("where do I even start")
-2. The nine failure modes that cover ~95% of decryption tickets, each with detection logic and a fix
-3. CLI cheat-sheet for decryption troubleshooting
-4. A defensible methodology for building a no-decrypt list
-5. A phased rollout strategy that prevents these tickets in the first place
-
----
-
-## 2. Background: Why Decryption Breaks (and Why It's Hard)
-
-Decryption is a man-in-the-middle operation. The firewall presents a forged certificate to the client, terminates the original session with the server, and re-encrypts in both directions. Anything that breaks the trust model on **either** side breaks the session — and modern apps deliberately try to detect MITM:
-
-- **Cert pinning** — apps ship with the legitimate server's public key hash baked in. If the firewall presents a different cert (even a valid one), the app refuses to connect.
-- **TLS 1.3** — encrypted handshakes (encrypted SNI, encrypted certificate, ECH) reduce visibility into what failed.
-- **QUIC/HTTP3** — runs on UDP/443; the firewall cannot decrypt QUIC. Apps fall back to TCP only if QUIC is blocked.
-- **Mutual TLS (mTLS)** — the server requires a client cert. Forward Proxy can't supply one for the client.
-- **Cert chain hygiene** — many origin servers serve incomplete chains; browsers fix this with AIA-fetching, but PAN-OS does not by default for forward proxy.
-- **Revocation** — the firewall must reach OCSP/CRL endpoints; if it can't, you choose between failing closed (breaks apps) or failing open (weakens security).
-
-The job is rarely "make decryption work for everything." The job is **decrypt what you can, exclude what you must, and prove which bucket each app is in.**
+1. Executive Summary
+2. First-Principles Model of SSL/TLS Decryption
+3. Decryption Modes — Quick Reference
+4. User-Facing and Firewall-Facing Symptoms
+5. Root-Cause Matrix
+6. Engineer Triage Workflow
+7. Detailed Causes and Fixes
+8. Half-Loading Websites
+9. No-Decrypt and Exclusion Design
+10. PAN-OS Configuration Checks
+11. Recommended Decryption Profile — Baseline Config
+12. Testing Commands
+13. CLI Cheat Sheet
+14. Standard Fix Workflows
+15. What Not to Do
+16. Escalation Checklist
+17. Recommended Baseline Posture
+18. Phased Rollout Strategy
+19. References
+20. Revision History
 
 ---
 
-## 3. Decryption Modes Quick Reference
+## 1. Executive Summary
 
-| Mode | Use Case | Cert Source | Common Failure Pattern |
-|------|----------|-------------|------------------------|
-| **SSL Forward Proxy** | Outbound user → internet TLS | Forward Trust + Forward Untrust CAs on FW | Cert pinning, incomplete chains, mTLS, QUIC |
-| **SSL Inbound Inspection** | Inbound to internal server | Server's actual cert + private key on FW | Wrong cert/key uploaded, ECDHE PFS without RSA fallback |
-| **SSH Proxy** | Outbound SSH | Auto-generated | Host key changed alarms |
-| **No-Decrypt rule** | Privacy/compliance/breakage exclusion | None (passes through) | Still applies cert validation if profile attached |
+SSL/TLS decryption breaks when the firewall cannot safely or technically complete the TLS proxy operation between the client and the destination server. In SSL Forward Proxy, the firewall establishes one TLS session with the internal client and a separate TLS session with the external server. This means decryption depends on client trust, server certificate validation, protocol compatibility, cipher compatibility, and application behavior.
 
-Most tickets are **SSL Forward Proxy**. This article focuses there, but Section 7.5 covers Inbound Inspection.
+The most reliable troubleshooting method is not to guess the exception first. The reliable method is to prove where the TLS transaction fails, identify the exact hostname or SNI, determine the failure reason, and apply the narrowest fix that restores service without creating unnecessary encrypted blind spots.
+
+> **Core operating rule:** Do not create a permanent no-decrypt rule just because bypassing decryption makes the application work. A bypass proves decryption is involved. It does not prove which technical condition failed.
 
 ---
 
-## 4. The Diagnostic Workflow
+## 2. First-Principles Model of SSL/TLS Decryption
 
-Use this order. Skipping steps is how you spend three hours on a fifteen-minute fix.
+Decryption means converting ciphertext back into plaintext using a cryptographic algorithm and key. For enterprise TLS inspection, the firewall creates a controlled proxy relationship between the client and the server. The client no longer sees the public server certificate directly — it sees a certificate generated by the firewall and signed by the firewall's enterprise Forward Trust CA. The firewall then validates and negotiates its own independent TLS session with the destination server.
 
-### Step 1 — Confirm the user/app is actually hitting a decrypt rule
+That design is intentional, but it means any trust, protocol, cipher, or application validation failure on **either side** of the proxy can break the session.
 
-In the GUI: **Monitor → Logs → Traffic**, filter on the user/source IP, then look at the **Decrypted** column (you may need to enable it via the column picker). If it's blank or "no", the session never matched a decrypt policy — the problem isn't decryption, it's policy/routing/NAT.
+### Minimum conditions for successful decryption
 
-CLI equivalent:
+- The endpoint trusts the firewall's Forward Trust CA in the correct trust store (OS, browser, application-specific).
+- The firewall can validate the destination server certificate chain.
+- The client, firewall, and server can negotiate compatible TLS versions and cipher suites.
+- The application does not reject inspection through certificate pinning or mutual TLS requirements.
+- The traffic uses a decryptable transport path — typically TLS over TCP/443, not QUIC over UDP/443.
+- The traffic matches the intended decryption policy rule and decryption profile with action `decrypt`.
+
+---
+
+## 3. Decryption Modes — Quick Reference
+
+| Mode | Use Case | Certificate Source | Most Common Failure Pattern |
+|------|----------|-------------------|----------------------------|
+| **SSL Forward Proxy** | Outbound user → internet TLS | Forward Trust + Forward Untrust CAs on firewall | Cert pinning, incomplete chains, mTLS, QUIC bypass |
+| **SSL Inbound Inspection** | Inbound traffic to internal/DMZ server | Server's actual cert + private key imported to firewall | Wrong cert/key pair uploaded; ECDHE PFS without RSA fallback |
+| **SSH Proxy** | Outbound SSH inspection | Auto-generated host key | Host key changed alarms on SSH clients |
+| **No-Decrypt rule** | Privacy / compliance / breakage exclusion | None — passes through | Still enforces cert validation if profile attached; QUIC silently bypasses if not blocked separately |
+
+Most production tickets are **SSL Forward Proxy**. This article focuses there, with specific callouts for Inbound Inspection where the behavior differs.
+
+---
+
+## 4. User-Facing and Firewall-Facing Symptoms
+
+### 4.1 User-facing symptoms
+
+- A website does not load at all.
+- A website half-loads: the main page appears but images, scripts, authentication redirects, API calls, fonts, or chat widgets fail.
+- A native app fails while the same service works in a browser.
+- The same app works off-network (no firewall) but fails behind the corporate firewall.
+- The browser shows a certificate warning or "secure connection failure."
+- The application returns generic messages: network error, certificate error, TLS error, cannot connect, authentication failed.
+- Teams, Zoom, banking, healthcare, endpoint security, government, or SaaS apps fail inconsistently across users or platforms.
+
+### 4.2 Firewall-facing symptoms
+
+- Decryption logs show specific failure reasons.
+- Traffic logs show the session as allowed, but the application still fails at the client.
+- App-ID shows `ssl`, `web-browsing`, `quic`, or `incomplete` application identification.
+- The session is UDP/443 instead of TCP/443.
+- A decryption profile is blocking unsupported cipher suites, unsupported versions, expired certificates, untrusted issuers, or revoked certificates.
+- The Local SSL Decryption Exclusion Cache contains destinations that dynamically failed decryption for technical reasons.
+
+---
+
+## 5. Root-Cause Matrix
+
+| Root Cause | Typical Signal | Why It Breaks | Correct Fix |
+|---|---|---|---|
+| Incomplete certificate chain | Chain validation errors; site works for some clients, not others | Firewall cannot build trust from leaf certificate to trusted root | Repair server chain; use AIA fetch (PAN-OS 10.1+); or narrow technical exclusion |
+| Untrusted issuing CA | Endpoint or firewall does not trust issuer | Trust path fails on client or firewall side | Deploy Forward Trust CA via GPO/MDM; install intermediates on firewall |
+| Revoked certificate | Certificate status shows revoked | Certificate should no longer be trusted | Replace certificate; document risk-approved temporary exception |
+| Unsupported cipher suite | Handshake or cipher failure in Decryption log | No compatible cipher across client, firewall, and server | Upgrade app/server; adjust narrow profile; exact exclusion as last resort |
+| Weak or mismatched protocol | TLS 1.0/1.1 or SSL required | Decryption profile blocks deprecated versions | Upgrade system; never enable weak protocols globally |
+| TLS 1.3 mismatch | TLS 1.3 site fails or unexpectedly downgrades | Profile max/min version doesn't permit TLS 1.3 | Set Max version = Max in profile; confirm PAN-OS 10.2+ for TLS 1.3 forward proxy |
+| Certificate pinning | Native app fails; browser succeeds | App expects specific cert/key/CA; firewall cert rejected | Exact hostname SSL Decryption Exclusion |
+| Mutual TLS (mTLS) | Client certificate authentication required | Firewall cannot impersonate client private key in forward proxy | Exact destination no-decrypt technical exclusion |
+| QUIC / HTTP3 | App-ID = `quic`; traffic on UDP/443 | Traffic bypasses TCP TLS inspection path entirely | Block QUIC to force TLS fallback |
+| ECH (Encrypted ClientHello) | SNI-dependent controls unreliable | ClientHello metadata is hidden | Block ECH-related DNS record types (SVCB/HTTPS/ANY); control DoH/DoT |
+| Bad exception design | Wrong traffic excluded or included | Policy order or scope is incorrect | Separate technical exclusions from business no-decrypt rules; fix rule order |
+| Embedded third-party content | Main page loads; dependent components fail | Dependencies use separate hostnames and TLS properties | Identify each failing hostname individually via HAR; fix only what fails |
+
+---
+
+## 6. Engineer Triage Workflow
+
+### Step 1 — Define the failure precisely
+
+Before touching any configuration:
+
+- [ ] Source IP, source zone, username, and endpoint hostname
+- [ ] Device type, operating system, browser version, application version
+- [ ] Destination FQDN, URL, or application name
+- [ ] Exact timestamp with timezone (critical for log correlation)
+- [ ] Whether the issue is consistently reproducible
+- [ ] Whether it affects one user, one subnet, one OS, one browser, one app, VPN users, or all users
+- [ ] Whether bypassing decryption fixes the issue (proves decryption is involved; does not prove which failure)
+
+### Step 2 — Confirm whether decryption is actually involved
+
+- [ ] Identify the matched decryption policy rule
+- [ ] Identify the matched decryption profile and its action (decrypt / no-decrypt)
+- [ ] Check whether the session is TCP/443 or UDP/443
+- [ ] Check whether App-ID is `quic` (UDP/443 = QUIC bypass — no decryption occurs)
+- [ ] Check whether the failing flow appears in Decryption logs at all
+
+From the CLI — confirm a real session is hitting the right policy:
 
 ```
 show session all filter source <client-ip> destination <dest-ip>
 show session id <id>
 ```
 
-Look for `decrypt mirror : False`, `decrypted : True/False`, and the `application` field. If it shows `incomplete` or `insufficient-data`, the TLS handshake never completed.
+Look for the `decrypt` field, the matched rule name, and the `application` field. If it shows `incomplete` or `insufficient-data`, the TLS handshake never completed.
 
-### Step 2 — Read the Decryption Log (PAN-OS 10.0+)
+### Step 3 — Read the Decryption log (PAN-OS 10.0+)
 
-**Monitor → Logs → Decryption.** This was the single biggest improvement in PAN-OS 10.0 for this work. Every TLS session that touched a decryption policy (decrypt **or** no-decrypt) shows up here with:
+**Monitor → Logs → Decryption** — this is the starting point for every decryption ticket. Enable these columns: receive time, source IP, source user, destination IP, SNI, URL, application, decryption rule, profile, status, failure reason, TLS version, cipher, certificate status, issuer, and certificate chain status.
 
-- `Error Index` and a human-readable failure reason
-- TLS version, cipher suite, key exchange
-- Server certificate fingerprint, CN, SAN, issuer
-- Whether the chain was complete
-- SNI
+> **If logging is not enabled on your decrypt and no-decrypt rules, enable it now before doing anything else.** Options → Log Successful TLS Handshakes + Log Unsuccessful TLS Handshakes. This is off by default and is the single most common reason engineers can't diagnose decryption failures.
 
-If you only do one thing: **enable decryption logging on every decrypt and no-decrypt rule.** It's not on by default. On the rule: `Options → Log Successful TLS Handshakes` and `Log Unsuccessful TLS Handshakes`.
+Common Decryption log failure reasons and what they mean:
 
-### Step 3 — Check Decryption Failure Reasons
+| Failure Reason in Log | Most Likely Cause |
+|---|---|
+| `Unsupported cipher` | Cipher not in decryption profile |
+| `Unsupported version` | TLS version blocked or not negotiable |
+| `Certificate expired` | Server cert or CA cert expired |
+| `Untrusted issuer` | Incomplete chain or missing intermediate |
+| `Certificate chain incomplete` | Server sent only leaf cert |
+| `Unknown certificate status` | OCSP/CRL endpoint unreachable |
+| `Client authentication required` | mTLS — server demanded client cert |
+| `Resource not available` | Dataplane decryption resource exhaustion |
+| `SNI mismatch` | Hostname in SNI doesn't match certificate SAN |
+| `Private key does not match public key` | Inbound Inspection: wrong key imported |
 
-ACC has a dedicated widget: **ACC → SSL Activity → Decryption Failure Reasons**. This aggregates the same data as the Decryption log but groups by reason — invaluable when you're hunting "what's actually broken in production today" rather than chasing a single ticket.
+### Step 4 — Check ACC Decryption Failure Reasons
 
-The reasons you will see most often (verbatim from the firewall):
+**ACC → SSL Activity → Decryption Failure Reasons** aggregates failure reasons across all sessions. Use this when hunting "what's actually broken in production today" rather than chasing a single ticket. It shows the volume and distribution of failure types — invaluable for post-deploy triage.
 
-- `Resource not available`
-- `Unsupported cipher`
-- `Unsupported version`
-- `Unsupported ECDSA curve`
-- `Certificate expired`
-- `Untrusted issuer`
-- `Certificate not yet valid`
-- `Unknown certificate status` (OCSP/CRL fetch failed)
-- `Pinned certificate` (only inferable; PAN-OS doesn't always label this explicitly)
-- `Client authentication required` (mTLS)
-- `SNI mismatch`
+### Step 5 — Run global counters
 
-### Step 4 — Global counters
-
-When the decryption log doesn't tell you enough, drop to counters. This is the single most useful CLI command for decryption work:
+When the Decryption log doesn't tell you enough, run counters around a reproduction:
 
 ```
 show counter global filter aspect ssl delta yes
 ```
 
-Run it, reproduce the failure, run it again. The deltas tell you what failed in the SSL/TLS engine. Counters worth knowing by name:
+Key counters:
 
 | Counter | Meaning |
-|---------|---------|
-| `proxy_ssl_decrypted_packet` | Successful decryption packets |
-| `proxy_decrypt_pkt_drop_no_resource` | Out of decryption resources (sized incorrectly or PBP undersized) |
-| `ssl_proxy_drop_unsupported_protocol` | Client/server forced a TLS version not enabled in your profile |
-| `ssl_proxy_drop_unsupported_cipher` | Cipher suite not in your decryption profile |
+|---|---|
+| `proxy_ssl_decrypted_packet` | Successful decryption packet count |
+| `proxy_decrypt_pkt_drop_no_resource` | Decryption resource exhaustion |
+| `ssl_proxy_drop_unsupported_protocol` | TLS version blocked by profile |
+| `ssl_proxy_drop_unsupported_cipher` | Cipher blocked by profile |
 | `proxy_no_resource` | Hardware/session-table exhaustion |
-| `flow_tcp_non_syn_drop` | TCP state mismatch — often asymmetric routing combined with decrypt |
 
-### Step 5 — Packet capture
+### Step 6 — Fast decision tree
 
-Last resort, but definitive. Set up filters and stages:
+| Symptom | First Place to Look |
+|---|---|
+| UDP/443 or App-ID = `quic` | QUIC/HTTP3 — Section 7.8 |
+| Native app fails, browser succeeds | Certificate pinning or mTLS — Sections 7.6–7.7 |
+| Browser shows certificate warning | Endpoint trust, server chain, revocation, SAN mismatch — Sections 7.1–7.2 |
+| Main page loads, some components fail | Collect HAR; identify failing hostnames — Section 8 |
+| All decrypted traffic fails | Forward Trust CA not on clients — Section 7.2 |
+| Intermittent failures under load | Resource exhaustion — Section 7.10 |
+
+### Step 7 — Packet capture (last resort, definitive)
 
 ```
-debug dataplane packet-diag set filter match source <client> destination <server>
-debug dataplane packet-diag set filter on
-debug dataplane packet-diag set capture stage receive file rx.pcap
-debug dataplane packet-diag set capture stage transmit file tx.pcap
-debug dataplane packet-diag set capture on
-```
-
-Reproduce, then `set capture off`. Files land in `/var/tmp/` (export via SCP). Open in Wireshark and look at the TLS handshake:
-
-- **Client Hello** — what versions/ciphers/SNI did the client offer?
-- **Server Hello** — what did the server (or firewall, in forward proxy) pick?
-- **Certificate** — chain complete? Issuer trusted by client?
-- **Alert** — the alert code tells you everything: `bad_certificate (42)`, `unknown_ca (48)`, `certificate_expired (45)`, `protocol_version (70)`, `handshake_failure (40)`, `unsupported_certificate (43)`, `certificate_unknown (46)`.
-
----
-
-## 5. The Nine Failure Modes
-
-Each section below: **detection signature → root cause → fix**.
-
-### 5.1 Incomplete certificate chain (server-side)
-
-**Detection:** Decryption log shows `Untrusted issuer` or `Certificate chain incomplete`. Browser direct-to-site works (browser fetched the intermediate via AIA); through firewall, it fails.
-
-**Root cause:** The origin server only sends its leaf certificate; the intermediate is not in the firewall's trusted-CA store.
-
-**Fix options:**
-
-1. **Preferred:** Manually import the missing intermediate(s) into **Device → Certificate Management → Certificates** and mark as Trusted Root CA.
-2. **Enable AIA chain construction** (PAN-OS 10.1+): **Device → Certificate Management → Certificate Profile → Use CRL / Use OCSP** and enable AIA fetching at the system level. Note: requires the firewall to reach the AIA URL (typically port 80 outbound).
-3. Tell the application/site owner to fix their chain. (Will not happen.)
-
-**Verification:** `show system setting ssl-decrypt certificate-cache` and check the chain is now resolved.
-
-### 5.2 Forward Trust CA not installed on clients
-
-**Detection:** Browser shows `NET::ERR_CERT_AUTHORITY_INVALID` (Chrome) or `MOZILLA_PKIX_ERROR_MITM_DETECTED` (Firefox in some builds). Decryption log shows handshake completed on the firewall side, but client tears down. Affects **all** decrypted sites uniformly, not one app.
-
-**Root cause:** The Forward Trust certificate the firewall uses to sign forged certs is not in the client's trust store.
-
-**Fix:**
-
-- **Windows domain-joined:** Push via GPO → Computer Configuration → Policies → Windows Settings → Security Settings → Public Key Policies → Trusted Root Certification Authorities. Verify with `certutil -store -enterprise root`.
-- **macOS managed:** Profile via Jamf/Intune/Kandji. Must be marked "Always Trust" in Keychain (System keychain, not login).
-- **iOS/Android:** Push via MDM as a configuration profile + (iOS) toggle in Settings → General → About → Certificate Trust Settings. **Required step on iOS — easy to miss.**
-- **Firefox:** Does not use OS trust store by default. Either enable `security.enterprise_roots.enabled = true` or distribute via policies.json.
-- **BYOD:** You will not solve this for unmanaged devices. Either use captive-portal-installable cert or exclude BYOD source IPs from decryption.
-
-### 5.3 Unsupported cipher suite
-
-**Detection:** Decryption log: `Unsupported cipher`. Counter `ssl_proxy_drop_unsupported_cipher` increments. Often correlates with very modern apps (TLS 1.3 cipher) or very legacy apps (TLS 1.0 RC4-MD5 type).
-
-**Root cause:** Your **Decryption Profile → SSL Forward Proxy → SSL Protocol Settings** doesn't permit the negotiated cipher.
-
-**Fix:**
-
-- **Objects → Decryption → Decryption Profile → SSL Protocol Settings**:
-  - Min TLS version: 1.2 (1.3 if you have full TLS 1.3 decryption support — PAN-OS 10.2+ for forward proxy)
-  - Max TLS version: max
-  - Key Exchange Algorithms: enable RSA, DHE, ECDHE
-  - Encryption Algorithms: AES-128-CBC, AES-256-CBC, AES-128-GCM, AES-256-GCM, ChaCha20-Poly1305 (10.2+)
-  - Authentication Algorithms: SHA-256, SHA-384
-
-**Hard-fail policy:** Resist the urge to enable 3DES or RC4 just to fix one app. Add a no-decrypt exception for that app instead. Loosening cipher rules globally to fix one ticket is how decryption hygiene rots.
-
-### 5.4 Weak / unsupported TLS protocol version
-
-**Detection:** Decryption log: `Unsupported version`. Wireshark Client Hello / Server Hello disagree on version.
-
-**Root cause:** Either profile blocks it, or one side doesn't support what the other offered.
-
-**Fix:** Same Decryption Profile → SSL Protocol Settings. Set Min Version to 1.2 in 2026; **do not** drop to 1.0/1.1 to fix legacy hosts. Exclude legacy hosts via no-decrypt rule and treat them as a remediation backlog item.
-
-**Note for TLS 1.3:** PAN-OS forward proxy support for TLS 1.3 was incomplete pre-10.2. On 10.2+, TLS 1.3 forward proxy works but ECH (Encrypted Client Hello) and ESNI traffic still cannot be decrypted — those sessions get classified as TLS 1.3 and dropped or no-decrypted depending on your profile setting `Block sessions with client authentication`.
-
-### 5.5 Revoked / unknown certificate status
-
-**Detection:** Decryption log: `Unknown certificate status` or `Certificate revoked`. Often intermittent — works when OCSP responder is reachable, fails when it isn't.
-
-**Root cause:** Decryption profile has `Block sessions with expired certificates` and `Block sessions with unknown certificate status` enabled, and the firewall cannot reach OCSP/CRL endpoints. Common failure on networks where the firewall management plane has restricted internet egress.
-
-**Fix:**
-
-1. Confirm the firewall MGT (or service-route-configured interface) can reach the issuer's OCSP/CRL URLs. Common ones: `ocsp.digicert.com`, `crl3.digicert.com`, `ocsp.pki.goog`, `r3.o.lencr.org`.
-2. Configure a service route: **Device → Setup → Services → Service Route Configuration** — point CRL/OCSP traffic out a dataplane interface with internet access.
-3. Last resort: uncheck `Block sessions with unknown certificate status` in the decryption profile. Document the risk acceptance.
-4. If you use a corporate proxy for outbound, configure it under **Device → Setup → Services → Proxy Server**.
-
-### 5.6 Certificate pinning (Teams, Zoom, banking apps, mobile apps)
-
-**Detection:** Specific app fails consistently. Other apps on same client work fine. Decryption log shows handshake completed successfully on firewall side. No alert in firewall logs from the client. App often shows generic "cannot connect" error. Sometimes only mobile clients of the app fail while the web version works.
-
-**Root cause:** App ships with hardcoded public key hash of the legitimate server. The firewall's forged cert doesn't match. App refuses to connect — and refuses to tell you why.
-
-**Fix:** **You cannot decrypt pinned apps.** You must exclude them.
-
-- Use the **PAN-DB SSL Decryption Exclusion list**: **Objects → Decryption → SSL Decryption Exclusion**. PAN updates this list with content updates; it covers known-pinned hosts including most Microsoft 365 services, Zoom, Apple services, Dropbox, and major banking sites.
-- For apps not on the PAN-DB list, build a custom URL category and add to a no-decrypt rule, or use FQDN-based address objects targeting the SNI.
-- **Microsoft 365:** Use the official MS optimize/allow/default endpoint list (https://endpoints.office.com). The "Optimize" category should always be no-decrypt + bypass-content-inspection. "Allow" should be no-decrypt. "Default" can be decrypted.
-- **Zoom:** No-decrypt `*.zoom.us`, `*.zoomgov.com`, plus their media servers (ranges in their docs).
-- **Banking:** No-decrypt the URL category `financial-services` outright — not worth the risk and most jurisdictions impose privacy obligations on financial-data inspection anyway.
-
-### 5.7 Mutual TLS / client certificate authentication required
-
-**Detection:** Decryption log: `Client authentication required`. Server explicitly requests a client cert during handshake.
-
-**Root cause:** The original session uses mTLS. SSL Forward Proxy cannot present a client cert on behalf of the user — the firewall doesn't have it.
-
-**Fix:** Add the destination to a no-decrypt rule. There is no workaround for forward proxy. (Inbound inspection can support mTLS in some configurations — see TechDocs `ssl-inbound-inspection-with-client-auth`.)
-
-Common offenders: developer-facing APIs, federal/government endpoints, healthcare HL7 endpoints, some EDI/B2B integrations.
-
-### 5.8 SNI mismatch / wildcard / hostname issues
-
-**Detection:** Decryption log: `SNI mismatch` or browser shows cert error pointing to wrong CN.
-
-**Root cause:** Client sends SNI `app.example.com`, server returns cert valid for `*.example.com` or `example.com`. Or the firewall forged a cert with the wrong SAN. Or no SNI was sent at all (older clients).
-
-**Fix:**
-
-- For "no SNI" cases: most modern apps send SNI. If you have a legacy app that doesn't, exclude its destination IP via no-decrypt.
-- For forged-cert SAN mismatch (rare since 10.0): check **Device → Certificate Management → Certificate Profile** used for forward trust. Upgrade if you're on a pre-10.0 PAN-OS; this was a known issue area.
-
-### 5.9 QUIC / HTTP/3 bypassing decryption
-
-**Detection:** Browsers (especially Chrome) connect to Google, YouTube, Cloudflare-fronted sites, and you see no decryption log entries. Traffic logs show `quic` application on UDP/443. The firewall sees the metadata but **cannot inspect payload — QUIC is not decryptable on PAN-OS as of PAN-OS 11.2**.
-
-**Root cause:** QUIC encrypts almost everything including the handshake. Even with a MITM cert, you can't decrypt it.
-
-**Fix:** **Block QUIC.** Browsers fall back to TCP/TLS automatically.
-
-- Create a security rule **above** your allow rules: deny `application = quic` in any zone-to-zone path that includes user traffic.
-- For belt-and-suspenders: deny `service = service-quic` (UDP/443) outbound for user zones. Optional but ensures a non-Application-aware engine catches it.
-- Verify: traffic logs should now show `ssl` / `web-browsing` for the same destinations as users connect via TLS instead of QUIC.
-
-**Performance impact:** Negligible for users; modern browsers handle the fallback transparently. Don't skip this — it's the single biggest decryption blind spot in most environments.
-
----
-
-## 6. Building a Defensible No-Decrypt List
-
-A good no-decrypt list is built **bottom-up by category, not by ticket.**
-
-**Tier 1 — Always no-decrypt (legal/regulatory/operational):**
-
-- URL Category `financial-services`
-- URL Category `health-and-medicine`
-- URL Category `government`
-- URL Category `military`
-- PAN-DB SSL Decryption Exclusion list (predefined, content-updated)
-- Microsoft 365 Optimize and Allow endpoints (consume Microsoft's published list via External Dynamic List from `https://endpoints.office.com/endpoints/worldwide?clientrequestid=...`)
-
-**Tier 2 — Pinned apps (operational reality):**
-
-- `*.zoom.us`, `*.zoomgov.com`
-- Apple services (`*.apple.com`, `*.icloud.com`, `*.itunes.apple.com`, push.apple.com)
-- Major MDM endpoints (Jamf, Intune, Workspace ONE)
-- Dropbox, Box (cert-pinned mobile clients)
-- Banking apps your users actually use (collect from network telemetry, not assumption)
-
-**Tier 3 — Privacy/HR-policy:**
-
-- URL Category `personal-storage` (employee personal Dropbox/Drive — debatable, depends on policy)
-- HR/payroll SaaS specific to your stack
-
-**What goes in a Decryption Profile attached to no-decrypt rules:**
-
-Even on no-decrypt rules, attach a profile that **still** validates server certs (block expired, block untrusted issuer). This catches SSL-stripping attacks and bad TLS hygiene without breaking the app.
-
----
-
-## 7. Phased Rollout / Avoiding the Ticket Storm
-
-If you're standing up decryption from scratch (or recovering after disabling it), do not flip it on for everyone at once. Do this:
-
-**Phase 0 — Pre-flight (1–2 weeks):**
-
-1. Push Forward Trust CA to all managed endpoints. Verify on samples from each platform (Win, Mac, iOS, Android, Linux).
-2. Create the no-decrypt list (Section 6). Deploy this **first**, with action `no-decrypt` and logging enabled.
-3. Block QUIC.
-4. Stage decryption profiles but don't reference them yet.
-
-**Phase 1 — Visibility-only (1 week):**
-
-Create a decryption rule with action `decrypt` for a small pilot group (10–20 users, ideally including an exec on each platform — they generate the right kind of feedback fast). Logging on. Walk the Decryption log every morning and triage.
-
-**Phase 2 — Expand by zone/department:**
-
-Roll department by department. Each rollout, watch ACC → Decryption Failure Reasons for 48 hours. Add to the no-decrypt list as needed. Resist the urge to weaken the decryption profile.
-
-**Phase 3 — Tighten:**
-
-After steady state, raise minimum TLS to 1.2, drop weak ciphers, enable strict cert validation (block expired, block untrusted, block unknown status). This is where you go from "decryption works" to "decryption is doing actual security work."
-
----
-
-## 8. CLI Cheat Sheet
-
-```
-# Is this session being decrypted?
-show session id <session-id>
-
-# What's the SSL/TLS engine doing right now?
-show counter global filter aspect ssl delta yes
-
-# Drops with decryption-related severity
-show counter global filter delta yes severity drop
-
-# Decryption certificate cache state
-show system setting ssl-decrypt certificate-cache
-show system setting ssl-decrypt exclude-cache
-
-# What's my current SSL Forward Proxy CA?
-show system setting ssl-decrypt setting
-
-# PAN-DB SSL Decryption Exclusion list (predefined, updated by content)
-request system external-list show name panw-ssl-decryption-exclude-cn-list
-
-# Memory/resource pressure on dataplane
-show running resource-monitor
-
-# Live SSL session count
-show session info | match ssl
-
-# Test cert chain reachability (to OCSP/CRL endpoints)
-ping host ocsp.digicert.com
-test scep-status <profile-name>     # if using SCEP for forward trust
-
-# Packet capture for a specific flow
-debug dataplane packet-diag set filter match source <ip> destination <ip>
+debug dataplane packet-diag set filter match source <client-ip> destination <server-ip>
 debug dataplane packet-diag set filter on
 debug dataplane packet-diag set capture stage receive file rx
 debug dataplane packet-diag set capture stage transmit file tx
+debug dataplane packet-diag set capture stage drop file drop
 debug dataplane packet-diag set capture on
-# reproduce
+# reproduce the failure
 debug dataplane packet-diag set capture off
 debug dataplane packet-diag clear filter-marked-session all
-# files in /var/tmp/, retrieve with: scp export filter-pcap from rx to <host>
+```
+
+Files land in `/var/tmp/`. Export via SCP and open in Wireshark. Look at the TLS handshake sequence:
+
+- **Client Hello** — offered versions, ciphers, SNI
+- **Server Hello** — selected version and cipher
+- **Certificate** — chain complete? Issuer trusted?
+- **TLS Alert** — the alert code tells you everything:
+
+| Alert Code | Meaning |
+|---|---|
+| `bad_certificate (42)` | Certificate rejected |
+| `unknown_ca (48)` | Issuer not trusted |
+| `certificate_expired (45)` | Cert past valid date |
+| `protocol_version (70)` | TLS version incompatible |
+| `handshake_failure (40)` | No cipher in common |
+| `certificate_unknown (46)` | App-level rejection (often pinning) |
+
+---
+
+## 7. Detailed Causes and Fixes
+
+### 7.1 Incomplete certificate chain
+
+**What happens:** A server sends its leaf certificate without the required intermediate. Some browsers recover by fetching intermediates via AIA. The firewall performing strict validation in forward proxy mode may not.
+
+**Detection signals:**
+- Decryption log: `Certificate chain incomplete` or `Untrusted issuer`
+- OpenSSL: `unable to get local issuer certificate` or `unable to verify the first certificate`
+- Same site works in a browser (AIA fetch), fails through the firewall
+
+**CLI verification:**
+```
+openssl s_client -connect example.com:443 -servername example.com -showcerts -verify_return_error
+```
+
+**Fix for servers you own:**
+1. Install the full certificate chain on the server (leaf + intermediate bundle)
+2. Restart or reload the web service
+3. Retest with OpenSSL and confirm the full chain appears
+4. Remove any temporary exception after validation
+
+**Fix for third-party servers:**
+1. Confirm the chain defect from a second network (rules out firewall as cause)
+2. Enable AIA chain construction (PAN-OS 10.1+): **Device → Certificate Management → Certificate Profile** → enable AIA fetching. Requires the firewall to reach the AIA URL (typically outbound port 80)
+3. Alternatively, manually import the missing intermediate: **Device → Certificate Management → Certificates** → mark as Trusted Root CA
+4. If access is business-critical and remediation takes time, create a tightly scoped technical SSL Decryption Exclusion for the **exact** hostname with an owner and expiration date
+
+**Verification:**
+```
+show system setting ssl-decrypt certificate-cache
 ```
 
 ---
 
-## 9. Decryption Profile — Recommended Baseline (PAN-OS 11.x)
+### 7.2 Untrusted CA / Forward Trust certificate not deployed
+
+**What happens:** The firewall's Forward Trust CA is not in the client's trust store. Every decrypted site fails, not just one.
+
+**Detection signals:**
+- Chrome: `NET::ERR_CERT_AUTHORITY_INVALID`
+- Firefox: `MOZILLA_PKIX_ERROR_MITM_DETECTED`
+- Decryption log shows handshake completed on the firewall side; client tears it down
+- Problem affects **all** decrypted destinations uniformly
+
+**Fix by platform:**
+
+| Platform | Deployment Method | Notes |
+|---|---|---|
+| Windows domain-joined | GPO → Computer Configuration → Policies → Windows Settings → Security Settings → Public Key Policies → Trusted Root CAs | Verify with `certutil -store -enterprise root` |
+| macOS managed | Jamf / Intune / Kandji configuration profile | Must be marked "Always Trust" in System Keychain |
+| iOS | MDM configuration profile | **Also** requires manual toggle: Settings → General → About → Certificate Trust Settings |
+| Android | MDM / Intune device profile | User trust step required on unmanaged devices |
+| Firefox (all OS) | Does not use OS trust store by default | Enable `security.enterprise_roots.enabled = true` or distribute via `policies.json` |
+| Linux | Add to `/usr/local/share/ca-certificates/` and run `update-ca-certificates` | Per-app stores (Python `certifi`, Java cacerts) need separate update |
+| BYOD / unmanaged | Captive-portal cert install page or exclusion | Cannot enforce — prefer source-IP-based no-decrypt for BYOD subnets |
+
+**Also confirm:**
+- **Forward Untrust** certificate is configured — this is used when the server's issuer is not trusted by the firewall
+- Both Forward Trust and Forward Untrust certs are referenced in the correct SSL/TLS Service Profile
+- Certificates are not expired
+
+---
+
+### 7.3 Revoked certificates
+
+**What happens:** A revoked certificate should no longer be trusted. If the decryption profile blocks revoked or unknown-status certificates, and the firewall cannot reach the OCSP/CRL endpoint, sessions will fail — often intermittently.
+
+**Detection signals:**
+- Decryption log: `Certificate revoked` or `Unknown certificate status`
+- Failures are intermittent (works when OCSP is reachable, fails when it isn't)
+
+**OCSP/CRL routing fix:**
+1. Confirm the firewall can reach the issuer's OCSP/CRL URLs. Common endpoints:
+   - `ocsp.digicert.com`, `crl3.digicert.com`, `crl4.digicert.com`
+   - `ocsp.pki.goog`, `r3.o.lencr.org`
+   - `ocsp.usertrust.com`
+2. Configure a service route if OCSP/CRL traffic needs to exit a specific interface:
+   **Device → Setup → Services → Service Route Configuration**
+3. If a corporate proxy handles outbound HTTP: **Device → Setup → Services → Proxy Server**
+4. Last resort — if OCSP/CRL is permanently unreachable: uncheck `Block sessions with unknown certificate status` in the decryption profile. Document the risk acceptance formally.
+
+**Fix for owned servers:** Replace the revoked certificate. Validate OCSP and CRL status after replacement.
+
+**Do not** bypass revoked certificates casually. A revoked certificate may indicate key compromise, CA error, or failed certificate rotation.
+
+---
+
+### 7.4 Unsupported cipher suites
+
+**What happens:** TLS negotiation succeeds only when client, firewall, and server share at least one cipher suite. If the server only supports a cipher the firewall profile blocks, the handshake fails.
+
+**Detection signals:**
+- Decryption log: `Unsupported cipher`
+- Counter `ssl_proxy_drop_unsupported_cipher` increments
+- Often correlates with very modern apps (TLS 1.3 ciphers) or very legacy apps (RC4, 3DES)
+
+**CLI test:**
+```
+openssl s_client -connect example.com:443 -servername example.com -tls1_2
+nmap --script ssl-enum-ciphers -p 443 example.com
+```
+
+**Preferred fix order:**
+1. Upgrade the server or application to support modern ciphers (AES-GCM, ChaCha20)
+2. Update legacy clients and TLS libraries
+3. Adjust the decryption profile **narrowly** for this specific destination (not globally)
+4. Use exact-hostname no-decrypt only when technical remediation is not possible
+
+> **Do not** add 3DES or RC4 back to a global decryption profile to fix one app. Add a narrow exception for that app instead. Weakening global cipher rules to fix a single ticket is how decryption hygiene rots over time.
+
+---
+
+### 7.5 Weak or mismatched TLS protocol versions
+
+**Detection signals:**
+- Decryption log: `Unsupported version`
+- Wireshark Client Hello and Server Hello disagree on TLS version
+
+**Profile settings (Objects → Decryption → Decryption Profile → SSL Protocol Settings):**
+
+| Setting | Recommended Value |
+|---|---|
+| Minimum version | TLSv1.2 |
+| Maximum version | Max (allows TLS 1.3 and future versions) |
+
+**Fix for legacy traffic:** Prefer upgrading the application or server. If that's not possible, create a narrow profile (`min = TLS 1.0`) scoped to the exact destination and source group with formal approval. Never lower the global minimum.
+
+**TLS 1.3 note:** TLS 1.3 decryption in forward proxy requires PAN-OS 10.2+. Encrypted ClientHello (ECH) and ESNI on TLS 1.3 still cannot be decrypted on PAN-OS 11.2. Those sessions should be handled via DNS-layer controls (see Section 7.9).
+
+---
+
+### 7.6 Certificate pinning
+
+**What happens:** Apps ship with a hardcoded public key hash of the legitimate server. When the firewall presents a forged cert (even a valid one), the app rejects the connection. There is no error visible to the user other than "cannot connect."
+
+**Detection signals:**
+- Browser works; native app for the same service fails
+- App works off-network (no corporate firewall)
+- Generic network or TLS error, not a browser-style cert warning
+- Bypassing decryption immediately fixes the issue
+- Normal server certificate checks pass in OpenSSL
+
+**Fix:**
+1. Check the **PAN-DB SSL Decryption Exclusion list** first: **Objects → Decryption → SSL Decryption Exclusion**. This is content-updated and covers most Microsoft 365, Zoom, Apple, and Dropbox services.
+2. For apps not on the predefined list, identify the exact SNI via Decryption log, then add a custom SSL Decryption Exclusion.
+3. Major pinned-app guidance:
+
+| App | Recommended Exclusion Scope |
+|---|---|
+| Microsoft Teams | Use Microsoft's published Optimize + Allow endpoint list via EDL |
+| Zoom | `*.zoom.us`, `*.zoomgov.com`; see Zoom firewall docs |
+| Apple services | `*.apple.com`, `*.icloud.com`, `*.mzstatic.com`, `push.apple.com` |
+| Dropbox / Box | Mobile client endpoints — verify with vendor docs |
+| Banking/financial | URL Category `financial-services` — always no-decrypt |
+
+**Never** wildcard an entire vendor domain unless vendor documentation explicitly requires it and the scope has been formally approved.
+
+---
+
+### 7.7 Mutual TLS (mTLS) / client certificate authentication
+
+**What happens:** Some applications require the client to present a certificate to the server during the TLS handshake. In SSL Forward Proxy, the firewall cannot impersonate the client's private key, so the handshake fails.
+
+**Detection signals:**
+- Decryption log: `Client authentication required`
+- Server logs show: `TLS handshake failed — client did not send a certificate`
+
+**Common offenders:** Banking APIs, government portals, healthcare HL7/FHIR endpoints, B2B EDI integrations, internal applications using client certificates, endpoint security management consoles (Microsoft Defender, CrowdStrike, etc.)
+
+**Fix:**
+1. Confirm mTLS with packet capture (look for `CertificateRequest` in the TLS handshake) or vendor documentation.
+2. Add the exact destination to a no-decrypt rule with reason documented as "technical mTLS exclusion."
+3. Keep normal security policy controls in place (App-ID, URL filtering, logging, threat profiles where content inspection is still possible on non-decrypted traffic).
+4. Document this as a **technical exception**, distinct from privacy or legal no-decrypt rules.
+
+Note: SSL Inbound Inspection supports some mTLS configurations where the server cert and key are imported. Refer to TechDocs `ssl-inbound-inspection-with-client-auth` for specifics.
+
+---
+
+### 7.8 QUIC / HTTP/3 bypassing decryption
+
+**What happens:** Browsers — especially Chrome — prefer QUIC (Quick UDP Internet Connections) on UDP/443. QUIC encrypts nearly everything, including handshake metadata. The firewall sees the flow but **cannot decrypt QUIC traffic on any current PAN-OS release (as of PAN-OS 11.2)**. Apps that use QUIC bypass inspection entirely.
+
+**Detection signals:**
+- App-ID = `quic`
+- Traffic on UDP/443 instead of TCP/443
+- Google, YouTube, Cloudflare-fronted sites, and some Microsoft 365 endpoints show no Decryption log entries
+- Content loads but decrypted visibility is absent
+
+**Fix — block QUIC:**
+
+Create a security rule **above** all general web allow rules:
 
 ```
-Objects → Decryption → Decryption Profile → "DEC-Forward-Proxy-Strict"
+Rule: Block-QUIC
+From Zone: Trust (any user-facing zone)
+To Zone: Untrust
+Application: quic
+Action: Deny
+Log: Yes
+```
 
-SSL Forward Proxy:
-  Server Certificate Verification:
-    [x] Block sessions with expired certificates
-    [x] Block sessions with untrusted issuers
-    [x] Block sessions with unknown certificate status   # only after OCSP/CRL routing verified
-    [x] Block sessions on certificate status check timeout
-    [x] Restrict certificate extensions
-    [ ] Append certificate's CN value to SAN extension   # enable for legacy compatibility
-  Unsupported Mode Checks:
-    [x] Block sessions with unsupported versions
-    [x] Block sessions with unsupported cipher suites
-    [x] Block sessions with client authentication        # forces no-decrypt fallback for mTLS
-  Failure Checks:
-    [x] Block sessions if resources not available
-    [x] Block sessions if HSM not available              # if HSM is in use
-  Client Extensions:
-    [x] Strip ALPN
+For belt-and-suspenders, also block UDP/443 explicitly:
+
+```
+Rule: Block-UDP-443
+From Zone: Trust
+To Zone: Untrust
+Service: UDP/443
+Application: any
+Action: Deny
+Log: Yes
+```
+
+**User impact:** None visible. Modern browsers fall back to TCP/TLS transparently. This is the single highest-impact, lowest-risk change for closing decryption blind spots in most environments.
+
+**Verification:** Traffic logs should now show `ssl` or `web-browsing` for destinations that previously showed `quic`.
+
+---
+
+### 7.9 ECH (Encrypted ClientHello)
+
+**What happens:** ECH hides the ClientHello metadata — including the SNI — that firewall services use for classification, policy matching, and decryption decisions. Sites advertising ECH via HTTPS/SVCB DNS records effectively blind SNI-dependent controls.
+
+**ECH-supporting DNS record types to control:**
+
+| DNS Record Type | Description |
+|---|---|
+| HTTPS (Type 65) | Primary ECH advertisement mechanism |
+| SVCB (Type 64) | Service Binding — also carries ECH config |
+| ANY (Type 255) | Catches all-type queries that include HTTPS/SVCB |
+
+**Fix:**
+1. Enable DNS Security controls to block or monitor HTTPS and SVCB record types.
+2. Block or control DoH (DNS over HTTPS) and DoT (DNS over TLS) — if clients can bypass enterprise DNS, ECH controls are ineffective.
+3. Validate that SNI-based decryption policy and URL filtering still operate correctly after ECH controls are in place.
+4. Monitor the DNS Security log for queries to ECH-advertising domains.
+
+---
+
+### 7.10 Decryption resource exhaustion
+
+**What happens:** Under sustained high load, the dataplane runs out of SSL/TLS proxy resources. New sessions fail while established sessions are unaffected — producing intermittent failures that look like network instability.
+
+**Detection signals:**
+- Counter `proxy_decrypt_pkt_drop_no_resource` increments
+- Counter `proxy_no_resource` increments
+- Failures are load-correlated — worse at peak hours, absent overnight
+
+**CLI verification:**
+```
+show counter global filter aspect ssl delta yes
+show running resource-monitor
+show session info | match ssl
+```
+
+**Fix:**
+- Verify hardware sizing against session capacity for your platform (PA-series datasheets list SSL/TLS decryption throughput separately from total throughput — they differ significantly)
+- Reduce unnecessary decryption scope (e.g., decrypt only business-critical categories instead of all traffic)
+- Distribute load across multiple firewalls or upgrade hardware tier
+- If using a Panorama-managed deployment, ensure per-device decryption profile is not more aggressive than the hardware can sustain
+
+---
+
+## 8. Half-Loading Websites
+
+A half-loading website almost always means the main HTML document loaded, but one or more dependent resources failed. Each dependent resource may have its own hostname, CDN, certificate chain, TLS version, cipher suite, authentication flow, or transport protocol.
+
+### Common failing resource types
+
+JavaScript, CSS, fonts, images, API endpoints, authentication redirects (OAuth/OIDC), payment processor calls, CDN objects, WebSocket endpoints, CAPTCHA services, analytics scripts, embedded video, and live chat widgets.
+
+### Diagnostic method
+
+1. Open browser DevTools on the affected endpoint → **Network** tab
+2. Reproduce the failure
+3. Export a HAR file (right-click in Network tab → Save all as HAR)
+4. Sort failed requests by status, domain, and protocol
+5. Identify failed FQDNs, HTTP status codes, TLS errors, protocol versions, and TCP vs. UDP/443
+6. Cross-reference failed FQDNs against firewall Decryption logs filtered by source IP and timestamp
+
+> **Critical:** Do not exclude the visible parent domain unless the failed dependency actually uses that domain. Half-loading issues are almost always caused by a CDN, authentication provider, API endpoint, or embedded third-party service running on a completely different hostname.
+
+---
+
+## 9. No-Decrypt and Exclusion Design
+
+There are two distinct types of decryption exceptions. Mixing them creates policy drift and unnecessary encrypted blind spots. Separate them from day one.
+
+### 9.1 Technical SSL Decryption Exclusion
+
+Use when decryption technically breaks the application.
+
+**Valid technical reasons:**
+- Certificate pinning
+- Mutual TLS (mTLS)
+- Incomplete certificate chain on a third-party site that cannot be remediated
+- Unsupported cipher suites that cannot be upgraded
+- Application-specific TLS implementation that rejects inspection
+- QUIC/HTTP3 traffic (enforce by blocking QUIC rather than excluding)
+
+### 9.2 Policy-based no-decrypt rule
+
+Use when the organization **chooses** not to decrypt for legal, privacy, regulatory, or business reasons — not because decryption is technically broken.
+
+**Valid policy reasons:**
+- Banking and financial services
+- Healthcare portals
+- Legal counsel communications
+- HR and payroll SaaS
+- Government portals
+- Contractually restricted partner applications
+- Employee personal communications (per policy)
+
+### 9.3 Exception documentation template
+
+Every exception — technical or policy — requires this documentation before approval:
+
+| Field | Required Value |
+|---|---|
+| Exception name | Clear application or hostname |
+| Type | Technical SSL Decryption Exclusion OR Policy-based no-decrypt |
+| Business owner | Person or team accountable for business need |
+| Technical owner | Firewall or security team member |
+| Source scope | User group, subnet, zone, or device group |
+| Destination scope | Exact FQDN/SNI, URL category, EDL, or application |
+| Reason | Pinning, mTLS, revoked cert, chain issue, legal/privacy, etc. |
+| Evidence | Decryption log, HAR, packet capture, vendor documentation, ticket |
+| Risk | Visibility and inspection controls lost |
+| Compensating controls | App-ID, URL filtering, EDL, logging, threat prevention on non-decrypted traffic |
+| Expiration / review date | Required |
+| Approval | Security and business sign-off |
+
+### 9.4 Safe exception scope hierarchy
+
+Apply the narrowest scope that resolves the issue:
+
+1. Exact hostname (preferred)
+2. Specific wildcard only when vendor documentation requires it
+3. Vendor-documented domain group
+4. URL category no-decrypt (for policy reasons)
+5. Broad domain wildcard — last resort
+6. Entire application category or vendor cloud — requires formal approval and senior sign-off
+
+### 9.5 Three-tier no-decrypt list structure
+
+**Tier 1 — Always no-decrypt (legal / regulatory / operational):**
+- URL Category `financial-services`
+- URL Category `health-and-medicine`
+- URL Category `government` / `military`
+- PAN-DB SSL Decryption Exclusion list (predefined; content-updated — keep enabled)
+- Microsoft 365 Optimize + Allow endpoints (via External Dynamic List from Microsoft's endpoint API)
+
+**Tier 2 — Pinned apps (technical reality):**
+- Zoom, Apple services, major MDM endpoints, banking apps in active use
+- Identify via network telemetry — do not assume; verify with Decryption logs
+
+**Tier 3 — Privacy / HR policy:**
+- Personal storage, HR/payroll SaaS — per organizational policy only
+
+**For no-decrypt rules, still attach a Decryption Profile** that validates server certificates (block expired, block untrusted issuer) without enforcing cipher/protocol constraints. This catches SSL stripping and bad TLS hygiene even on non-decrypted flows.
+
+---
+
+## 10. PAN-OS Configuration Checks
+
+### 10.1 Decryption policy order
+
+- [ ] No-decrypt rules are above decrypt rules where intended
+- [ ] User or source is matching the expected rule (not a broader rule above it)
+- [ ] URL category is available at policy match time (requires URL Filtering license)
+- [ ] Rule is scoped to TCP/443 — but the app is actually using UDP/443 (QUIC)
+- [ ] QUIC is explicitly blocked in the security policy above this rule
+- [ ] Correct decryption profile is applied to the rule
+- [ ] Correct Panorama device group / template stack has been pushed
+
+### 10.2 Decryption profile
+
+- [ ] Minimum and maximum TLS version (1.2 min, Max max)
+- [ ] Key exchange algorithms (RSA, DHE, ECDHE)
+- [ ] Encryption algorithms (AES128-GCM, AES256-GCM, AES128-CBC, AES256-CBC, ChaCha20-Poly1305)
+- [ ] Authentication algorithms (SHA-256, SHA-384)
+- [ ] Expired certificate action (block)
+- [ ] Untrusted issuer action (block)
+- [ ] Revocation behavior (block revoked; block unknown only if OCSP/CRL is confirmed reachable)
+- [ ] Unsupported cipher behavior (block)
+- [ ] Client authentication behavior (block for strict environments)
+- [ ] Resource failure behavior (block)
+
+### 10.3 Certificate configuration
+
+- [ ] Forward Trust certificate exists and is marked correctly
+- [ ] Forward Untrust certificate exists
+- [ ] Enterprise root/intermediate certificates are deployed to all managed endpoints
+- [ ] All certificates are within their validity period
+- [ ] Private key exists on the firewall where required
+- [ ] For Inbound Inspection: private key matches the server's public certificate
+- [ ] OCSP/CRL endpoints are reachable from the firewall (via service route if needed)
+
+---
+
+## 11. Recommended Decryption Profile — Baseline Config
+
+For SSL Forward Proxy in PAN-OS 11.x, use this as your starting point. Adjust only where a specific environment requires it, and document every deviation.
+
+```
+Profile name: DEC-Forward-Proxy-Strict
+Type: SSL Forward Proxy
+
+Server Certificate Verification:
+  [x] Block sessions with expired certificates
+  [x] Block sessions with untrusted issuers
+  [x] Block sessions with unknown certificate status   # Only after OCSP/CRL routing confirmed
+  [x] Block sessions on certificate status check timeout
+  [x] Restrict certificate extensions
+  [ ] Append certificate CN to SAN extension           # Enable only for legacy compatibility
+
+Unsupported Mode Checks:
+  [x] Block sessions with unsupported versions
+  [x] Block sessions with unsupported cipher suites
+  [x] Block sessions with client authentication        # Forces no-decrypt fallback for mTLS
+
+Failure Checks:
+  [x] Block sessions if resources not available
+
+Client Extensions:
+  [x] Strip ALPN
 
 SSL Protocol Settings:
   Min Version: TLSv1.2
   Max Version: Max (TLSv1.3)
   Key Exchange: RSA, DHE, ECDHE
-  Encryption: AES128-CBC, AES256-CBC, AES128-GCM, AES256-GCM, ChaCha20-Poly1305
+  Encryption:   AES128-GCM, AES256-GCM, AES128-CBC, AES256-CBC, ChaCha20-Poly1305
   Authentication: SHA256, SHA384
 ```
 
-For no-decrypt rules, use a separate profile that **still** validates server certs but doesn't enforce protocol/cipher rules:
+For **no-decrypt rules**, attach a separate lighter profile:
 
 ```
-"DEC-No-Decrypt-Validate"
-No Decryption tab:
+Profile name: DEC-No-Decrypt-Validate
+Type: No Decryption
+
+Server Certificate Verification:
   [x] Block sessions with expired certificates
   [x] Block sessions with untrusted issuers
+  [ ] Block sessions with unknown certificate status   # Allow through — not decrypting
+```
+
+This ensures that even bypassed traffic is checked for obviously bad certificate hygiene without breaking the apps.
+
+---
+
+## 12. Testing Commands
+
+### Certificate chain validation
+
+```bash
+openssl s_client -connect example.com:443 -servername example.com -showcerts -verify_return_error
+```
+
+### Force specific TLS version
+
+```bash
+openssl s_client -connect example.com:443 -servername example.com -tls1_2
+openssl s_client -connect example.com:443 -servername example.com -tls1_3
+```
+
+### HTTP version tests
+
+```bash
+curl -Iv --http1.1 https://example.com/
+curl -Iv --http2   https://example.com/
+curl -Iv --http3-only https://example.com/
+```
+
+### Browser and packet evidence
+
+- Chrome DevTools → Network tab → HAR export
+- `chrome://net-export` for detailed SSL/TLS handshake logging
+- `edge://net-export`
+- Wireshark display filters:
+  - `tcp.port == 443` (TLS)
+  - `udp.port == 443` (QUIC)
+  - `tls.handshake.type == 1` (Client Hello only)
+  - `tls.alert_message.desc` (TLS Alerts — failure reasons)
+
+---
+
+## 13. CLI Cheat Sheet
+
+```
+# Is this session being decrypted? What rule matched?
+show session all filter source <ip> destination <ip>
+show session id <id>
+
+# SSL/TLS engine counters (run before + after reproduce; look at deltas)
+show counter global filter aspect ssl delta yes
+show counter global filter delta yes severity drop
+
+# Decryption certificate cache
+show system setting ssl-decrypt certificate-cache
+show system setting ssl-decrypt exclude-cache
+
+# Current SSL Forward Proxy CA and settings
+show system setting ssl-decrypt setting
+
+# PAN-DB predefined decryption exclusion list
+request system external-list show name panw-ssl-decryption-exclude-cn-list
+
+# Memory / resource pressure on dataplane
+show running resource-monitor
+
+# Live SSL session count
+show session info | match ssl
+
+# OCSP/CRL connectivity test
+ping host ocsp.digicert.com
+ping host r3.o.lencr.org
+
+# Packet capture — all four stages
+debug dataplane packet-diag set filter match source <ip> destination <ip>
+debug dataplane packet-diag set filter on
+debug dataplane packet-diag set capture stage receive file rx
+debug dataplane packet-diag set capture stage transmit file tx
+debug dataplane packet-diag set capture stage drop file drop
+debug dataplane packet-diag set capture on
+# reproduce the failure
+debug dataplane packet-diag set capture off
+debug dataplane packet-diag clear filter-marked-session all
+# retrieve via SCP from /var/tmp/
 ```
 
 ---
 
-## 10. When to Open a TAC Case
+## 14. Standard Fix Workflows
 
-You've done your job; now collect:
+### 14.1 One broken website
 
-1. PAN-OS version: `show system info | match version`
-2. Tech support file: **Device → Support → Generate Tech Support File**
-3. Decryption log export filtered to the affected user/destination, in CSV
-4. Packet captures (rx + tx, both stages) covering a reproducible failure
-5. Output of `show counter global filter aspect ssl delta yes` before/after repro
-6. The full URL/FQDN, the application name (PAN App-ID), and at least one example client IP/MAC
-7. Whether the issue is universal or scoped to a platform/OS/browser
+1. Confirm user, source IP, destination, and timestamp
+2. Check Decryption logs → identify failure reason
+3. Test certificate chain externally with OpenSSL
+4. Confirm whether traffic is TCP/TLS or QUIC (UDP/443)
+5. Check whether the site uses third-party embedded hostnames (DevTools HAR)
+6. Apply the narrowest fix: chain repair → TLS update → QUIC block → narrow profile → exact technical exclusion
+7. Retest and document evidence
 
-TAC will resolve far faster with this in hand than with "decryption is broken for some users."
+### 14.2 One broken native app
+
+1. Compare browser behavior vs. native app for the same service
+2. Identify app-specific FQDNs and ports from vendor firewall/proxy documentation
+3. Check for certificate pinning, mTLS, or custom trust store requirements
+4. Add exact technical exclusions only where required by evidence
+5. Avoid broad vendor wildcard unless vendor documentation explicitly requires it and it has been approved
+
+### 14.3 Widespread failures after a policy change
+
+1. Identify the changed decryption profile or policy rule
+2. Compare before/after: TLS min/max, cipher restrictions, cert checks, revocation settings, unsupported-mode behavior
+3. Check whether a content update changed predefined exclusions
+4. Confirm Panorama push scope (was it pushed to all device groups or just one?)
+5. Roll back only the specific failing change if impact is high
+6. Replace rollback with a corrected, targeted policy
 
 ---
 
-## 11. References
+## 15. What Not to Do
 
-- Palo Alto Networks TechDocs: *Decryption* (current PAN-OS) — `https://docs.paloaltonetworks.com/network-security/decryption`
-- KB 210699 — *Resource List: SSL Decryption Configuring and Troubleshooting*
-- PAN-DB SSL Decryption Exclusion list: built-in, view via Objects → External Dynamic Lists
-- Microsoft 365 endpoint list: `https://endpoints.office.com`
-- Best Practice Assessment (BPA): run periodically; flags decryption profile weaknesses
-- LIVEcommunity → SSL Decryption discussions
+- Do not add `*.com`, entire cloud provider domains, or broad URL categories to no-decrypt just to make one ticket disappear.
+- Do not disable certificate checks globally.
+- Do not enable TLS 1.0, TLS 1.1, or weak ciphers (3DES, RC4) globally.
+- Do not ignore revoked certificate failures — they may indicate key compromise.
+- Do not treat "allow QUIC" as equivalent to decrypting web traffic. QUIC bypasses inspection entirely.
+- Do not mix technical SSL Decryption Exclusions with legal or privacy no-decrypt rules in the same ruleset without clear labeling.
+- Do not leave temporary exceptions without an owner, evidence record, and expiration date.
+- Do not assume the visible website domain is the failing domain — use a HAR to find the actual failing FQDN.
+- Do not troubleshoot Teams, Zoom, banking apps, endpoint security agents, or mobile apps exclusively from a browser.
 
 ---
 
-## 12. Revision History
+## 16. Escalation Checklist
+
+Escalate to senior firewall engineering or vendor TAC when:
+- Decryption logs are ambiguous or missing despite logging being enabled
+- Packet captures show handshake failure without a clear corresponding log reason
+- Failure appeared after a PAN-OS upgrade or content update
+- Failure occurs through only one firewall cluster in an HA pair
+- Inbound Inspection breaks after certificate replacement
+- The proposed exception scope would need to be broad to work
+
+**Collect before opening a case:**
+
+- [ ] PAN-OS version: `show system info | match version`
+- [ ] Tech support file: **Device → Support → Generate Tech Support File**
+- [ ] Source IP / username
+- [ ] Destination FQDN / SNI
+- [ ] Exact timestamp with timezone
+- [ ] Decryption rule name and profile name
+- [ ] Failure reason from Decryption log
+- [ ] Traffic log entry for the failing session
+- [ ] Decryption log entry
+- [ ] Packet capture (rx + tx + drop stages) covering a reproducible failure
+- [ ] Output of `show counter global filter aspect ssl delta yes` before and after reproduction
+- [ ] HAR file if the issue is browser/web-based
+- [ ] OpenSSL output for the destination
+- [ ] Confirmation of whether bypass immediately fixes the issue
+- [ ] Proposed exception scope and its justification
+
+Providing this on case open — rather than over multiple back-and-forths — will get a senior engineer reviewing within the first exchange.
+
+---
+
+## 17. Recommended Baseline Posture
+
+Decrypt as much traffic as legal, business, privacy, and technical constraints allow. If traffic is not decrypted, the firewall cannot analyze encrypted headers and payload information — threat prevention, App-ID, URL filtering, and DLP all operate with substantially reduced effectiveness on unencrypted-only views.
+
+- Use TLS 1.2 minimum and Max maximum for SSL Forward Proxy unless a specific environment requires otherwise.
+- Block QUIC unless there is a formally approved business reason to allow encrypted UDP/443 browser traffic.
+- Keep the predefined PAN-DB SSL Decryption Exclusion list enabled unless there is a specific, documented reason to disable it.
+- Apply strict certificate validation on all decrypt rules.
+- Apply lighter-but-still-validating profiles on all no-decrypt rules.
+- Use technical SSL Decryption Exclusions only for confirmed technical breakage.
+- Use policy-based no-decrypt rules only for confirmed legal, privacy, regulatory, or business decisions.
+- Review all exceptions on a recurring schedule (quarterly recommended).
+
+---
+
+## 18. Phased Rollout Strategy
+
+If standing up decryption from scratch — or recovering after it was disabled — do not enable it for all users at once.
+
+**Phase 0 — Pre-flight (1–2 weeks):**
+1. Push Forward Trust CA to all managed endpoints and verify on samples of each platform (Win, Mac, iOS, Android, Linux).
+2. Build the no-decrypt / exclusion list (Section 9.5). Deploy this **first**, before any decrypt rules.
+3. Block QUIC organization-wide.
+4. Stage decryption profiles but do not reference them in any decrypt rule yet.
+
+**Phase 1 — Visibility-only pilot (1 week):**
+Create a decrypt rule for a small pilot group of 10–20 users — include at least one user on each platform and ideally a senior stakeholder who will generate the right kind of escalation feedback. Log everything. Review the ACC Decryption Failure Reasons widget every morning.
+
+**Phase 2 — Expand by zone or department:**
+Roll out department by department. After each expansion, watch ACC → Decryption Failure Reasons for 48 hours before the next expansion. Add to the no-decrypt list as new technical failures are confirmed. Resist loosening the decryption profile to fix individual apps — exclusion is better than degrading the profile.
+
+**Phase 3 — Tighten:**
+Once you've reached steady state (no new daily escalations), harden: raise minimum TLS to 1.2, drop weak ciphers, enable strict revocation checks (confirm OCSP/CRL routing first). This is when decryption shifts from "works" to "does actual security work."
+
+---
+
+## 19. References
+
+[1] NIST CSRC Glossary: Decryption — https://csrc.nist.gov/glossary/term/decryption
+[2] Palo Alto Networks: SSL Forward Proxy — https://docs.paloaltonetworks.com/pan-os/11-0/pan-os-admin/decryption/decryption-concepts/ssl-forward-proxy
+[3] Palo Alto Networks: Investigate Decryption Failure Reasons — https://docs.paloaltonetworks.com/pan-os/10-2/pan-os-admin/decryption/troubleshoot-and-monitor-decryption/decryption-troubleshooting-workflow-examples/investigate-decryption-failure-reasons
+[4] Palo Alto Networks: Decryption Monitoring Tools — https://docs.paloaltonetworks.com/network-security/decryption/administration/monitoring-decryption/decryption-monitoring-tools
+[5] Palo Alto Networks: Repair Incomplete Certificate Chains — https://docs.paloaltonetworks.com/network-security/decryption/administration/troubleshooting-decryption/repair-incomplete-certificate-chains
+[6] Palo Alto Networks: Keys and Certificates for Decryption Policies — https://docs.paloaltonetworks.com/pan-os/10-2/pan-os-admin/decryption/decryption-concepts/keys-and-certificates-for-decryption-policies
+[7] Palo Alto Networks: Troubleshoot Revoked Certificates — https://docs.paloaltonetworks.com/content/techdocs/en_US/network-security/decryption/administration/troubleshooting-decryption/troubleshoot-revoked-certificates
+[8] Palo Alto Networks: Decryption Log Errors — https://docs.paloaltonetworks.com/network-security/decryption/administration/monitoring-decryption/decryption-log-errors
+[9] Palo Alto Networks: Decryption Best Practices — https://docs.paloaltonetworks.com/best-practices/10-1/decryption-best-practices/decryption-best-practices/deploy-ssl-decryption-using-best-practices
+[10] Palo Alto Networks: TLS 1.3 SSL Decryption — https://docs.paloaltonetworks.com/content/techdocs/en_US/network-security/decryption/administration/decryption-overview/tls-1-3-ssl-decryption
+[11] Palo Alto Networks: Troubleshoot Pinned Certificates — https://docs.paloaltonetworks.com/content/techdocs/en_US/network-security/decryption/administration/troubleshooting-decryption/troubleshoot-pinned-certificates
+[12] Palo Alto Networks: Predefined Decryption Exclusions — https://docs.paloaltonetworks.com/network-security/decryption/administration/decryption-exclusions/palo-alto-networks-predefined-decryption-exclusions
+[13] Palo Alto Networks: Settings to Control Decrypted SSL Traffic — https://docs.paloaltonetworks.com/content/techdocs/en_US/pan-os/11-2/pan-os-web-interface-help/objects/objects-decryption-profile/settings-to-control-decrypted-ssl-traffic
+[14] Palo Alto Networks: Create a Decryption Policy Rule — https://docs.paloaltonetworks.com/pan-os/10-2/pan-os-admin/decryption/define-traffic-to-decrypt/create-a-decryption-policy-rule
+[15] Palo Alto Networks: DNS Security Support for DNS over HTTPS and ECH — https://docs.paloaltonetworks.com/pan-os/11-0/pan-os-new-features/content-inspection-features/dns-security-support-for-dns-over-https
+[16] Palo Alto Networks: Advanced DNS Security Features, February 2026 — https://docs.paloaltonetworks.com/content/techdocs/en_US/dns-security/release-notes/new-features-in-advanced-dns-security/new-features-in-february-2026
+[17] Palo Alto Networks: Exclude Server from Decryption for Technical Reasons — https://docs.paloaltonetworks.com/content/techdocs/en_US/network-security/decryption/administration/decryption-exclusions/exclude-server-from-decryption-for-technical-reasons
+[18] Palo Alto Networks: Exclude a Server from Decryption — https://docs.paloaltonetworks.com/pan-os/11-0/pan-os-admin/decryption/decryption-exclusions/exclude-a-server-from-decryption
+[21] Palo Alto Networks: Decryption Profiles — https://docs.paloaltonetworks.com/network-security/decryption/administration/decryption-overview/decryption-profiles
+[22] Palo Alto Networks: Security Policy Rule Best Practices — https://docs.paloaltonetworks.com/best-practices/security-policy-best-practices/security-policy-best-practices/deploy-security-policy-best-practices/security-policy-rule-best-practices
+
+---
+
+## 20. Revision History
 
 | Version | Date | Author | Notes |
 |---------|------|--------|-------|
-| 1.0 | 2026-05-10 | Initial publication | Covers PAN-OS 10.0–11.2 |
+| 1.0 | 2026-05-10 | Original — formal KB (DOCX) | 15-section structured article with references |
+| 1.1 | 2026-05-10 | Original — engineering KB (MD) | CLI-focused diagnostic article with profile configs |
+| 2.0 | 2026-05-10 | Merged | Combined both sources; added Decryption Modes table, per-platform CA deployment table, TLS alert code table, Wireshark filters, ECH DNS record table, exception documentation template, three-tier no-decrypt structure, baseline profile config block, phased rollout strategy, full CLI cheat sheet |

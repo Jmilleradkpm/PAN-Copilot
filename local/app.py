@@ -358,6 +358,47 @@ _KB_TRIGGER_MAP: dict = {
             "ocsp decryption",
             "crl firewall",
             "unknown certificate status",
+            # ECH / Encrypted ClientHello (v2.0)
+            "ech",
+            "encrypted clienthello",
+            "encrypted client hello",
+            "esni",
+            # Half-loading websites (v2.0)
+            "half-loading",
+            "half loading",
+            "half load",
+            "partial load",
+            "website half",
+            "site half loads",
+            # Resource exhaustion (v2.0)
+            "resource exhaustion",
+            "decryption resource",
+            "proxy_no_resource",
+            "decrypt resource",
+            # DNS-over-HTTPS / DNS-over-TLS / SVCB controls (v2.0)
+            "svcb",
+            "https record",
+            "doh firewall",
+            "dot firewall",
+            "dns over https firewall",
+            "dns over tls firewall",
+            # Wireshark / packet capture (v2.0)
+            "wireshark tls",
+            "tls alert",
+            "tls alert code",
+            "packet capture decrypt",
+            # HAR file diagnostics (v2.0)
+            "har file",
+            "har export",
+            "devtools network",
+            # Escalation / TAC (v2.0)
+            "tac case decryption",
+            "escalation checklist",
+            "decryption escalation",
+            # Baseline posture / what not to do (v2.0)
+            "decryption best practice",
+            "decrypt best practice",
+            "disable decryption",
             # Direct KB ID references
             "kb-pan-dec",
             "kb-pan-dec-001",
