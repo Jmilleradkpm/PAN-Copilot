@@ -224,6 +224,22 @@
     .nav-icon { font-size: 14px; flex-shrink: 0; width: 18px; text-align: center; }
     .nav-divider { height: 1px; background: var(--border-dim); margin: 6px 8px; }
 
+    /* ── KB article nav items ──────────────────────────────────────── */
+    .kb-nav-item {
+      display: flex; align-items: flex-start; gap: 8px;
+      padding: 7px 10px; border-radius: 6px; cursor: pointer;
+      transition: all 0.12s; border: none; background: none;
+      width: 100%; text-align: left;
+    }
+    .kb-nav-item:hover { background: var(--surface2); }
+    .kb-nav-item:hover .kb-nav-title { color: var(--accent); }
+    .kb-nav-icon { font-size: 13px; flex-shrink: 0; width: 18px; text-align: center; padding-top: 2px; }
+    .kb-nav-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+    .kb-nav-title { font-size: 12px; color: var(--text); font-weight: 500; line-height: 1.35;
+                    transition: color 0.12s; }
+    .kb-nav-id { font-size: 9.5px; font-family: 'Consolas','Cascadia Code','Courier New',monospace;
+                 color: var(--accent); letter-spacing: 0.05em; opacity: 0.75; }
+
     /* ── CENTER CHAT ───────────────────────────────────────────── */
     #center {
       flex: 1; display: flex; flex-direction: column; overflow: hidden;
@@ -861,11 +877,37 @@
 
     <div class="nav-divider"></div>
 
-    <div class="nav-section" style="padding-bottom:8px;">
-      <span class="nav-group-label">Recent</span>
-      <div id="conv-list">
-        <div id="conv-empty" style="color:var(--text-dim);font-size:12px;padding:4px 4px 8px;">No conversations yet.</div>
-      </div>
+    <div class="nav-section" style="padding-bottom:10px;">
+      <span class="nav-group-label">Knowledge Base</span>
+
+      <button class="kb-nav-item" onclick="askKb('kb-gp-prelogon-001')">
+        <span class="kb-nav-icon">🔒</span>
+        <span class="kb-nav-text">
+          <span class="kb-nav-title">GlobalProtect Always Pre-Logon</span>
+          <span class="kb-nav-id">KB-GP-PRELOGON-001</span>
+        </span>
+      </button>
+
+      <button class="kb-nav-item" onclick="askKb('kb-pan-dec-001')">
+        <span class="kb-nav-icon">🔐</span>
+        <span class="kb-nav-text">
+          <span class="kb-nav-title">SSL/TLS Decryption Troubleshooting</span>
+          <span class="kb-nav-id">KB-PAN-DEC-001</span>
+        </span>
+      </button>
+
+      <button class="kb-nav-item" onclick="askKb('kb-pan-nat-001')">
+        <span class="kb-nav-icon">🔀</span>
+        <span class="kb-nav-text">
+          <span class="kb-nav-title">NAT — VPN, U-Turn &amp; Policy Zones</span>
+          <span class="kb-nav-id">KB-PAN-NAT-001</span>
+        </span>
+      </button>
+    </div>
+
+    <!-- conv-list kept in DOM (hidden) so JS renderConvList() doesn't throw -->
+    <div id="conv-list" style="display:none;">
+      <div id="conv-empty"></div>
     </div>
 
     <div class="nav-divider"></div>
@@ -1468,6 +1510,16 @@ document.addEventListener('click', function (e) {
 document.addEventListener('keydown', function (e) {
   if (e.key === 'Escape') closeHistoryDrop();
 });
+
+// ── KB article shortcut ───────────────────────────────────────────
+// Called when a Knowledge Base entry in the left nav is clicked.
+// Sets the chat input to the KB trigger phrase and submits.
+function askKb(trigger) {
+  if (isStreaming) return;
+  const input = document.getElementById('user-input');
+  input.value = trigger;
+  sendMessage();
+}
 
 function newChat() {
   currentConvId = null;
