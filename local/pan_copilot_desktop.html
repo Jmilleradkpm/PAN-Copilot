@@ -224,21 +224,44 @@
     .nav-icon { font-size: 14px; flex-shrink: 0; width: 18px; text-align: center; }
     .nav-divider { height: 1px; background: var(--border-dim); margin: 6px 8px; }
 
-    /* ── KB article nav items ──────────────────────────────────────── */
-    .kb-nav-item {
-      display: flex; align-items: flex-start; gap: 8px;
-      padding: 7px 10px; border-radius: 6px; cursor: pointer;
-      transition: all 0.12s; border: none; background: none;
-      width: 100%; text-align: left;
+    /* ── KB header dropdown ─────────────────────────────────────────── */
+    .kb-hdr-sep {
+      color: var(--text-sub); font-size: 11px; opacity: 0.4;
+      margin: 0 6px; user-select: none; flex-shrink: 0;
     }
-    .kb-nav-item:hover { background: var(--surface2); }
-    .kb-nav-item:hover .kb-nav-title { color: var(--accent); }
-    .kb-nav-icon { font-size: 13px; flex-shrink: 0; width: 18px; text-align: center; padding-top: 2px; }
-    .kb-nav-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-    .kb-nav-title { font-size: 12px; color: var(--text); font-weight: 500; line-height: 1.35;
-                    transition: color 0.12s; }
-    .kb-nav-id { font-size: 9.5px; font-family: 'Consolas','Cascadia Code','Courier New',monospace;
-                 color: var(--accent); letter-spacing: 0.05em; opacity: 0.75; }
+    #kb-dropdown-wrap { position: relative; display: inline-flex; align-items: center; flex-shrink: 0; }
+    #kb-dropdown-btn {
+      display: inline-flex; align-items: center; gap: 5px;
+      padding: 3px 10px 3px 9px; border: 1px solid var(--border);
+      border-radius: 5px; background: var(--surface2);
+      color: var(--text-sub); font-size: 11px; cursor: pointer;
+      transition: all 0.12s; white-space: nowrap; font-family: inherit;
+    }
+    #kb-dropdown-btn:hover, #kb-dropdown-btn.open {
+      border-color: var(--accent); color: var(--text);
+    }
+    #kb-dropdown-caret { font-size: 8px; transition: transform 0.15s; line-height: 1; }
+    #kb-dropdown-btn.open #kb-dropdown-caret { transform: rotate(180deg); }
+    #kb-dropdown-menu {
+      display: none; position: absolute; top: calc(100% + 6px); left: 0;
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+      min-width: 240px; z-index: 300; overflow: hidden; padding: 4px 0;
+    }
+    #kb-dropdown-menu.open { display: block; }
+    .kb-dd-item {
+      display: flex; align-items: flex-start; gap: 10px;
+      padding: 9px 14px; border: none; background: none;
+      width: 100%; text-align: left; cursor: pointer;
+      transition: background 0.1s; font-family: inherit;
+    }
+    .kb-dd-item:hover { background: var(--surface2); }
+    .kb-dd-item:hover .kb-dd-title { color: var(--accent); }
+    .kb-dd-icon { font-size: 13px; flex-shrink: 0; padding-top: 1px; }
+    .kb-dd-text { display: flex; flex-direction: column; gap: 2px; }
+    .kb-dd-title { font-size: 12px; color: var(--text); font-weight: 500; line-height: 1.35; transition: color 0.12s; }
+    .kb-dd-id { font-size: 9px; font-family: 'Consolas','Cascadia Code','Courier New',monospace;
+                color: var(--accent); letter-spacing: 0.05em; opacity: 0.7; }
 
     /* ── CENTER CHAT ───────────────────────────────────────────── */
     #center {
@@ -912,44 +935,6 @@
       <button class="nav-item" onclick="selectProduct('strata-log')"   data-id="strata-log">  <span class="nav-icon">📋</span> Strata Logging Service</button>
     </div>
 
-    <div class="nav-divider"></div>
-
-    <div class="nav-section" style="padding-bottom:10px;">
-      <span class="nav-group-label">Knowledge Base</span>
-
-      <button class="kb-nav-item" onclick="askKb('kb-gp-prelogon-001')">
-        <span class="kb-nav-icon">🔒</span>
-        <span class="kb-nav-text">
-          <span class="kb-nav-title">GlobalProtect Always Pre-Logon</span>
-          <span class="kb-nav-id">KB-GP-PRELOGON-001</span>
-        </span>
-      </button>
-
-      <button class="kb-nav-item" onclick="askKb('kb-pan-dec-001')">
-        <span class="kb-nav-icon">🔐</span>
-        <span class="kb-nav-text">
-          <span class="kb-nav-title">SSL/TLS Decryption Troubleshooting</span>
-          <span class="kb-nav-id">KB-PAN-DEC-001</span>
-        </span>
-      </button>
-
-      <button class="kb-nav-item" onclick="askKb('kb-pan-nat-001')">
-        <span class="kb-nav-icon">🔀</span>
-        <span class="kb-nav-text">
-          <span class="kb-nav-title">NAT — VPN, U-Turn &amp; Policy Zones</span>
-          <span class="kb-nav-id">KB-PAN-NAT-001</span>
-        </span>
-      </button>
-
-      <button class="kb-nav-item" onclick="askKb('kb-pan-appid-001')">
-        <span class="kb-nav-icon">🔍</span>
-        <span class="kb-nav-text">
-          <span class="kb-nav-title">App-ID: unknown-tcp &amp; unknown-udp</span>
-          <span class="kb-nav-id">KB-PAN-APPID-001</span>
-        </span>
-      </button>
-    </div>
-
     <!-- conv-list kept in DOM (hidden) so JS renderConvList() doesn't throw -->
     <div id="conv-list" style="display:none;">
       <div id="conv-empty"></div>
@@ -972,6 +957,40 @@
         <span id="context-icon">🔥</span>
         <span id="context-name">ADK Cyber AI</span>
         <span id="context-desc">· Select a product from the left to focus the chat, or ask anything below.</span>
+        <span class="kb-hdr-sep">|</span>
+        <div id="kb-dropdown-wrap">
+          <button id="kb-dropdown-btn" onclick="toggleKbDropdown()">📚 Palo KB Articles <span id="kb-dropdown-caret">▾</span></button>
+          <div id="kb-dropdown-menu">
+            <button class="kb-dd-item" onclick="askKb('kb-gp-prelogon-001'); closeKbDropdown()">
+              <span class="kb-dd-icon">🔒</span>
+              <span class="kb-dd-text">
+                <span class="kb-dd-title">GlobalProtect Always Pre-Logon</span>
+                <span class="kb-dd-id">KB-GP-PRELOGON-001</span>
+              </span>
+            </button>
+            <button class="kb-dd-item" onclick="askKb('kb-pan-dec-001'); closeKbDropdown()">
+              <span class="kb-dd-icon">🔐</span>
+              <span class="kb-dd-text">
+                <span class="kb-dd-title">SSL/TLS Decryption Troubleshooting</span>
+                <span class="kb-dd-id">KB-PAN-DEC-001</span>
+              </span>
+            </button>
+            <button class="kb-dd-item" onclick="askKb('kb-pan-nat-001'); closeKbDropdown()">
+              <span class="kb-dd-icon">🔀</span>
+              <span class="kb-dd-text">
+                <span class="kb-dd-title">NAT — VPN, U-Turn &amp; Policy Zones</span>
+                <span class="kb-dd-id">KB-PAN-NAT-001</span>
+              </span>
+            </button>
+            <button class="kb-dd-item" onclick="askKb('kb-pan-appid-001'); closeKbDropdown()">
+              <span class="kb-dd-icon">🔍</span>
+              <span class="kb-dd-text">
+                <span class="kb-dd-title">App-ID: unknown-tcp &amp; unknown-udp</span>
+                <span class="kb-dd-id">KB-PAN-APPID-001</span>
+              </span>
+            </button>
+          </div>
+        </div>
       </div>
       <div id="context-chips"></div>
     </div>
@@ -1551,10 +1570,25 @@ async function hdropDelete(e, id) {
 document.addEventListener('click', function (e) {
   const wrap = document.getElementById('history-wrap');
   if (wrap && !wrap.contains(e.target)) closeHistoryDrop();
+  const kbWrap = document.getElementById('kb-dropdown-wrap');
+  if (kbWrap && !kbWrap.contains(e.target)) closeKbDropdown();
 });
 document.addEventListener('keydown', function (e) {
-  if (e.key === 'Escape') closeHistoryDrop();
+  if (e.key === 'Escape') { closeHistoryDrop(); closeKbDropdown(); }
 });
+
+// ── KB header dropdown ────────────────────────────────────────────
+function toggleKbDropdown() {
+  const btn  = document.getElementById('kb-dropdown-btn');
+  const menu = document.getElementById('kb-dropdown-menu');
+  const open = menu.classList.contains('open');
+  if (open) { menu.classList.remove('open'); btn.classList.remove('open'); }
+  else       { menu.classList.add('open');    btn.classList.add('open');   }
+}
+function closeKbDropdown() {
+  document.getElementById('kb-dropdown-menu').classList.remove('open');
+  document.getElementById('kb-dropdown-btn').classList.remove('open');
+}
 
 // ── KB article shortcut ───────────────────────────────────────────
 // Called when a Knowledge Base entry in the left nav is clicked.
