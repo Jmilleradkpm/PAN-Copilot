@@ -1840,7 +1840,10 @@ async function uploadFile(input) {
     } else {
       document.getElementById('config-paste').value = data.text;
       updateConfigStatus();
-      status.textContent = `✓ ${file.name} loaded (${(data.size / 1024).toFixed(1)} KB)`;
+      const redactedNote = data.redactions > 0
+        ? ` · 🔒 ${data.redactions} credential${data.redactions === 1 ? '' : 's'} redacted`
+        : '';
+      status.textContent = `✓ ${file.name} loaded (${(data.size / 1024).toFixed(1)} KB)${redactedNote}`;
       status.className   = 'loaded';
     }
   } catch {

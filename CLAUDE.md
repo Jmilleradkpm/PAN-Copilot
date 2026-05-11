@@ -109,11 +109,8 @@ ADK Cyber Cloud
 
 ## Critical Implementation Details
 
-### Single Instance (Windows Mutex)
-`pan_copilot.py` calls `_acquire_single_instance_lock()` on startup. Uses a Windows named mutex so only one server runs at a time. A second `.exe` launch detects the mutex and delegates to the existing Edge window instead of starting a new server.
-
 ### Delegation-Aware Server Lifetime
-When Edge exits in under 5 seconds it delegated to an existing instance. The server stays alive (up to 60 min safety net) instead of dying immediately. The `beforeunload` handler in `pan_copilot_desktop.html` calls `POST /api/shutdown` via `navigator.sendBeacon()` when the tab actually closes, which sets `uvicorn_server.should_exit = True` cleanly.
+There is no Windows named mutex — each `.exe` launch starts its own uvicorn server on a free port. Single-window behavior is achieved through Edge's own delegation: when Edge exits in under 5 seconds it has delegated to an existing Edge process, so the launcher keeps the local server alive (up to a 60 min safety net) instead of dying immediately. The `beforeunload` handler in `pan_copilot_desktop.html` calls `POST /api/shutdown` via `navigator.sendBeacon()` when the tab actually closes, which sets `uvicorn_server.should_exit = True` cleanly. `/api/shutdown` requires a per-startup `SHUTDOWN_TOKEN` (injected into the served HTML) to prevent CSRF.
 
 ### Edge `--app` Mode + Isolated Profile
 Edge is launched with `--app=http://127.0.0.1:<port>` and `--user-data-dir=<tempdir>`. The temp dir forces an isolated Edge process — without it, Edge delegates to the user's existing session and the subprocess exits immediately.
