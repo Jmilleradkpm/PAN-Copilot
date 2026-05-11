@@ -526,6 +526,20 @@
     #config-paste::placeholder { color: var(--text-dim); }
     #config-status { font-size: 11px; color: var(--text-dim); margin-top: 5px; min-height: 15px; }
     #config-status.has { color: var(--yellow); }
+    #large-cfg-warn {
+      display: none; margin-top: 6px; font-size: 11px;
+      color: #c9a227; background: rgba(201,162,39,0.08);
+      border: 1px solid rgba(201,162,39,0.25);
+      border-radius: 5px; padding: 5px 9px; line-height: 1.5;
+    }
+    #free-tier-info {
+      display: none; margin-top: 10px; font-size: 11px;
+      color: var(--text-dim); line-height: 1.65;
+      background: var(--surface2); border-radius: 6px;
+      padding: 9px 11px; border: 1px solid var(--border);
+    }
+    #free-tier-info a { color: var(--accent); text-decoration: none; }
+    #free-tier-info a:hover { text-decoration: underline; }
     .rs-divider2 { height: 1px; background: var(--border-dim); margin: 6px 12px 10px; }
     #quick-section { padding: 0 12px 12px; }
     .qa-btn {
@@ -840,6 +854,13 @@
       <span class="acct-value" id="acct-usage">0 / 10</span>
     </div>
 
+    <div id="free-tier-info">
+      <strong style="color:var(--text-sub);">Free tier limits</strong><br>
+      Model: <strong style="color:var(--text-sub);">Claude Haiku</strong> — fast &amp; efficient<br>
+      Config pastes &gt;8,000 chars count as <strong style="color:var(--text-sub);">3 queries</strong><br>
+      <a href="https://adkcyber.com/pan-copilot.html#pricing" target="_blank">Upgrade for Sonnet &amp; Opus →</a>
+    </div>
+
     <button id="upgrade-link" onclick="openUpgradeModal()">
       ↗ Upgrade plan
     </button>
@@ -1140,6 +1161,7 @@
         placeholder="# paste the relevant section — e.g., a specific policy rule, BGP neighbor config, or IKE profile…"
         oninput="updateConfigStatus()"></textarea>
       <div id="config-status"></div>
+      <div id="large-cfg-warn">⚠ Config &gt;8,000 chars — counts as <strong>3 queries</strong> on Free tier</div>
     </div>
 
     <div class="rs-divider2"></div>
@@ -1200,6 +1222,7 @@ let currentConvId     = null;
 let configText        = '';
 let isStreaming       = false;
 let authMode          = 'login'; // 'login' | 'register'
+let currentTier       = 'free';  // updated on login/refresh; drives model & quota UI
 
 // ── Model selection ───────────────────────────────────────────────
 let selectedModel = 'auto';
@@ -1363,13 +1386,13 @@ function ackDataDisclosure() {
 }
 
 function updateTierUI(tier, queriesUsed, queriesLimit, period) {
+  currentTier = tier || 'free'; // keep module-level state in sync
   const badge = document.getElementById('tier-badge');
   badge.style.display = 'flex';
   if (tier === 'pro') {
     badge.className = 'pro';
     const used = queriesUsed ?? 0;
     const lim  = queriesLimit ?? 1000;
-    const pct  = Math.round((used / lim) * 100);
     badge.textContent = `★ Pro · ${used.toLocaleString()}/${lim.toLocaleString()} this month`;
   } else if (tier === 'max') {
     badge.className = 'max';
@@ -1382,6 +1405,10 @@ function updateTierUI(tier, queriesUsed, queriesLimit, period) {
     const lim  = queriesLimit ?? 10;
     badge.textContent = `Free · ${used}/${lim} this week`;
   }
+  // Show the free-tier limitations box only for free users
+  document.getElementById('free-tier-info').style.display = (tier === 'free') ? 'block' : 'none';
+  // Re-evaluate the large-config warning with the current config value
+  updateConfigStatus();
 }
 
 function updateUsageDisplay(queriesUsed, queriesLimit, tier, period) {
@@ -1857,15 +1884,20 @@ function autoResize(el) {
 
 // ── Config paste ──────────────────────────────────────────────────
 function updateConfigStatus() {
-  const val = document.getElementById('config-paste').value.trim();
-  const el  = document.getElementById('config-status');
+  const val  = document.getElementById('config-paste').value.trim();
+  const el   = document.getElementById('config-status');
+  const warn = document.getElementById('large-cfg-warn');
   if (val) {
     const lines = val.split('\n').length;
-    el.textContent = `${lines} lines ready to attach`;
+    el.textContent = `${lines} lines · ${val.length.toLocaleString()} chars`;
     el.className   = 'has';
   } else {
     el.textContent = '';
     el.className   = '';
+  }
+  // Show large-config warning only for free-tier users with >8,000 char configs
+  if (warn) {
+    warn.style.display = (currentTier === 'free' && val.length > 8000) ? 'block' : 'none';
   }
   document.getElementById('config-ind').textContent = val ? '📎 Config attached' : '';
 }

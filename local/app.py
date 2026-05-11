@@ -2331,8 +2331,16 @@ _COMPLEX_KEYWORDS = {
     "best practices", "troubleshoot", "diagnose", "forensic",
 }
 
-def _select_model(message: str, config_text: Optional[str]) -> str:
-    """Route to the right model based on message and config complexity."""
+def _select_model(message: str, config_text: Optional[str], tier: str = "pro") -> str:
+    """Route to the right model based on message and config complexity.
+
+    Free tier is always Haiku — fast, cost-controlled, and appropriate for
+    the 10-query/week limit. Paid tiers get full auto-routing.
+    """
+    # Free tier locked to Haiku regardless of message or config size
+    if tier == "free":
+        return "claude-haiku-4-5-20251001"
+
     config_len = len(config_text or "")
     msg_lower  = message.lower()
     has_keyword = any(kw in msg_lower for kw in _COMPLEX_KEYWORDS)
@@ -2810,19 +2818,30 @@ def chat_stream(req: ChatRequest):
             detail="Session key missing. Please log out and log back in."
         )
 
-    token = _session_cache["token"]
+    token      = _session_cache["token"]
+    tier       = _session_cache.get("tier", "free")
+    config_len = len(req.config_text or "")
 
-    # Check/increment query count via license server
-    check = _license_post("/query/check", {"token": token})
+    # Free tier: large config pastes (>8,000 chars) count as 3 queries to reflect
+    # the higher token cost. The user is warned in the UI before submitting.
+    query_weight = 3 if (tier == "free" and config_len > 8000) else 1
+
+    # Check/increment query count via license server (atomic, weight-aware)
+    check = _license_post("/query/check", {"token": token, "weight": query_weight})
 
     if not check.get("allowed", False):
-        raise HTTPException(
-            status_code=429,
-            detail=check.get(
-                "detail",
-                f"Query limit reached. Upgrade at adkcyber.com/adk-cyber-ai.html"
+        base_detail = check.get("detail", "Query limit reached.")
+        if query_weight == 3:
+            detail = (
+                f"{base_detail} "
+                f"This config paste ({config_len:,} chars) counted as 3 queries — "
+                f"free tier charges 3 queries for configs over 8,000 characters. "
+                f"Upgrade to Pro for full config analysis with advanced models: "
+                f"adkcyber.com/pan-copilot.html"
             )
-        )
+        else:
+            detail = base_detail
+        raise HTTPException(status_code=429, detail=detail)
 
     # Sync usage into session cache
     for key in ("queries_used", "queries_limit", "queries_remaining", "period"):
@@ -2847,14 +2866,17 @@ def chat_stream(req: ChatRequest):
     conv_id    = get_or_create_conversation(req.conversation_id)
     db_history = load_conversation_history(conv_id)   # source of truth for memory
     messages   = build_messages(sanitized_req, db_history=db_history)
-    client   = anthropic.Anthropic(api_key=api_key)
+    client     = anthropic.Anthropic(api_key=api_key)
 
-    # Resolve model: "auto" → pick based on complexity
-    resolved_model = (
-        _select_model(req.message, req.config_text)
-        if req.model == "auto"
-        else req.model
-    )
+    # Resolve model:
+    #   - Free tier is always Haiku (enforced here regardless of req.model)
+    #   - Paid tiers: "auto" → route by complexity; explicit model → honour it
+    if tier == "free":
+        resolved_model = "claude-haiku-4-5-20251001"
+    elif req.model == "auto":
+        resolved_model = _select_model(req.message, req.config_text, tier=tier)
+    else:
+        resolved_model = req.model
 
     def event_generator():
         full_reply = []

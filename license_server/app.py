@@ -281,6 +281,7 @@ class AuthRequest(BaseModel):
 
 class TokenRequest(BaseModel):
     token: str
+    weight: int = 1  # query cost multiplier: 1 = normal, 3 = free-tier large config (>8k chars)
 
 class AdminTierRequest(BaseModel):
     email: str
@@ -390,9 +391,10 @@ def check_and_count(request: Request, req: TokenRequest):
     if not user:
         raise HTTPException(status_code=401, detail="Session expired. Please log in again.")
 
-    tier  = user["tier"]
-    limit = query_limit_for(tier)
-    pk    = period_key(tier)
+    tier   = user["tier"]
+    limit  = query_limit_for(tier)
+    pk     = period_key(tier)
+    weight = max(1, min(req.weight, 3))  # clamp to [1, 3]
 
     if tier == "owner":
         return {
@@ -401,20 +403,22 @@ def check_and_count(request: Request, req: TokenRequest):
             "queries_remaining": OWNER_LIMIT, "unlimited": True,
         }
 
-    # Atomic check-and-increment to prevent TOCTOU race
+    # Atomic check-and-increment to prevent TOCTOU race.
+    # weight > 1 for free-tier large-config submissions (counts as 3 queries).
     with get_db() as db:
-        # Try to increment only if under limit
+        # Ensure row exists
         db.execute("""
             INSERT INTO query_counts (user_id, period_key, count) VALUES (?, ?, 0)
             ON CONFLICT(user_id, period_key) DO NOTHING
         """, (user["id"], pk))
         db.commit()
 
+        # Only increment if count + weight fits within the limit
         result = db.execute("""
-            UPDATE query_counts SET count = count + 1
-            WHERE user_id = ? AND period_key = ? AND count < ?
+            UPDATE query_counts SET count = count + ?
+            WHERE user_id = ? AND period_key = ? AND count + ? <= ?
             RETURNING count
-        """, (user["id"], pk, limit)).fetchone()
+        """, (weight, user["id"], pk, weight, limit)).fetchone()
         db.commit()
 
     if result is None:
