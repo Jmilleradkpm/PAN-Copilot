@@ -54,13 +54,23 @@ uvicorn.config.Config.configure_logging = lambda self: None
 
 
 def _show_crash_dialog(message: str) -> None:
-    try:
-        import ctypes
-        ctypes.windll.user32.MessageBoxW(
-            0, message, "ADK Cyber AI - Startup Error", 0x10
-        )
-    except Exception:
-        pass
+    # Production target is Windows (PyInstaller windowed build). On other
+    # platforms (dev machines running the launcher directly) fall back to
+    # stderr so the error is at least visible somewhere.
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            ctypes.windll.user32.MessageBoxW(
+                0, message, "ADK Cyber AI - Startup Error", 0x10
+            )
+        except Exception:
+            pass
+    else:
+        try:
+            sys.stderr.write(f"[startup error] {message}\n")
+            sys.stderr.flush()
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------

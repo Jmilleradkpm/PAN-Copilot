@@ -189,11 +189,11 @@ app = FastAPI(title="ADK Cyber AI", version="4.0.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost",
-        "http://127.0.0.1",
-        "null",
-    ],
+    # The regex covers every http://localhost / http://127.0.0.1 origin
+    # (with or without port). "null" is kept explicitly because that's the
+    # origin some browsers send for file:// or sandboxed contexts and the
+    # regex does not match it.
+    allow_origins=["null"],
     allow_origin_regex=r"http://(localhost|127\.0\.0\.1)(:\d+)?",
     allow_credentials=True,
     allow_methods=["*"],
