@@ -1219,12 +1219,13 @@ const PRODUCTS = {
 };
 
 // State
-let currentProduct    = null;
-let currentConvId     = null;
-let configText        = '';
-let isStreaming       = false;
-let authMode          = 'login'; // 'login' | 'register'
-let currentTier       = 'free';  // updated on login/refresh; drives model & quota UI
+let currentProduct       = null;
+let currentConvId        = null;
+let configText           = '';
+let isStreaming          = false;
+let authMode             = 'login'; // 'login' | 'register'
+let currentTier          = 'free';  // updated on login/refresh; drives model & quota UI
+let _kbScrollToTop       = false;   // set by askKb(); clears after done event scrolls to top of response
 
 // ── Model selection ───────────────────────────────────────────────
 let selectedModel = 'auto';
@@ -1673,6 +1674,7 @@ function closeKbDropdown() {
 // Sets the chat input to the KB trigger phrase and submits.
 function askKb(trigger) {
   if (isStreaming) return;
+  _kbScrollToTop = true;
   const input = document.getElementById('user-input');
   input.value = trigger;
   sendMessage();
@@ -1856,6 +1858,13 @@ async function sendMessage() {
             const period = data.period || (tier === 'free' ? 'weekly' : 'monthly');
             updateTierUI(tier, data.queries_used, data.queries_limit, period);
             updateUsageDisplay(data.queries_used, data.queries_limit, tier, period);
+          }
+          // KB articles: scroll back to the top of the response so the user
+          // reads from the beginning rather than landing at the end.
+          if (_kbScrollToTop) {
+            _kbScrollToTop = false;
+            const msgsEl = document.getElementById('messages');
+            msgsEl.scrollTop = placeholder.offsetTop - msgsEl.offsetTop;
           }
           loadConversations();
         } else if (data.type === 'error') {
