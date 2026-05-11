@@ -651,6 +651,9 @@ _KB_TRIGGER_MAP: dict = {
             # HA general
             "high availability",
             "high-availability",
+            "failover",
+            "firewall failover",
+            "pan failover",
             "ha failover",
             "ha pair",
             "ha cluster",
