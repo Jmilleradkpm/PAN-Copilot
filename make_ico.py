@@ -7,7 +7,7 @@ try:
 except ImportError:
     USE_PILLOW = False
 
-DEST = r"C:\Users\jmill\Downloads\PAN Copilot_APP\local\pan_copilot.ico"
+DEST = os.path.join(os.path.dirname(os.path.abspath(__file__)), "local", "pan_copilot.ico")
 
 def draw_icon_pillow(size):
     s = size
