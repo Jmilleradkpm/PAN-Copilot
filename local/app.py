@@ -38,7 +38,7 @@ import httpx
 from fastapi import FastAPI, HTTPException, UploadFile, File, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, HTMLResponse
-from pydantic import BaseModel, validator
+from pydantic import BaseModel, field_validator
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -217,6 +217,8 @@ def init_db():
                 created_at      TEXT NOT NULL,
                 FOREIGN KEY (conversation_id) REFERENCES conversations(id)
             );
+            CREATE INDEX IF NOT EXISTS idx_messages_conv_created
+                ON messages(conversation_id, created_at);
         """)
         db.commit()
 
@@ -873,13 +875,15 @@ class ChatRequest(BaseModel):
     max_tokens: Optional[int] = 2048
     conversation_id: Optional[str] = None
 
-    @validator("model", pre=True, always=True)
+    @field_validator("model", mode="before")
+    @classmethod
     def validate_model(cls, v):
         if v not in _ALLOWED_MODELS:
             return "auto"
         return v
 
-    @validator("max_tokens", pre=True, always=True)
+    @field_validator("max_tokens", mode="before")
+    @classmethod
     def cap_tokens(cls, v):
         return min(int(v or 2048), _MAX_TOKENS_CAP)
 
@@ -1257,7 +1261,15 @@ async def upload_config(file: UploadFile = File(...)):
         text = content.decode("utf-8", errors="replace")
     except Exception:
         raise HTTPException(status_code=400, detail="Could not decode file as text.")
-    return {"filename": file.filename, "size": len(content), "text": text}
+    # Strip credential values before the text is shown in the UI, so secrets
+    # never sit in the textarea where they could be captured by a screenshot.
+    sanitized, redactions = sanitize_config_text(text)
+    return {
+        "filename":   file.filename,
+        "size":       len(content),
+        "text":       sanitized,
+        "redactions": redactions,
+    }
 
 # ---------------------------------------------------------------------------
 # Chat — streaming
