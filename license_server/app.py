@@ -132,6 +132,9 @@ PRO_MONTHLY_LIMIT  = 1_000
 MAX_MONTHLY_LIMIT  = 2_500
 OWNER_LIMIT        = 999_999
 SESSION_TTL_DAYS   = 30
+MAX_QUERY_WEIGHT   = 3  # max cost multiplier per query (e.g. free-tier large config pastes)
+
+VALID_TIERS = frozenset({"free", "pro", "max", "owner"})
 
 TIER_LIMITS = {
     "free":  FREE_WEEKLY_LIMIT,
@@ -324,11 +327,8 @@ def register(request: Request, req: AuthRequest):
         )
         db.commit()
 
-    class _User:
-        def __getitem__(self, k):
-            return {"id": user_id, "email": email, "tier": "free", "seats_allowed": 1}[k]
-
-    payload = usage_response(_User(), queries_used=0, session_token=token)
+    new_user = {"id": user_id, "email": email, "tier": "free", "seats_allowed": 1}
+    payload = usage_response(new_user, queries_used=0, session_token=token)
     payload["token"] = token
     return payload
 
@@ -394,7 +394,7 @@ def check_and_count(request: Request, req: TokenRequest):
     tier   = user["tier"]
     limit  = query_limit_for(tier)
     pk     = period_key(tier)
-    weight = max(1, min(req.weight, 3))  # clamp to [1, 3]
+    weight = max(1, min(req.weight, MAX_QUERY_WEIGHT))  # clamp to [1, MAX_QUERY_WEIGHT]
 
     if tier == "owner":
         return {
@@ -467,8 +467,8 @@ def _check_admin(authorization: str):
 @app.post("/admin/set-tier")
 def set_tier(req: AdminTierRequest, authorization: str = Header(default="")):
     _check_admin(authorization)
-    if req.tier not in ("free", "pro", "max", "owner"):
-        raise HTTPException(status_code=400, detail="tier must be free, pro, max, or owner.")
+    if req.tier not in VALID_TIERS:
+        raise HTTPException(status_code=400, detail=f"tier must be one of: {', '.join(sorted(VALID_TIERS))}.")
     with get_db() as db:
         result = db.execute(
             "UPDATE users SET tier = ?, seats_allowed = ? WHERE email = ?",

@@ -1186,7 +1186,9 @@
    ADK Cyber AI — Local Desktop JS
    ================================================================ */
 
-const API = 'http://127.0.0.1:' + (window.location.port || 80);
+const _apiPort = window.location.port;
+if (!_apiPort) throw new Error('ADK Cyber AI: no port in URL — server may not be running.');
+const API = 'http://127.0.0.1:' + _apiPort;
 
 // Product metadata
 const PRODUCTS = {

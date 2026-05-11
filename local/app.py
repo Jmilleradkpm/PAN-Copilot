@@ -13,7 +13,9 @@ Nothing about your firewall configs ever touches ADK Cyber's servers.
 """
 
 import base64
+import hmac
 import json
+import logging
 import os
 import re
 import secrets
@@ -32,13 +34,20 @@ from typing import Optional
 # App version — replaced by CI at build time
 # ---------------------------------------------------------------------------
 APP_VERSION = "0.0.0"
+if APP_VERSION == "0.0.0":
+    logging.warning(
+        "APP_VERSION is 0.0.0 — CI version substitution may not have run. "
+        "The update banner may fire incorrectly in local dev builds."
+    )
 
 import anthropic
 import httpx
 from fastapi import FastAPI, HTTPException, UploadFile, File, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, HTMLResponse
-from pydantic import BaseModel, validator
+from pydantic import BaseModel, field_validator
+
+logger = logging.getLogger("pan_copilot")
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -2280,8 +2289,8 @@ def _build_kb_index() -> list:
                 "sections": _parse_kb_sections(content),
                 "triggers": frozenset(t.lower() for t in meta["triggers"]),
             })
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("KB load failed for %s: %s", kb_file.name, exc)
     return entries
 
 
@@ -2308,17 +2317,15 @@ class AuthRequest(BaseModel):
     email: str
     password: str
 
-class Message(BaseModel):
-    role: str
-    content: str
-
 _ALLOWED_MODELS = {
     "auto",
     "claude-opus-4-7",
     "claude-sonnet-4-6",
     "claude-haiku-4-5-20251001",
 }
-_MAX_TOKENS_CAP = 4096
+_MAX_TOKENS_CAP      = 4096
+MAX_QUERY_WEIGHT     = 3      # max cost multiplier for a single query
+MAX_CONFIG_LEN_FREE  = 8_000  # chars above which free-tier config counts as MAX_QUERY_WEIGHT queries
 
 # ---------------------------------------------------------------------------
 # Model routing — picks the best model based on question complexity
@@ -2364,18 +2371,20 @@ def _select_model(message: str, config_text: Optional[str], tier: str = "pro") -
 class ChatRequest(BaseModel):
     message: str
     config_text: Optional[str] = None
-    history: Optional[list[Message]] = []
     model: Optional[str] = "auto"
     max_tokens: Optional[int] = 2048
     conversation_id: Optional[str] = None
+    product_id: Optional[str] = None  # informational only; not used server-side
 
-    @validator("model", pre=True, always=True)
+    @field_validator("model", mode="before")
+    @classmethod
     def validate_model(cls, v):
         if v not in _ALLOWED_MODELS:
             return "auto"
         return v
 
-    @validator("max_tokens", pre=True, always=True)
+    @field_validator("max_tokens", mode="before")
+    @classmethod
     def cap_tokens(cls, v):
         return min(int(v or 2048), _MAX_TOKENS_CAP)
 
@@ -2822,20 +2831,20 @@ def chat_stream(req: ChatRequest):
     tier       = _session_cache.get("tier", "free")
     config_len = len(req.config_text or "")
 
-    # Free tier: large config pastes (>8,000 chars) count as 3 queries to reflect
+    # Free tier: large config pastes count as MAX_QUERY_WEIGHT queries to reflect
     # the higher token cost. The user is warned in the UI before submitting.
-    query_weight = 3 if (tier == "free" and config_len > 8000) else 1
+    query_weight = MAX_QUERY_WEIGHT if (tier == "free" and config_len > MAX_CONFIG_LEN_FREE) else 1
 
     # Check/increment query count via license server (atomic, weight-aware)
     check = _license_post("/query/check", {"token": token, "weight": query_weight})
 
     if not check.get("allowed", False):
         base_detail = check.get("detail", "Query limit reached.")
-        if query_weight == 3:
+        if query_weight == MAX_QUERY_WEIGHT:
             detail = (
                 f"{base_detail} "
-                f"This config paste ({config_len:,} chars) counted as 3 queries — "
-                f"free tier charges 3 queries for configs over 8,000 characters. "
+                f"This config paste ({config_len:,} chars) counted as {MAX_QUERY_WEIGHT} queries — "
+                f"free tier charges {MAX_QUERY_WEIGHT} queries for configs over {MAX_CONFIG_LEN_FREE:,} characters. "
                 f"Upgrade to Pro for full config analysis with advanced models: "
                 f"adkcyber.com/pan-copilot.html"
             )
@@ -2995,8 +3004,8 @@ def install_update():
                 os._exit(0)
             threading.Thread(target=_force_exit, daemon=True).start()
 
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.error("Auto-update download/install failed: %s", exc)
 
     threading.Thread(target=_download_and_run, daemon=True).start()
     return {"ok": True}
@@ -3048,12 +3057,9 @@ class ShutdownRequest(BaseModel):
 
 @app.post("/api/shutdown")
 def request_shutdown(req: ShutdownRequest):
-    import hmac as _hmac
-    if not _hmac.compare_digest(req.shutdown_token, SHUTDOWN_TOKEN):
+    if not hmac.compare_digest(req.shutdown_token, SHUTDOWN_TOKEN):
         raise HTTPException(status_code=403, detail="Forbidden.")
-    import threading
     def _do_exit():
-        import time
         time.sleep(0.4)
         if _uvicorn_server is not None:
             _uvicorn_server.should_exit = True
