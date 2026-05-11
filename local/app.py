@@ -143,6 +143,16 @@ _session_cache: dict = {
     "weekly_limit": 10,
 }
 
+# Guards _session_cache mutations so concurrent auth + chat requests can't
+# leave the cache half-updated (e.g. new token paired with stale api_key).
+_session_lock = threading.Lock()
+
+
+def _session_snapshot() -> dict:
+    """Return a consistent copy of the session cache under the lock."""
+    with _session_lock:
+        return dict(_session_cache)
+
 # ---------------------------------------------------------------------------
 # Config — stores session token only (not the API key)
 # ---------------------------------------------------------------------------
@@ -271,382 +281,59 @@ SYSTEM_PROMPT = load_system_prompt() + _RESPONSE_STYLE_ADDENDUM
 #
 # To add a new KB article:
 #   1. Drop a .md file into local/kb/
-#   2. Add an entry below in _KB_TRIGGER_MAP keyed by filename
-#   3. List trigger phrases (any one match → serve this article)
+#   2. Add a YAML frontmatter block at the top of the file:
+#        ---
+#        kb_id: KB-PAN-FOO-001
+#        title: Short human-readable title
+#        triggers:
+#          - phrase one
+#          - phrase two
+#        ---
+#      Any trigger that appears (case-insensitive substring) in the user's
+#      message will serve this article.
 # ---------------------------------------------------------------------------
 
-_KB_TRIGGER_MAP: dict = {
-    "gp_always_prelogon.md": {
-        "kb_id": "KB-GP-PRELOGON-001",
-        "title": "GlobalProtect Always Pre-Logon (Always On) — Complete Setup Guide",
-        "triggers": [
-            "pre-logon",
-            "pre logon",
-            "prelogon",
-            "always pre-logon",
-            "always pre logon",
-            "gp pre-logon",
-            "gp pre logon",
-            "globalprotect pre-logon",
-            "globalprotect pre logon",
-            "globalprotect always on",
-            "always-on vpn",
-            "always on vpn",
-            "machine cert globalprotect",
-            "globalprotect machine cert",
-            "machine certificate globalprotect",
-            "globalprotect machine certificate",
-            "kb-gp-prelogon",
-            "kb-gp-prelogon-001",
-        ],
-    },
-    "pan_decryption_troubleshooting.md": {
-        "kb_id": "KB-PAN-DEC-001",
-        "title": "SSL/TLS Decryption Troubleshooting on Palo Alto Networks NGFW",
-        "triggers": [
-            # Decryption modes
-            "ssl decryption",
-            "tls decryption",
-            "ssl/tls decryption",
-            "ssl forward proxy",
-            "forward proxy",
-            "ssl inbound inspection",
-            "inbound inspection",
-            "ssh proxy",
-            # Policy/profile terminology
-            "decryption profile",
-            "decrypt rule",
-            "decryption policy",
-            "decryption rule",
-            "no-decrypt",
-            "no decrypt",
-            "nodecrypt",
-            "ssl exclusion",
-            "decryption exclusion",
-            # Trust & cert issues
-            "forward trust",
-            "forward trust ca",
-            "forward untrust",
-            "incomplete chain",
-            "certificate chain",
-            "cert chain",
-            # Failure modes
-            "decryption failure",
-            "decryption log",
-            "decryption troubleshoot",
-            "decrypt troubleshoot",
-            "decrypt broken",
-            "decryption broken",
-            "untrusted issuer",
-            "unsupported cipher",
-            "unsupported version",
-            "sni mismatch",
-            # Pinning & mTLS
-            "cert pinning",
-            "certificate pinning",
-            "pinned cert",
-            "mutual tls",
-            "mtls",
-            "client authentication required",
-            # QUIC
-            "block quic",
-            "quic bypass",
-            "quic decrypt",
-            "quic http",
-            "http/3",
-            "http3",
-            # OCSP/CRL
-            "ocsp firewall",
-            "ocsp decryption",
-            "crl firewall",
-            "unknown certificate status",
-            # ECH / Encrypted ClientHello (v2.0)
-            "ech",
-            "encrypted clienthello",
-            "encrypted client hello",
-            "esni",
-            # Half-loading websites (v2.0)
-            "half-loading",
-            "half loading",
-            "half load",
-            "partial load",
-            "website half",
-            "site half loads",
-            # Resource exhaustion (v2.0)
-            "resource exhaustion",
-            "decryption resource",
-            "proxy_no_resource",
-            "decrypt resource",
-            # DNS-over-HTTPS / DNS-over-TLS / SVCB controls (v2.0)
-            "svcb",
-            "https record",
-            "doh firewall",
-            "dot firewall",
-            "dns over https firewall",
-            "dns over tls firewall",
-            # Wireshark / packet capture (v2.0)
-            "wireshark tls",
-            "tls alert",
-            "tls alert code",
-            "packet capture decrypt",
-            # HAR file diagnostics (v2.0)
-            "har file",
-            "har export",
-            "devtools network",
-            # Escalation / TAC (v2.0)
-            "tac case decryption",
-            "escalation checklist",
-            "decryption escalation",
-            # Baseline posture / what not to do (v2.0)
-            "decryption best practice",
-            "decrypt best practice",
-            "disable decryption",
-            # Direct KB ID references
-            "kb-pan-dec",
-            "kb-pan-dec-001",
-        ],
-    },
-    "pan_nat_troubleshooting.md": {
-        "kb_id": "KB-PAN-NAT-001",
-        "title": "NAT on Palo Alto Networks NGFW — VPN, U-Turn, Policy Zones, and Destination NAT",
-        "triggers": [
-            # Core NAT terminology
-            "nat policy",
-            "nat rule",
-            "nat rules",
-            "pan-os nat",
-            "panos nat",
-            "nat configuration",
-            "nat troubleshoot",
-            "nat not working",
-            "nat broken",
-            "nat issue",
-            "nat problem",
-            "nat mismatch",
-            # Source / destination NAT types
-            "source nat",
-            "destination nat",
-            "dnat",
-            "snat",
-            "static nat",
-            "bidirectional nat",
-            "dynamic ip and port",
-            "dipp",
-            "dipp pool",
-            "dipp exhaustion",
-            "nat pool exhaustion",
-            "port exhaustion nat",
-            "nat_dynamic_port_xlat_failed",
-            "nat oversubscription",
-            "show running ippool",
-            # No-NAT / exemptions
-            "no-nat",
-            "no nat",
-            "nat exemption",
-            "nat bypass",
-            "nat exclusion",
-            # VPN + NAT interaction
-            "vpn nat",
-            "nat vpn",
-            "vpn no-nat",
-            "vpn no nat",
-            "nat across vpn",
-            "site-to-site nat",
-            "ipsec nat",
-            "vpn source nat",
-            "vpn traffic nat",
-            "nat blocking vpn",
-            "nat tunnel",
-            "tunnel nat",
-            "internet nat vpn",
-            # U-turn / hairpin NAT
-            "u-turn nat",
-            "u turn nat",
-            "uturn nat",
-            "hairpin nat",
-            "hairpin",
-            "internal server public ip",
-            "internal server public fqdn",
-            "access server by public ip",
-            "loopback nat",
-            "internal to public fqdn",
-            # Inbound DNAT / DMZ
-            "inbound nat",
-            "inbound dnat",
-            "dmz nat",
-            "dmz server nat",
-            "nat to dmz",
-            "public to dmz",
-            "destination nat dmz",
-            "nat zone dmz",
-            # Pre/post NAT zone confusion
-            "pre-nat zone",
-            "post-nat zone",
-            "pre nat zone",
-            "post nat zone",
-            "pre-nat",
-            "post-nat",
-            "nat zone",
-            "nat destination zone",
-            "untrust to dmz nat",
-            "nat security rule zone",
-            # Outbound NAT
-            "outbound nat",
-            "internet nat",
-            "egress nat",
-            # HA + NAT
-            "active active nat",
-            "active/active nat",
-            "ha nat",
-            "nat ha",
-            "nat failover",
-            "nat binding",
-            "device binding nat",
-            "asymmetric nat",
-            "ha nat asymmetric",
-            # NAT CLI commands
-            "test nat-policy-match",
-            "nat-policy-match",
-            "nat policy match",
-            "show running nat-policy",
-            "show running ippool",
-            # Proxy ARP
-            "proxy arp nat",
-            "nat proxy arp",
-            # DNS + NAT
-            "dns rewrite nat",
-            "nat dns rewrite",
-            "split dns nat",
-            "dns nat",
-            # PCNSE NAT scenarios
-            "pcnse nat",
-            "nat pcnse",
-            # Direct KB ID references
-            "kb-pan-nat",
-            "kb-pan-nat-001",
-        ],
-    },
-    "pan_appid_unknown_troubleshooting.md": {
-        "kb_id": "KB-PAN-APPID-001",
-        "title": "App-ID unknown-tcp and unknown-udp — Causes, Fixes, and the Custom App-ID Lifecycle",
-        "triggers": [
-            # Core unknown App-ID terms
-            "unknown-tcp",
-            "unknown-udp",
-            "unknown tcp",
-            "unknown udp",
-            "unknown app",
-            "unknown application",
-            "app-id unknown",
-            "appid unknown",
-            "app id unknown",
-            # App-ID general
-            "app-id",
-            "appid",
-            "app id classification",
-            "app-id classification",
-            "app-id engine",
-            "appid engine",
-            "app-id lifecycle",
-            "app-id not matching",
-            "app-id mismatch",
-            "app-id broken",
-            "app-id issue",
-            "app-id problem",
-            # Custom App-ID / signatures
-            "custom app-id",
-            "custom appid",
-            "custom app id",
-            "custom application",
-            "custom application signature",
-            "app-id signature",
-            "appid signature",
-            "custom signature",
-            "write app-id",
-            "create app-id",
-            "build app-id",
-            "app-id pattern",
-            # Signature contexts
-            "unknown-req",
-            "unknown-rsp",
-            "http-req-headers",
-            "ssl-cert-subject",
-            "ssl-cert-issuer",
-            "dns-req-header",
-            "packet-payload context",
-            # Application override
-            "application override",
-            "app override",
-            "appid override",
-            "override policy",
-            "app-id override",
-            "policy override application",
-            # PAN-303959 defect
-            "pan-303959",
-            "pan303959",
-            "appid resource exhaustion",
-            "app-id resource exhaustion",
-            "app-id resource",
-            "appid resource",
-            "app resource alloc",
-            "app_resource_alloc_fail",
-            # Non-SYN / asymmetric
-            "non-syn-tcp",
-            "non syn tcp",
-            "nonsyntcp",
-            "asymmetric app-id",
-            "asymmetric appid",
-            # Incomplete sessions
-            "incomplete tcp",
-            "incomplete session",
-            "incomplete app",
-            "insufficient-data",
-            "insufficient data app",
-            # Policy logic traps
-            "ssl web-browsing trap",
-            "app-id dependency",
-            "appid dependency",
-            "application dependency",
-            "implicit dependency",
-            "explicit dependency",
-            "app-id update safeguard",
-            "appid update safeguard",
-            # Applipedia / content
-            "applipedia",
-            "app-id database",
-            "appid database",
-            "content update app-id",
-            "app-id content update",
-            "content update appid",
-            # App-ID Cloud Engine
-            "app-id cloud engine",
-            "appid cloud engine",
-            "cloud app-id",
-            # CLI commands
-            "test application-identification",
-            "application-identification pcap",
-            "test appid pcap",
-            "show app-id-engine",
-            "app-id-engine status",
-            "show application type custom",
-            "show running application-override",
-            "debug app-id",
-            # Monitoring / ACC
-            "acc unknown-tcp",
-            "acc unknown tcp",
-            "acc unknown application",
-            "monitor unknown app",
-            # PCNSE App-ID questions
-            "pcnse app-id",
-            "pcnse appid",
-            "pcnse unknown-tcp",
-            "pcnse unknown tcp",
-            # Direct KB ID references
-            "kb-pan-appid",
-            "kb-pan-appid-001",
-        ],
-    },
-}
+
+def _parse_frontmatter(content: str):
+    """
+    Parse minimal YAML frontmatter at the top of a markdown file.
+    Supports only what KB articles need: scalar string fields (kb_id, title)
+    and one list field (triggers). Returns (meta_dict, body_without_frontmatter).
+    Returns ({}, content) if no frontmatter is present.
+    """
+    if not content.startswith("---\n"):
+        return {}, content
+    end = content.find("\n---", 4)
+    if end < 0:
+        return {}, content
+    block = content[4:end]
+    rest  = content[end + 4:]
+    if rest.startswith("\n"):
+        rest = rest[1:]
+
+    meta: dict = {}
+    current_list_key = None
+    for line in block.split("\n"):
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        # List item: "  - value"
+        m = re.match(r"\s+-\s+(.+)", line)
+        if m and current_list_key is not None:
+            value = m.group(1).strip().strip('"').strip("'")
+            meta[current_list_key].append(value)
+            continue
+        # Top-level key: "key: value" or "key:" (list header)
+        if ":" in line and not line.startswith((" ", "\t")):
+            key, _, value = line.partition(":")
+            key = key.strip()
+            value = value.strip().strip('"').strip("'")
+            if value:
+                meta[key] = value
+                current_list_key = None
+            else:
+                meta[key] = []
+                current_list_key = key
+    return meta, rest
 
 
 # Common English words that carry no topical signal — excluded from scoring.
@@ -772,27 +459,32 @@ def _kb_relevant_sections(kb_entry: dict, message: str) -> str:
 
 def _build_kb_index() -> list:
     """
-    Load KB .md files from KB_DIR, pairing each with its trigger phrases and
-    parsed sections. Only files listed in _KB_TRIGGER_MAP are loaded.
+    Load KB .md files from KB_DIR. Each file must declare its kb_id, title,
+    and trigger phrases in a YAML frontmatter block (see _parse_frontmatter).
+    Files without frontmatter or without triggers are skipped — they will
+    not short-circuit chat (the Anthropic API will handle them normally).
     Returns list of dicts: {kb_id, title, content, sections, triggers}.
     """
     if not KB_DIR.exists():
         return []
     entries = []
     for kb_file in sorted(KB_DIR.glob("*.md")):
-        meta = _KB_TRIGGER_MAP.get(kb_file.name)
-        if not meta:
-            continue
         try:
-            content = kb_file.read_text(encoding="utf-8").strip()
-            if not content:
+            raw = kb_file.read_text(encoding="utf-8").strip()
+            if not raw:
                 continue
+            meta, body = _parse_frontmatter(raw)
+            triggers = meta.get("triggers") or []
+            kb_id    = meta.get("kb_id")
+            if not kb_id or not triggers:
+                continue
+            body = body.strip()
             entries.append({
-                "kb_id":    meta["kb_id"],
-                "title":    meta["title"],
-                "content":  content,
-                "sections": _parse_kb_sections(content),
-                "triggers": frozenset(t.lower() for t in meta["triggers"]),
+                "kb_id":    kb_id,
+                "title":    meta.get("title") or kb_id,
+                "content":  body,
+                "sections": _parse_kb_sections(body),
+                "triggers": frozenset(t.lower() for t in triggers),
             })
         except Exception:
             pass
@@ -895,12 +587,18 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 _MAX_HISTORY_TURNS = 40  # cap at 20 user/assistant pairs to stay well within context limits
+_MAX_HISTORY_CHARS = 80_000  # ~20K tokens; leaves headroom for fresh prompt + reply within 200K window
 
 def load_conversation_history(conversation_id: str) -> list:
     """
     Load recent messages for a conversation from SQLite.
     Returns a list of {"role": ..., "content": ...} dicts in chronological order.
     The frontend always sends history=[] as a placeholder; the DB is the source of truth.
+
+    Drops the oldest messages first once the cumulative character count would
+    exceed _MAX_HISTORY_CHARS — prevents context_length_exceeded when earlier
+    turns contained large pasted configs. The most recent message is always
+    kept even if it alone exceeds the budget.
     """
     with get_db() as db:
         rows = db.execute(
@@ -908,8 +606,15 @@ def load_conversation_history(conversation_id: str) -> list:
             "WHERE conversation_id = ? ORDER BY created_at DESC LIMIT ?",
             (conversation_id, _MAX_HISTORY_TURNS),
         ).fetchall()
-    # fetchall is newest-first (DESC); reverse for chronological order
-    return [{"role": r["role"], "content": r["content"]} for r in reversed(rows)]
+    kept = []
+    used = 0
+    for r in rows:  # newest-first
+        size = len(r["content"])
+        if kept and used + size > _MAX_HISTORY_CHARS:
+            break
+        kept.append(r)
+        used += size
+    return [{"role": r["role"], "content": r["content"]} for r in reversed(kept)]
 
 def build_messages(req: ChatRequest, db_history: list = None) -> list:
     """
@@ -1099,23 +804,24 @@ def _license_post(path: str, body: dict) -> dict:
 
 def _populate_session(data: dict):
     """Write license server response into the in-memory session cache."""
-    token = data.get("token") or _session_cache["token"]
-    _session_cache["token"]        = token
-    _session_cache["email"]        = data.get("email")
-    _session_cache["tier"]         = data.get("tier", "free")
-    _session_cache["period"]       = data.get("period", "weekly")
-    _session_cache["queries_used"]      = data.get("queries_used", 0) or 0
-    _session_cache["queries_limit"]     = data.get("queries_limit", 10) or 10
-    _session_cache["queries_remaining"] = data.get("queries_remaining", 10) or 10
-    _session_cache["weekly_used"]  = data.get("weekly_used") or data.get("queries_used", 0) or 0
-    _session_cache["weekly_limit"] = data.get("weekly_limit") or data.get("queries_limit", 10) or 10
+    with _session_lock:
+        token = data.get("token") or _session_cache["token"]
+        _session_cache["token"]        = token
+        _session_cache["email"]        = data.get("email")
+        _session_cache["tier"]         = data.get("tier", "free")
+        _session_cache["period"]       = data.get("period", "weekly")
+        _session_cache["queries_used"]      = data.get("queries_used", 0) or 0
+        _session_cache["queries_limit"]     = data.get("queries_limit", 10) or 10
+        _session_cache["queries_remaining"] = data.get("queries_remaining", 10) or 10
+        _session_cache["weekly_used"]  = data.get("weekly_used") or data.get("queries_used", 0) or 0
+        _session_cache["weekly_limit"] = data.get("weekly_limit") or data.get("queries_limit", 10) or 10
 
-    # Decrypt the API key using the session token as key material
-    encrypted_key = data.get("anthropic_key")
-    if encrypted_key and token:
-        _session_cache["anthropic_key"] = _decrypt_api_key(encrypted_key, token)
-    else:
-        _session_cache["anthropic_key"] = None
+        # Decrypt the API key using the session token as key material
+        encrypted_key = data.get("anthropic_key")
+        if encrypted_key and token:
+            _session_cache["anthropic_key"] = _decrypt_api_key(encrypted_key, token)
+        else:
+            _session_cache["anthropic_key"] = None
 
 # ---------------------------------------------------------------------------
 # Auth endpoints
@@ -1159,7 +865,8 @@ def login(req: AuthRequest):
 
 @app.post("/api/auth/logout")
 def logout():
-    _session_cache.update({"token": None, "email": None, "tier": None, "anthropic_key": None})
+    with _session_lock:
+        _session_cache.update({"token": None, "email": None, "tier": None, "anthropic_key": None})
     cfg = load_config()
     cfg.pop("session_token", None)
     cfg.pop("session_email", None)
@@ -1177,12 +884,14 @@ def auth_status():
     if not token:
         return {"authenticated": False}
 
-    _session_cache["token"] = token
+    with _session_lock:
+        _session_cache["token"] = token
 
     try:
         data = _license_post("/auth/validate", {"token": token})
         _populate_session(data)
-        _session_cache["token"] = token
+        with _session_lock:
+            _session_cache["token"] = token
         return {
             "authenticated": True,
             "email": data["email"],
@@ -1196,7 +905,8 @@ def auth_status():
         cfg.pop("session_token", None)
         cfg.pop("session_email", None)
         save_config(cfg)
-        _session_cache["token"] = None
+        with _session_lock:
+            _session_cache["token"] = None
         return {"authenticated": False}
 
 # ---------------------------------------------------------------------------
@@ -1277,7 +987,10 @@ async def upload_config(file: UploadFile = File(...)):
 
 @app.post("/chat/stream")
 def chat_stream(req: ChatRequest):
-    if not _session_cache.get("token"):
+    # Snapshot the cache once so token/api_key/usage observed by this request
+    # are mutually consistent — a concurrent logout can't tear them apart.
+    session = _session_snapshot()
+    if not session.get("token"):
         raise HTTPException(
             status_code=401,
             detail="Not logged in. Please sign in to use ADK Cyber AI."
@@ -1311,11 +1024,11 @@ def chat_stream(req: ChatRequest):
                     "input_tokens":       0,
                     "output_tokens":      0,
                     "conversation_id":    conv_id,
-                    "queries_used":       _session_cache.get("queries_used"),
-                    "queries_limit":      _session_cache.get("queries_limit"),
-                    "queries_remaining":  _session_cache.get("queries_remaining"),
-                    "period":             _session_cache.get("period", "weekly"),
-                    "tier":               _session_cache.get("tier"),
+                    "queries_used":       session.get("queries_used"),
+                    "queries_limit":      session.get("queries_limit"),
+                    "queries_remaining":  session.get("queries_remaining"),
+                    "period":             session.get("period", "weekly"),
+                    "tier":               session.get("tier"),
                     "redactions":         0,
                 }) + "\n\n"
             )
@@ -1327,14 +1040,14 @@ def chat_stream(req: ChatRequest):
         )
     # ── End KB short-circuit ────────────────────────────────────────────────
 
-    api_key = _session_cache.get("anthropic_key")
+    api_key = session.get("anthropic_key")
     if not api_key:
         raise HTTPException(
             status_code=401,
             detail="Session key missing. Please log out and log back in."
         )
 
-    token = _session_cache["token"]
+    token = session["token"]
 
     # Check/increment query count via license server
     check = _license_post("/query/check", {"token": token})
@@ -1348,12 +1061,19 @@ def chat_stream(req: ChatRequest):
             )
         )
 
-    # Sync usage into session cache
-    for key in ("queries_used", "queries_limit", "queries_remaining", "period"):
-        if check.get(key) is not None:
-            _session_cache[key] = check[key]
-    if check.get("weekly_used") is not None:
-        _session_cache["weekly_used"] = check["weekly_used"]
+    # Sync usage into session cache (atomic under the lock)
+    with _session_lock:
+        for key in ("queries_used", "queries_limit", "queries_remaining", "period"):
+            if check.get(key) is not None:
+                _session_cache[key] = check[key]
+        if check.get("weekly_used") is not None:
+            _session_cache["weekly_used"] = check["weekly_used"]
+        # Refresh local snapshot so the streamed `done` event reflects the new
+        # counts (license server is the source of truth for usage).
+        session.update({
+            k: _session_cache[k]
+            for k in ("queries_used", "queries_limit", "queries_remaining", "period", "weekly_used")
+        })
 
     # Strip credential values from config and message before sending to Anthropic
     cfg_sanitized, cfg_redactions = (
@@ -1396,7 +1116,7 @@ def chat_stream(req: ChatRequest):
                 reply_text = "".join(full_reply)
                 save_messages(conv_id, req.message, reply_text)
                 auto_title(conv_id, req.message)
-                yield f"data: {json.dumps({'type': 'done', 'model': resolved_model, 'input_tokens': final.usage.input_tokens, 'output_tokens': final.usage.output_tokens, 'conversation_id': conv_id, 'queries_used': _session_cache.get('queries_used'), 'queries_limit': _session_cache.get('queries_limit'), 'queries_remaining': _session_cache.get('queries_remaining'), 'period': _session_cache.get('period', 'weekly'), 'tier': _session_cache.get('tier'), 'redactions': total_redactions})}\n\n"
+                yield f"data: {json.dumps({'type': 'done', 'model': resolved_model, 'input_tokens': final.usage.input_tokens, 'output_tokens': final.usage.output_tokens, 'conversation_id': conv_id, 'queries_used': session.get('queries_used'), 'queries_limit': session.get('queries_limit'), 'queries_remaining': session.get('queries_remaining'), 'period': session.get('period', 'weekly'), 'tier': session.get('tier'), 'redactions': total_redactions})}\n\n"
         except anthropic.AuthenticationError:
             yield f"data: {json.dumps({'type': 'error', 'detail': 'API key error. Please contact support@adkcyber.com.'})}\n\n"
         except anthropic.RateLimitError:
