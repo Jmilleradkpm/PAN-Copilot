@@ -28,7 +28,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
 
 # ---------------------------------------------------------------------------
 # App version — replaced by CI at build time
@@ -2327,6 +2327,12 @@ _MAX_TOKENS_CAP      = 4096
 MAX_QUERY_WEIGHT     = 3      # max cost multiplier for a single query
 MAX_CONFIG_LEN_FREE  = 8_000  # chars above which free-tier config counts as MAX_QUERY_WEIGHT queries
 
+# Pasted-image limits (per chat turn). Anthropic vision models accept PNG, JPEG,
+# GIF, and WEBP. Cap count + per-image size to keep latency and token cost sane.
+MAX_IMAGES_PER_MSG = 4
+MAX_IMAGE_BYTES    = 5 * 1024 * 1024  # 5 MB decoded
+_ALLOWED_IMAGE_MEDIA_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
+
 # ---------------------------------------------------------------------------
 # Model routing — picks the best model based on question complexity
 # ---------------------------------------------------------------------------
@@ -2368,6 +2374,44 @@ def _select_model(message: str, config_text: Optional[str], tier: str = "pro") -
     return "claude-haiku-4-5-20251001"
 
 
+class ChatImage(BaseModel):
+    """A pasted screenshot or uploaded image, base64-encoded."""
+    media_type: str
+    data: str  # base64-encoded image bytes
+
+    @field_validator("media_type", mode="before")
+    @classmethod
+    def validate_media_type(cls, v):
+        v = (v or "").lower().strip()
+        if v not in _ALLOWED_IMAGE_MEDIA_TYPES:
+            raise ValueError(
+                f"Unsupported image type {v!r}. "
+                f"Allowed: {sorted(_ALLOWED_IMAGE_MEDIA_TYPES)}"
+            )
+        return v
+
+    @field_validator("data", mode="before")
+    @classmethod
+    def validate_data(cls, v):
+        if not isinstance(v, str) or not v:
+            raise ValueError("Image data must be a non-empty base64 string.")
+        # Decoded-size guard: base64 grows bytes by ~4/3, so cap raw length too.
+        if len(v) > MAX_IMAGE_BYTES * 4 // 3 + 16:
+            raise ValueError(
+                f"Image too large (max {MAX_IMAGE_BYTES // (1024*1024)} MB)."
+            )
+        try:
+            decoded_len = len(base64.b64decode(v, validate=True))
+        except Exception:
+            raise ValueError("Image data is not valid base64.")
+        if decoded_len > MAX_IMAGE_BYTES:
+            raise ValueError(
+                f"Image too large ({decoded_len:,} bytes, "
+                f"max {MAX_IMAGE_BYTES:,})."
+            )
+        return v
+
+
 class ChatRequest(BaseModel):
     message: str
     config_text: Optional[str] = None
@@ -2375,6 +2419,7 @@ class ChatRequest(BaseModel):
     max_tokens: Optional[int] = 2048
     conversation_id: Optional[str] = None
     product_id: Optional[str] = None  # informational only; not used server-side
+    images: Optional[List[ChatImage]] = None
 
     @field_validator("model", mode="before")
     @classmethod
@@ -2387,6 +2432,19 @@ class ChatRequest(BaseModel):
     @classmethod
     def cap_tokens(cls, v):
         return min(int(v or 2048), _MAX_TOKENS_CAP)
+
+    @field_validator("images", mode="before")
+    @classmethod
+    def cap_images(cls, v):
+        if v is None:
+            return None
+        if not isinstance(v, list):
+            raise ValueError("images must be a list.")
+        if len(v) > MAX_IMAGES_PER_MSG:
+            raise ValueError(
+                f"Too many images (max {MAX_IMAGES_PER_MSG} per message)."
+            )
+        return v
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -2416,6 +2474,10 @@ def build_messages(req: ChatRequest, db_history: list = None) -> list:
     """
     Build the messages list for the Anthropic API call.
     db_history (from SQLite) is preferred over req.history (from client).
+
+    When images are attached, the final user turn becomes a list of content
+    blocks (image blocks first, then a single text block) so the Anthropic
+    vision API can read the screenshots alongside the question.
     """
     messages = []
     history_source = db_history if db_history is not None else []
@@ -2424,14 +2486,31 @@ def build_messages(req: ChatRequest, db_history: list = None) -> list:
         content = turn.get("content") if isinstance(turn, dict) else turn.content
         if role in ("user", "assistant"):
             messages.append({"role": role, "content": content})
-    user_content = req.message
+    user_text = req.message
     if req.config_text and req.config_text.strip():
-        user_content = (
+        user_text = (
             "I am pasting the following PAN-OS configuration or CLI output for you to analyze:\n\n"
             f"```\n{req.config_text.strip()}\n```\n\n"
             f"{req.message}"
         )
-    messages.append({"role": "user", "content": user_content})
+    if req.images:
+        # Anthropic vision content blocks. Placing images first matches the
+        # documented pattern and helps the model anchor its answer to them.
+        blocks = [
+            {
+                "type": "image",
+                "source": {
+                    "type":       "base64",
+                    "media_type": img.media_type,
+                    "data":       img.data,
+                },
+            }
+            for img in req.images
+        ]
+        blocks.append({"type": "text", "text": user_text})
+        messages.append({"role": "user", "content": blocks})
+    else:
+        messages.append({"role": "user", "content": user_text})
     return messages
 
 def get_or_create_conversation(conversation_id: Optional[str]) -> str:
@@ -2778,8 +2857,9 @@ def chat_stream(req: ChatRequest):
 
     # ── KB short-circuit ────────────────────────────────────────────────────
     # If the user's question matches a local KB article, serve it directly.
-    # No Anthropic API call, no quota consumed, no latency.
-    kb_entry = _kb_match(req.message)
+    # No Anthropic API call, no quota consumed, no latency. Skip when the user
+    # pasted screenshots — the question can't be answered from a text KB alone.
+    kb_entry = None if req.images else _kb_match(req.message)
     if kb_entry:
         conv_id = get_or_create_conversation(req.conversation_id)
 
@@ -2880,10 +2960,15 @@ def chat_stream(req: ChatRequest):
     # Resolve model:
     #   - Free tier is always Haiku (enforced here regardless of req.model)
     #   - Paid tiers: "auto" → route by complexity; explicit model → honour it
+    #   - Paid tiers + images on "auto" → at least Sonnet (vision benefits from
+    #     a stronger model; Haiku still works but is weaker at reading dense
+    #     screenshots like CLI output or dashboards)
     if tier == "free":
         resolved_model = "claude-haiku-4-5-20251001"
     elif req.model == "auto":
         resolved_model = _select_model(req.message, req.config_text, tier=tier)
+        if req.images and resolved_model == "claude-haiku-4-5-20251001":
+            resolved_model = "claude-sonnet-4-6"
     else:
         resolved_model = req.model
 
@@ -2901,8 +2986,17 @@ def chat_stream(req: ChatRequest):
                     yield f"data: {json.dumps({'type': 'token', 'text': text})}\n\n"
                 final = stream.get_final_message()
                 reply_text = "".join(full_reply)
-                save_messages(conv_id, req.message, reply_text)
-                auto_title(conv_id, req.message)
+                # Persist a text-only summary so DB history stays text. The
+                # marker tells future turns (and the user reviewing history)
+                # that images were part of the original turn even though the
+                # bytes themselves aren't replayed.
+                n_imgs = len(req.images) if req.images else 0
+                persisted_msg = req.message
+                if n_imgs:
+                    suffix = f"\n\n[{n_imgs} image{'s' if n_imgs != 1 else ''} attached]"
+                    persisted_msg = (persisted_msg or "").rstrip() + suffix
+                save_messages(conv_id, persisted_msg, reply_text)
+                auto_title(conv_id, persisted_msg)
                 yield f"data: {json.dumps({'type': 'done', 'model': resolved_model, 'input_tokens': final.usage.input_tokens, 'output_tokens': final.usage.output_tokens, 'conversation_id': conv_id, 'queries_used': _session_cache.get('queries_used'), 'queries_limit': _session_cache.get('queries_limit'), 'queries_remaining': _session_cache.get('queries_remaining'), 'period': _session_cache.get('period', 'weekly'), 'tier': _session_cache.get('tier'), 'redactions': total_redactions})}\n\n"
         except anthropic.AuthenticationError:
             yield f"data: {json.dumps({'type': 'error', 'detail': 'API key error. Please contact support@adkcyber.com.'})}\n\n"
