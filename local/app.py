@@ -3028,10 +3028,10 @@ def _parse_version(v: str) -> tuple:
         return (0, 0, 0)
 
 
-def _fetch_update_info() -> dict:
+def _fetch_update_info(force: bool = False) -> dict:
     global _update_cache, _update_cache_ts
     now = time.time()
-    if _update_cache and now - _update_cache_ts < _UPDATE_CACHE_TTL:
+    if not force and _update_cache and now - _update_cache_ts < _UPDATE_CACHE_TTL:
         return _update_cache
     try:
         r = httpx.get(_VERSION_JSON_URL, timeout=5.0, follow_redirects=True)
@@ -3058,8 +3058,8 @@ def _fetch_update_info() -> dict:
 
 
 @app.get("/api/version")
-def get_version():
-    return _fetch_update_info()
+def get_version(force: int = 0):
+    return _fetch_update_info(force=bool(force))
 
 
 @app.post("/api/update")

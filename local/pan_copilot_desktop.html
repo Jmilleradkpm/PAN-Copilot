@@ -1156,7 +1156,10 @@
       </div>
       <div id="input-hint">
         <span>Shift+Enter for newline · Enter to send</span>
-        <span id="config-ind"></span>
+        <span style="display:flex;gap:10px;align-items:center;">
+          <span id="config-ind"></span>
+          <span id="app-version" onclick="recheckVersion()" title="Installed version (click to re-check for updates)" style="cursor:pointer;opacity:0.7;"></span>
+        </span>
       </div>
     </div>
   </main>
@@ -1306,12 +1309,52 @@ async function checkForUpdate() {
     const res = await fetch(`${API}/api/version`);
     if (!res.ok) return;
     const data = await res.json();
+    // Always render the installed version label so users can confirm at a
+    // glance which build they're running.
+    const verEl = document.getElementById('app-version');
+    if (verEl && data.current_version) {
+      const cur    = data.current_version.replace(/^v/, '');
+      const latest = (data.latest_version || cur).replace(/^v/, '');
+      verEl.textContent = 'v' + cur;
+      verEl.title = data.update_available
+        ? `Installed v${cur} · update available: v${latest} (click to re-check)`
+        : `Installed v${cur} · latest available: v${latest} (click to re-check)`;
+    }
     if (data.update_available) {
       document.getElementById('update-banner-msg').textContent =
         `Update available: v${data.latest_version} — install and restart automatically.`;
       document.getElementById('update-banner').style.display = 'flex';
     }
   } catch (e) { /* silent — app works fine without update check */ }
+}
+
+// Manual re-check: bypass the backend's 1-hour update cache via ?force=1.
+async function recheckVersion() {
+  const verEl = document.getElementById('app-version');
+  if (verEl) verEl.textContent = '…';
+  try {
+    const res = await fetch(`${API}/api/version?force=1`);
+    if (!res.ok) {
+      if (verEl) verEl.textContent = 'v?';
+      return;
+    }
+    const data = await res.json();
+    const cur    = (data.current_version || '?').replace(/^v/, '');
+    const latest = (data.latest_version || cur).replace(/^v/, '');
+    if (verEl) {
+      verEl.textContent = 'v' + cur;
+      verEl.title = data.update_available
+        ? `Installed v${cur} · update available: v${latest} (click to re-check)`
+        : `Installed v${cur} · latest available: v${latest} (click to re-check)`;
+    }
+    if (data.update_available) {
+      document.getElementById('update-banner-msg').textContent =
+        `Update available: v${data.latest_version} — install and restart automatically.`;
+      document.getElementById('update-banner').style.display = 'flex';
+    }
+  } catch (e) {
+    if (verEl) verEl.textContent = 'v?';
+  }
 }
 
 async function installUpdate() {
