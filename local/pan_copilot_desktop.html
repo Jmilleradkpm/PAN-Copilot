@@ -862,6 +862,12 @@
       font-size: 14px; padding: 0 4px; opacity: 0.6; flex-shrink: 0;
     }
     .advisory-dismiss:hover { opacity: 1; color: #fff; }
+    #advisory-close-all {
+      background: none; border: none; color: inherit; cursor: pointer;
+      font-size: 15px; padding: 2px 6px; opacity: 0.65; flex-shrink: 0;
+      margin-left: 4px;
+    }
+    #advisory-close-all:hover { opacity: 1; color: #fff; }
   </style>
 </head>
 <body>
@@ -986,6 +992,7 @@
     <span id="advisory-icon">⚠️</span>
     <span id="advisory-summary"></span>
     <span id="advisory-chevron">›</span>
+    <button id="advisory-close-all" onclick="dismissAllAdvisories(event)" title="Close — will only reappear if a new High or Critical advisory is found">✕</button>
   </div>
   <div id="advisory-list"></div>
 </div>
@@ -1482,6 +1489,17 @@ async function dismissAdvisory(cveId, evt) {
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify({ cve_id: cveId }),
     });
+  } catch (e) { /* swallow — local cache already reflects dismissal */ }
+}
+
+// Top-level close: dismiss every currently-shown advisory. Banner stays hidden
+// until the next hourly backend poll inserts a brand-new HIGH/CRITICAL row.
+async function dismissAllAdvisories(evt) {
+  if (evt) evt.stopPropagation();
+  _advisoryCache = [];
+  renderAdvisoryBanner();
+  try {
+    await fetch(`${API}/api/advisories/dismiss_all`, { method: 'POST' });
   } catch (e) { /* swallow — local cache already reflects dismissal */ }
 }
 

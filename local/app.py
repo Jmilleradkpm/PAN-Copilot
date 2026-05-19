@@ -3291,6 +3291,23 @@ def dismiss_advisory(req: AdvisoryDismiss):
     return {"ok": True}
 
 
+@app.post("/api/advisories/dismiss_all")
+def dismiss_all_advisories():
+    """Mark every currently-active advisory as dismissed.
+
+    Used by the banner's top-level close button. After this, the banner stays
+    hidden until the next hourly poll inserts a brand-new HIGH/CRITICAL row
+    (INSERT OR IGNORE means we won't resurface anything we've already seen).
+    """
+    with get_db() as db:
+        cur = db.execute(
+            "UPDATE advisories SET dismissed_at = ? WHERE dismissed_at IS NULL",
+            (now_iso(),),
+        )
+        db.commit()
+    return {"ok": True, "dismissed": cur.rowcount}
+
+
 # ---------------------------------------------------------------------------
 # Health + frontend
 # ---------------------------------------------------------------------------
