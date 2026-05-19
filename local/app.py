@@ -12,6 +12,7 @@ Data flow:
 Nothing about your firewall configs ever touches ADK Cyber's servers.
 """
 
+import asyncio
 import base64
 import hmac
 import json
@@ -29,6 +30,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, List
+from xml.etree import ElementTree as ET
 
 # ---------------------------------------------------------------------------
 # App version — replaced by CI at build time
@@ -225,6 +227,21 @@ def init_db():
                 content         TEXT NOT NULL,
                 created_at      TEXT NOT NULL,
                 FOREIGN KEY (conversation_id) REFERENCES conversations(id)
+            );
+            -- Cached Palo Alto Networks security advisories. We populate this
+            -- from https://security.paloaltonetworks.com/rss.xml once per hour.
+            -- dismissed_at NULL means the row should appear in the alert banner;
+            -- a non-NULL value means either the user dismissed it OR the row was
+            -- "auto-dismissed" on first launch (existing items at install time
+            -- are not shown — only newly published advisories trigger alerts).
+            CREATE TABLE IF NOT EXISTS advisories (
+                cve_id        TEXT PRIMARY KEY,
+                title         TEXT NOT NULL,
+                link          TEXT NOT NULL,
+                severity      TEXT NOT NULL,
+                pub_date      TEXT,
+                seen_at       TEXT NOT NULL,
+                dismissed_at  TEXT
             );
         """)
         db.commit()
@@ -3102,6 +3119,175 @@ def install_update():
             logger.error("Auto-update download/install failed: %s", exc)
 
     threading.Thread(target=_download_and_run, daemon=True).start()
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Palo Alto Networks Security Advisories
+# ---------------------------------------------------------------------------
+# Background task polls https://security.paloaltonetworks.com/rss.xml hourly
+# and stores HIGH/CRITICAL advisories in the local SQLite cache. The frontend
+# pulls active (non-dismissed) advisories via /api/advisories and renders a
+# banner so users can't miss a real-world threat affecting their PAN gear.
+
+_ADVISORY_RSS_URL        = "https://security.paloaltonetworks.com/rss.xml"
+_ADVISORY_POLL_INTERVAL  = 3600.0  # seconds — Palo Alto publishes infrequently
+_ADVISORY_INITIAL_DELAY  = 10.0    # let uvicorn finish booting before first fetch
+_ADVISORY_DISPLAY_LIMIT  = 25      # cap banner list — shouldn't ever realistically fire
+
+_SEVERITY_RE = re.compile(
+    r"\(Severity:\s*(CRITICAL|HIGH|MEDIUM|LOW|NONE)\)", re.IGNORECASE
+)
+_CVE_RE = re.compile(r"(CVE-\d{4}-\d+)")
+
+
+def _parse_advisories_xml(xml_bytes: bytes) -> list:
+    """Parse Palo Alto's RSS feed → list of advisory dicts.
+
+    Severity is encoded *only* in the <title>, e.g.
+      "CVE-2026-0264 PAN-OS: Heap-Based Buffer Overflow ... (Severity: HIGH)"
+    so we extract it via regex. Items lacking a recognisable severity tag or
+    CVE id are skipped silently.
+    """
+    items = []
+    try:
+        root = ET.fromstring(xml_bytes)
+    except ET.ParseError as e:
+        logger.info("Advisory feed XML parse error: %s", e)
+        return items
+    for item in root.findall(".//item"):
+        title_el = item.find("title")
+        link_el  = item.find("link")
+        date_el  = item.find("pubDate")
+        if title_el is None or link_el is None:
+            continue
+        title = (title_el.text or "").strip()
+        link  = (link_el.text or "").strip()
+        pub   = (date_el.text or "").strip() if date_el is not None else ""
+        m_sev = _SEVERITY_RE.search(title)
+        m_cve = _CVE_RE.search(title) or (_CVE_RE.search(link) if link else None)
+        if not m_sev or not m_cve:
+            continue
+        items.append({
+            "cve_id":   m_cve.group(1),
+            "title":    title,
+            "link":     link,
+            "severity": m_sev.group(1).upper(),
+            "pub_date": pub,
+        })
+    return items
+
+
+def _persist_advisories(items: list, bootstrap: bool) -> int:
+    """Insert new HIGH/CRITICAL advisories. Returns count inserted.
+
+    bootstrap=True means the local advisories table is empty (fresh install or
+    first run after upgrade). In that case we auto-dismiss every advisory we
+    see so the user only ever gets alerted about advisories published AFTER
+    they installed PAN Copilot — they don't want a wall of 200 historical
+    CVEs the first time they open the app.
+    """
+    now = now_iso()
+    inserted = 0
+    with get_db() as db:
+        for it in items:
+            if it["severity"] not in ("CRITICAL", "HIGH"):
+                continue
+            cur = db.execute(
+                "INSERT OR IGNORE INTO advisories "
+                "(cve_id, title, link, severity, pub_date, seen_at, dismissed_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    it["cve_id"], it["title"], it["link"], it["severity"],
+                    it["pub_date"], now,
+                    now if bootstrap else None,
+                ),
+            )
+            if cur.rowcount:
+                inserted += 1
+        db.commit()
+    return inserted
+
+
+async def _fetch_palo_advisories_once() -> int:
+    try:
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+            r = await client.get(_ADVISORY_RSS_URL)
+            r.raise_for_status()
+            items = _parse_advisories_xml(r.content)
+    except Exception as e:
+        logger.info("Advisory feed fetch failed: %s", e)
+        return 0
+    with get_db() as db:
+        existing = db.execute("SELECT COUNT(*) FROM advisories").fetchone()[0]
+    bootstrap = (existing == 0)
+    inserted = _persist_advisories(items, bootstrap=bootstrap)
+    if inserted and not bootstrap:
+        logger.info("Advisory feed: %d new HIGH/CRITICAL advisor%s inserted",
+                    inserted, "y" if inserted == 1 else "ies")
+    return inserted
+
+
+_advisory_task: Optional[asyncio.Task] = None
+
+
+async def _advisory_poll_loop():
+    try:
+        await asyncio.sleep(_ADVISORY_INITIAL_DELAY)
+        while True:
+            await _fetch_palo_advisories_once()
+            await asyncio.sleep(_ADVISORY_POLL_INTERVAL)
+    except asyncio.CancelledError:
+        pass
+
+
+@app.on_event("startup")
+async def _start_advisory_poller():
+    global _advisory_task
+    _advisory_task = asyncio.create_task(_advisory_poll_loop())
+
+
+@app.on_event("shutdown")
+async def _stop_advisory_poller():
+    if _advisory_task and not _advisory_task.done():
+        _advisory_task.cancel()
+
+
+class AdvisoryDismiss(BaseModel):
+    cve_id: str
+
+
+@app.get("/api/advisories")
+async def get_advisories(force: int = 0):
+    """Return active (non-dismissed) HIGH/CRITICAL advisories.
+
+    Pass ?force=1 to trigger a fresh RSS fetch before answering — useful for
+    the manual recheck button in the UI.
+    """
+    if force:
+        await _fetch_palo_advisories_once()
+    with get_db() as db:
+        rows = db.execute(
+            "SELECT cve_id, title, link, severity, pub_date, seen_at "
+            "FROM advisories WHERE dismissed_at IS NULL "
+            "ORDER BY pub_date DESC, seen_at DESC LIMIT ?",
+            (_ADVISORY_DISPLAY_LIMIT,),
+        ).fetchall()
+    return {"advisories": [dict(r) for r in rows]}
+
+
+@app.post("/api/advisories/dismiss")
+def dismiss_advisory(req: AdvisoryDismiss):
+    cve = req.cve_id.strip()
+    if not _CVE_RE.fullmatch(cve):
+        raise HTTPException(status_code=400, detail="Invalid CVE id.")
+    with get_db() as db:
+        db.execute(
+            "UPDATE advisories SET dismissed_at = ? "
+            "WHERE cve_id = ? AND dismissed_at IS NULL",
+            (now_iso(), cve),
+        )
+        db.commit()
     return {"ok": True}
 
 
