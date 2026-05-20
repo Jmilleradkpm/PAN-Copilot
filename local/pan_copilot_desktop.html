@@ -868,6 +868,83 @@
       margin-left: 4px;
     }
     #advisory-close-all:hover { opacity: 1; color: #fff; }
+
+    /* ── Chat provider settings (right sidebar) ─────────────── */
+    #provider-toggle {
+      display: flex; align-items: center; gap: 6px; cursor: pointer;
+      padding: 4px 0 6px; user-select: none;
+    }
+    #provider-toggle:hover { filter: brightness(1.2); }
+    #provider-mode-label {
+      flex: 1; font-size: 11px; color: var(--text-sub);
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    #provider-chevron {
+      font-family: monospace; font-size: 12px; color: var(--text-dim);
+      transition: transform 0.15s;
+    }
+    #provider-section.expanded #provider-chevron { transform: rotate(90deg); }
+    #provider-panel { display: none; flex-direction: column; gap: 5px; }
+    #provider-section.expanded #provider-panel { display: flex; }
+    .provider-radio {
+      display: flex; gap: 8px; align-items: flex-start; padding: 5px 4px;
+      border-radius: 6px; cursor: pointer; font-size: 12px;
+      transition: background 0.12s;
+    }
+    .provider-radio:hover { background: var(--code-bg); }
+    .provider-radio input { margin-top: 2px; flex-shrink: 0; }
+    .provider-radio strong { color: var(--text); font-weight: 600; font-size: 12px; display: block; }
+    .provider-radio-sub {
+      display: block; font-size: 10.5px; color: var(--text-dim);
+      margin-top: 2px; line-height: 1.4;
+    }
+    .provider-radio.disabled {
+      opacity: 0.45; cursor: not-allowed;
+    }
+    .provider-radio.disabled:hover { background: transparent; }
+    #local-llm-fields { display: none; flex-direction: column; gap: 6px; margin-top: 6px; }
+    #provider-section.show-local #local-llm-fields { display: flex; }
+    .provider-field {
+      display: flex; flex-direction: column; gap: 3px; font-size: 10.5px;
+      color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.04em;
+    }
+    .provider-field input {
+      background: var(--code-bg); border: 1px solid var(--border);
+      border-radius: 5px; color: var(--text); font-family: 'Consolas','Cascadia Code',monospace;
+      font-size: 11.5px; padding: 6px 8px; text-transform: none; letter-spacing: 0;
+    }
+    .provider-field input:focus { outline: none; border-color: var(--accent); }
+    #local-test-btn, #provider-save-btn {
+      background: var(--code-bg); border: 1px solid var(--border);
+      border-radius: 5px; color: var(--text); cursor: pointer;
+      font-size: 11.5px; padding: 6px 10px; transition: all 0.12s;
+    }
+    #local-test-btn:hover, #provider-save-btn:hover { border-color: var(--accent); }
+    #provider-save-btn { background: var(--accent); color: #fff; border-color: var(--accent); font-weight: 600; }
+    #provider-save-btn:hover { background: var(--accent-hover); }
+    #local-test-result { font-size: 11px; min-height: 14px; line-height: 1.4; }
+    #local-test-result.ok    { color: #4caf50; }
+    #local-test-result.error { color: #f85149; }
+    #provider-save-row { display: flex; align-items: center; gap: 9px; margin-top: 2px; }
+    #provider-save-status { font-size: 11px; color: var(--text-dim); }
+    #provider-tier-lock {
+      display: none; margin-top: 6px; font-size: 11px; line-height: 1.5;
+      color: #c9a227; background: rgba(201,162,39,0.08);
+      border: 1px solid rgba(201,162,39,0.25);
+      border-radius: 5px; padding: 6px 9px;
+    }
+    #provider-tier-lock.show { display: block; }
+    #provider-tier-lock a { color: var(--accent); text-decoration: none; }
+    #provider-tier-lock a:hover { text-decoration: underline; }
+    /* Mode pill next to the model picker. */
+    #provider-mode-pill {
+      display: none; padding: 2px 8px; border-radius: 4px;
+      font-size: 10px; font-weight: 600; letter-spacing: 0.04em;
+      text-transform: uppercase; font-family: monospace;
+      margin-left: auto;
+    }
+    #provider-mode-pill.cloud { background: rgba(56,139,253,0.18); color: #58a6ff; border: 1px solid rgba(56,139,253,0.4); display: inline-block; }
+    #provider-mode-pill.local { background: rgba(76,175,80,0.18); color: #4caf50; border: 1px solid rgba(76,175,80,0.4); display: inline-block; }
   </style>
 </head>
 <body>
@@ -1223,6 +1300,7 @@
         <button class="model-pill"        data-model="claude-haiku-4-5-20251001" onclick="setModel('claude-haiku-4-5-20251001')">Haiku</button>
         <button class="model-pill"        data-model="claude-sonnet-4-6"         onclick="setModel('claude-sonnet-4-6')">Sonnet</button>
         <button class="model-pill"        data-model="claude-opus-4-7"           onclick="setModel('claude-opus-4-7')">Opus</button>
+        <span id="provider-mode-pill" title="Click Settings in the sidebar to change provider."></span>
       </div>
       <div id="input-hint">
         <span>Shift+Enter for newline · Enter to send</span>
@@ -1260,6 +1338,55 @@
       <div class="doc-link" onclick="window.open('https://docs.paloaltonetworks.com/cortex/cortex-xdr/cortex-xdr-pro-admin/investigation-and-response','_blank')">
         <span class="doc-title">Cortex XDR Investigation Guide</span>
         <span class="doc-meta">docs.paloaltonetworks.com</span>
+      </div>
+    </div>
+
+    <div class="rs-divider"></div>
+
+    <!-- ── Chat provider settings ──────────────────────────────── -->
+    <div id="provider-section" class="rs-section" style="padding-bottom:6px;">
+      <div id="provider-toggle" onclick="toggleProviderPanel()">
+        <span class="rs-label" style="margin-bottom:0;">Chat Provider</span>
+        <span id="provider-mode-label"></span>
+        <span id="provider-chevron">›</span>
+      </div>
+      <div id="provider-panel">
+        <label class="provider-radio">
+          <input type="radio" name="chat_provider" value="cloud" onchange="onProviderChange()">
+          <span>
+            <strong>ADK Cyber AI (cloud)</strong>
+            <span class="provider-radio-sub">Anthropic-backed · best reasoning · queries count toward your quota</span>
+          </span>
+        </label>
+        <label class="provider-radio">
+          <input type="radio" name="chat_provider" value="local" onchange="onProviderChange()">
+          <span>
+            <strong>My local LLM</strong>
+            <span class="provider-radio-sub">Stays on your machine · no quota · best-effort responses</span>
+          </span>
+        </label>
+
+        <div id="local-llm-fields">
+          <label class="provider-field">
+            <span>Base URL</span>
+            <input id="local-base-url" type="text" placeholder="http://localhost:11434/v1" spellcheck="false">
+          </label>
+          <label class="provider-field">
+            <span>Model</span>
+            <input id="local-model" type="text" placeholder="qwen2.5:14b" spellcheck="false">
+          </label>
+          <label class="provider-field">
+            <span>API key (optional)</span>
+            <input id="local-api-key" type="password" placeholder="(blank if your server doesn't require one)" autocomplete="off">
+          </label>
+          <button id="local-test-btn" type="button" onclick="testLocalLLM()">Test connection</button>
+          <div id="local-test-result"></div>
+          <div id="provider-save-row">
+            <button id="provider-save-btn" type="button" onclick="saveProvider()">Save</button>
+            <span id="provider-save-status"></span>
+          </div>
+        </div>
+        <div id="provider-tier-lock"></div>
       </div>
     </div>
 
@@ -1372,6 +1499,7 @@ async function init() {
   await checkAuthStatus();
   checkForUpdate();
   loadAdvisories();
+  loadProviderSettings();
   // Re-poll advisories every 10 min so a new HIGH/CRITICAL surfaces within
   // ~10 min of the next hourly backend fetch.
   setInterval(loadAdvisories, 10 * 60 * 1000);
@@ -1413,6 +1541,169 @@ async function checkForUpdate() {
       showUpdateBanner();
     }
   } catch (e) { /* silent — app works fine without update check */ }
+}
+
+// ── Chat provider settings (cloud vs local LLM) ────────────────────
+// State pulled from GET /api/settings — kept in sync with the backend so the
+// mode pill, quota UI, and request branching all reflect the same truth.
+let _providerState = {
+  settings:           { chat_provider: 'cloud', local_base_url: '', local_model: '', local_api_key: '' },
+  tier:               'free',
+  effective_provider: 'cloud',
+  providers_available:{ cloud: true, local: true },
+};
+
+function toggleProviderPanel() {
+  document.getElementById('provider-section').classList.toggle('expanded');
+}
+
+async function loadProviderSettings() {
+  try {
+    const res = await fetch(`${API}/api/settings`);
+    if (!res.ok) return;
+    _providerState = await res.json();
+    renderProviderUI();
+  } catch (e) { /* silent — defaults stay in place */ }
+}
+
+function renderProviderUI() {
+  const st     = _providerState.settings || {};
+  const eff    = _providerState.effective_provider || 'cloud';
+  const avail  = _providerState.providers_available || {};
+  const tier   = _providerState.tier || 'free';
+  const section = document.getElementById('provider-section');
+
+  // Hydrate radios + fields
+  document.querySelectorAll('input[name="chat_provider"]').forEach(r => {
+    r.checked  = (r.value === st.chat_provider);
+    const row = r.closest('.provider-radio');
+    const isDisabled = avail[r.value] === false;
+    if (row) row.classList.toggle('disabled', isDisabled);
+    r.disabled = isDisabled;
+  });
+  document.getElementById('local-base-url').value = st.local_base_url || '';
+  document.getElementById('local-model').value    = st.local_model    || '';
+  document.getElementById('local-api-key').value  = st.local_api_key  || '';
+
+  // Show the local-fields group only when local is the current selection.
+  section.classList.toggle('show-local', st.chat_provider === 'local');
+
+  // Header label summarising the effective mode
+  const label = document.getElementById('provider-mode-label');
+  if (eff === 'local') {
+    label.textContent = `Local · ${st.local_model || '(no model)'}`;
+  } else {
+    label.textContent = 'Cloud · ADK Cyber AI';
+  }
+
+  // Tier-aware lock messaging
+  const lock = document.getElementById('provider-tier-lock');
+  if (tier === 'local') {
+    lock.innerHTML = '🔒 Your account is on the <strong>Local</strong> tier — cloud chat is not included. <a href="https://adkcyber.com/pan-copilot.html" target="_blank" rel="noopener">Upgrade to Pro</a> to unlock cloud mode.';
+    lock.classList.add('show');
+  } else if (!avail.local) {
+    lock.innerHTML = 'Local-LLM mode is a paid feature. <a href="https://adkcyber.com/pan-copilot.html" target="_blank" rel="noopener">Subscribe</a> to use your own local model.';
+    lock.classList.add('show');
+  } else {
+    lock.classList.remove('show');
+    lock.textContent = '';
+  }
+
+  // Mode pill next to the model picker
+  const pill = document.getElementById('provider-mode-pill');
+  if (pill) {
+    pill.classList.remove('cloud', 'local');
+    pill.classList.add(eff);
+    pill.textContent = eff === 'local'
+      ? `Local · ${st.local_model || '?'}`
+      : 'Cloud';
+    pill.title = eff === 'local'
+      ? `Local provider at ${st.local_base_url}`
+      : 'Cloud provider (Anthropic). Click Settings → Chat Provider to switch.';
+  }
+
+  // Hide the Anthropic model picker when in local mode (it's irrelevant).
+  document.querySelectorAll('.model-pill[data-model]').forEach(b => {
+    b.style.display = (eff === 'local') ? 'none' : '';
+  });
+  const lbl = document.getElementById('model-picker-label');
+  if (lbl) lbl.style.display = (eff === 'local') ? 'none' : '';
+
+  // Hide the "config >8K = 3 queries" weight warning in local mode (no quota).
+  const cfgWarn = document.getElementById('large-cfg-warn');
+  if (cfgWarn) cfgWarn.style.display = (eff === 'local') ? 'none' : cfgWarn.style.display;
+}
+
+function onProviderChange() {
+  const radio = document.querySelector('input[name="chat_provider"]:checked');
+  if (!radio) return;
+  // Reflect immediately in the UI; "Save" call actually persists.
+  _providerState.settings.chat_provider = radio.value;
+  document.getElementById('provider-section').classList.toggle('show-local', radio.value === 'local');
+}
+
+async function saveProvider() {
+  const radio  = document.querySelector('input[name="chat_provider"]:checked');
+  const status = document.getElementById('provider-save-status');
+  status.textContent = 'Saving…';
+  const body = {
+    chat_provider:  radio ? radio.value : 'cloud',
+    local_base_url: document.getElementById('local-base-url').value.trim(),
+    local_model:    document.getElementById('local-model').value.trim(),
+    local_api_key:  document.getElementById('local-api-key').value,
+  };
+  try {
+    const res = await fetch(`${API}/api/settings`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      status.textContent = err.detail || `Save failed (${res.status})`;
+      status.style.color = '#f85149';
+      return;
+    }
+    const data = await res.json();
+    _providerState.settings           = data.settings;
+    _providerState.effective_provider = data.effective_provider;
+    renderProviderUI();
+    status.textContent = '✓ Saved';
+    status.style.color = '#4caf50';
+    setTimeout(() => { status.textContent = ''; }, 2500);
+  } catch (e) {
+    status.textContent = 'Save failed — server unreachable.';
+    status.style.color = '#f85149';
+  }
+}
+
+async function testLocalLLM() {
+  const result = document.getElementById('local-test-result');
+  result.className = '';
+  result.textContent = 'Testing…';
+  const body = {
+    base_url: document.getElementById('local-base-url').value.trim(),
+    model:    document.getElementById('local-model').value.trim(),
+    api_key:  document.getElementById('local-api-key').value || null,
+  };
+  try {
+    const res = await fetch(`${API}/api/local_llm/test`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify(body),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      result.className = 'error';
+      result.textContent = '✗ ' + (data.detail || `HTTP ${res.status}`);
+      return;
+    }
+    result.className = 'ok';
+    result.textContent = `✓ Connected · ${data.latency_ms} ms · ${data.model || ''}`;
+  } catch (e) {
+    result.className = 'error';
+    result.textContent = '✗ Connection failed — server unreachable.';
+  }
 }
 
 // ── PAN security advisory banner ──────────────────────────────────
@@ -1675,6 +1966,9 @@ function updateTierUI(tier, queriesUsed, queriesLimit, period) {
     const used = queriesUsed ?? 0;
     const lim  = queriesLimit ?? 2500;
     badge.textContent = `★ MAX · ${used.toLocaleString()}/${lim.toLocaleString()} this month`;
+  } else if (tier === 'local') {
+    badge.className = 'pro';  // reuse the green-ish pro styling
+    badge.textContent = '⚙ Local · runs on your machine';
   } else {
     badge.className = 'free';
     const used = queriesUsed ?? 0;
@@ -1685,6 +1979,16 @@ function updateTierUI(tier, queriesUsed, queriesLimit, period) {
   document.getElementById('free-tier-info').style.display = (tier === 'free') ? 'block' : 'none';
   // Re-evaluate the large-config warning with the current config value
   updateConfigStatus();
+  // Refresh the provider panel — tier change can flip cloud availability.
+  if (_providerState) {
+    _providerState.tier = currentTier;
+    if (currentTier === 'local') {
+      _providerState.providers_available = { cloud: false, local: true };
+      _providerState.effective_provider  = 'local';
+      _providerState.settings.chat_provider = 'local';
+    }
+    renderProviderUI();
+  }
 }
 
 function updateUsageDisplay(queriesUsed, queriesLimit, tier, period) {
