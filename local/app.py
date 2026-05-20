@@ -189,6 +189,67 @@ def save_config(data: dict):
         pass
 
 # ---------------------------------------------------------------------------
+# Settings — chat provider preferences (cloud vs local LLM)
+# ---------------------------------------------------------------------------
+# These live in a separate settings.json so they're independent of the
+# session-token file and survive a logout. Defaults: cloud provider on,
+# Ollama as the local LLM template (user must change to fit their setup).
+
+SETTINGS_FILE = CONFIG_DIR / "settings.json"
+
+_VALID_PROVIDERS = {"cloud", "local"}
+
+_DEFAULT_SETTINGS = {
+    "chat_provider":  "cloud",
+    "local_base_url": "http://localhost:11434/v1",   # Ollama default
+    "local_model":    "qwen2.5:14b",                  # placeholder; user picks
+    "local_api_key":  "",                             # most local servers need none
+}
+
+
+def load_settings() -> dict:
+    """Return current settings dict, filling in any missing keys with defaults."""
+    out = dict(_DEFAULT_SETTINGS)
+    if SETTINGS_FILE.exists():
+        try:
+            raw = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                for k in _DEFAULT_SETTINGS:
+                    if k in raw and raw[k] is not None:
+                        out[k] = raw[k]
+        except Exception:
+            pass
+    if out.get("chat_provider") not in _VALID_PROVIDERS:
+        out["chat_provider"] = "cloud"
+    return out
+
+
+def save_settings(data: dict):
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    cleaned = {k: data.get(k, v) for k, v in _DEFAULT_SETTINGS.items()}
+    if cleaned["chat_provider"] not in _VALID_PROVIDERS:
+        cleaned["chat_provider"] = "cloud"
+    SETTINGS_FILE.write_text(json.dumps(cleaned, indent=2), encoding="utf-8")
+    try:
+        import stat
+        SETTINGS_FILE.chmod(stat.S_IRUSR | stat.S_IWUSR)
+    except Exception:
+        pass
+
+
+class SettingsPayload(BaseModel):
+    chat_provider:  Optional[str] = None
+    local_base_url: Optional[str] = None
+    local_model:    Optional[str] = None
+    local_api_key:  Optional[str] = None
+
+
+class LocalLLMTestRequest(BaseModel):
+    base_url: str
+    model:    str
+    api_key:  Optional[str] = None
+
+# ---------------------------------------------------------------------------
 # FastAPI app
 # ---------------------------------------------------------------------------
 
@@ -2847,6 +2908,120 @@ def logout():
     save_config(cfg)
     return {"ok": True}
 
+
+# ---------------------------------------------------------------------------
+# Settings endpoints — chat provider preferences
+# ---------------------------------------------------------------------------
+
+def _effective_provider(settings: dict, tier: Optional[str]) -> str:
+    """Return the provider we'll actually use, applying tier-based hard-lock.
+
+    The 'local' tier is sold as a stay-on-your-machine plan, so the cloud
+    provider is unavailable. Other tiers can choose either.
+    """
+    pref = settings.get("chat_provider", "cloud")
+    if tier == "local":
+        return "local"
+    return "cloud" if pref not in _VALID_PROVIDERS else pref
+
+
+@app.get("/api/settings")
+def get_settings():
+    settings = load_settings()
+    tier = _session_cache.get("tier")
+    return {
+        "settings": settings,
+        "tier": tier,
+        "effective_provider": _effective_provider(settings, tier),
+        # Tier-aware availability so the UI can grey out the cloud option for
+        # local-tier users (and the local option for free-tier users until
+        # they upgrade — Phase 3 will toggle this).
+        "providers_available": {
+            "cloud": tier != "local",
+            "local": tier in (None, "local", "pro", "max", "owner"),
+        },
+    }
+
+
+@app.post("/api/settings")
+def update_settings(req: SettingsPayload):
+    current = load_settings()
+    tier    = _session_cache.get("tier")
+
+    new_provider = req.chat_provider if req.chat_provider is not None else current["chat_provider"]
+    if new_provider not in _VALID_PROVIDERS:
+        raise HTTPException(status_code=400, detail=f"Invalid chat_provider {new_provider!r}.")
+
+    # Hard-lock: Local-tier accounts cannot enable cloud mode. They must
+    # upgrade their subscription to unlock the Anthropic-backed experience.
+    if tier == "local" and new_provider == "cloud":
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Your account is on the Local tier — cloud chat is not included. "
+                "Upgrade to Pro at adkcyber.com/pan-copilot.html to enable cloud mode."
+            ),
+        )
+
+    updated = dict(current)
+    updated["chat_provider"] = new_provider
+    if req.local_base_url is not None:
+        updated["local_base_url"] = req.local_base_url.strip()
+    if req.local_model is not None:
+        updated["local_model"] = req.local_model.strip()
+    if req.local_api_key is not None:
+        updated["local_api_key"] = req.local_api_key.strip()
+    save_settings(updated)
+    return {
+        "ok": True,
+        "settings": updated,
+        "effective_provider": _effective_provider(updated, tier),
+    }
+
+
+@app.post("/api/local_llm/test")
+def test_local_llm(req: LocalLLMTestRequest):
+    """Fire a single 1-token completion to verify the local LLM is reachable.
+
+    Returns latency in ms on success, or a friendly error on failure. Used by
+    the "Test connection" button in the settings panel.
+    """
+    base = (req.base_url or "").rstrip("/")
+    if not base:
+        raise HTTPException(status_code=400, detail="Base URL is required.")
+    url = f"{base}/chat/completions"
+    body = {
+        "model": req.model or "qwen2.5:14b",
+        "messages": [{"role": "user", "content": "ping"}],
+        "max_tokens": 1,
+        "stream": False,
+    }
+    headers = {"Content-Type": "application/json"}
+    if req.api_key:
+        headers["Authorization"] = f"Bearer {req.api_key}"
+    started = time.time()
+    try:
+        r = httpx.post(url, json=body, headers=headers, timeout=15.0)
+    except httpx.ConnectError:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"Cannot reach {url}. Is your local LLM server running? "
+                "Try 'ollama serve' or enable the server toggle in LM Studio."
+            ),
+        )
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=504, detail="Connection timed out after 15s.")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Connection failed: {e}")
+    latency_ms = int((time.time() - started) * 1000)
+    if r.status_code >= 400:
+        raise HTTPException(
+            status_code=r.status_code,
+            detail=f"Server returned HTTP {r.status_code}: {r.text[:300]}",
+        )
+    return {"ok": True, "latency_ms": latency_ms, "model": req.model}
+
 @app.get("/api/auth/status")
 def auth_status():
     """
@@ -2948,6 +3123,145 @@ async def upload_config(file: UploadFile = File(...)):
 # Chat — streaming
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Chat providers — cloud (Anthropic) and local (OpenAI-compatible)
+# ---------------------------------------------------------------------------
+# Both providers expose the same generator contract:
+#   yields one of:
+#     ("token", str)           — a text chunk to stream to the client
+#     ("done",  dict)          — final usage dict { input_tokens, output_tokens }
+#     ("error", str)           — terminal error message
+# /chat/stream below picks one based on settings.chat_provider and translates
+# the events into our existing SSE wire format. The frontend doesn't change.
+
+def _to_openai_messages(messages: list) -> list:
+    """Convert our Anthropic-shape messages to OpenAI chat-completions shape.
+
+    The main difference is image blocks:
+      Anthropic: {"type":"image", "source":{"type":"base64","media_type":...,"data":...}}
+      OpenAI:    {"type":"image_url", "image_url":{"url":"data:<mime>;base64,<b64>"}}
+    """
+    out = []
+    for m in messages:
+        content = m.get("content")
+        if isinstance(content, list):
+            new_blocks = []
+            for block in content:
+                btype = block.get("type")
+                if btype == "image":
+                    src = block.get("source", {}) or {}
+                    mime = src.get("media_type", "image/png")
+                    data = src.get("data", "")
+                    new_blocks.append({
+                        "type": "image_url",
+                        "image_url": {"url": f"data:{mime};base64,{data}"},
+                    })
+                else:
+                    new_blocks.append(block)
+            out.append({"role": m["role"], "content": new_blocks})
+        else:
+            out.append({"role": m["role"], "content": content})
+    return out
+
+
+def _stream_anthropic(api_key: str, model: str, system: str, messages: list, max_tokens: int):
+    """Sync generator: yields (kind, payload) tuples sourced from Anthropic's SDK."""
+    try:
+        client = anthropic.Anthropic(api_key=api_key)
+        with client.messages.stream(
+            model=model, max_tokens=max_tokens, system=system, messages=messages,
+        ) as stream:
+            for text in stream.text_stream:
+                yield ("token", text)
+            final = stream.get_final_message()
+            yield ("done", {
+                "input_tokens":  final.usage.input_tokens,
+                "output_tokens": final.usage.output_tokens,
+            })
+    except anthropic.AuthenticationError:
+        yield ("error", "API key error. Please contact support@adkcyber.com.")
+    except anthropic.RateLimitError:
+        yield ("error", "Rate limit reached. Try again in a moment.")
+    except anthropic.APIError as e:
+        yield ("error", str(e))
+
+
+def _stream_openai_compat(
+    base_url: str,
+    model:    str,
+    system:   str,
+    messages: list,
+    api_key:  Optional[str],
+    max_tokens: int,
+):
+    """Sync generator: yields (kind, payload) for an OpenAI-compatible server.
+
+    Works with Ollama (/v1/chat/completions), LM Studio, llama.cpp-server, vLLM.
+    Translates image content blocks to image_url shape before sending.
+    """
+    base = (base_url or "").rstrip("/")
+    if not base:
+        yield ("error", "Local LLM base URL is not set. Open Settings and enter one (default Ollama: http://localhost:11434/v1).")
+        return
+    url = f"{base}/chat/completions"
+    body = {
+        "model": model or "qwen2.5:14b",
+        "messages": [{"role": "system", "content": system}] + _to_openai_messages(messages),
+        "max_tokens": max_tokens,
+        "stream": True,
+    }
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    input_tokens = 0
+    output_tokens = 0
+    output_text_chars = 0
+    try:
+        with httpx.Client(timeout=httpx.Timeout(connect=10.0, read=None, write=30.0, pool=10.0)) as client:
+            with client.stream("POST", url, json=body, headers=headers) as resp:
+                if resp.status_code >= 400:
+                    try:
+                        detail = resp.read().decode("utf-8", errors="replace")
+                    except Exception:
+                        detail = ""
+                    yield ("error", f"Local LLM returned HTTP {resp.status_code}: {detail[:300]}")
+                    return
+                for raw_line in resp.iter_lines():
+                    line = raw_line.strip() if isinstance(raw_line, str) else raw_line.decode("utf-8", errors="replace").strip()
+                    if not line or not line.startswith("data:"):
+                        continue
+                    payload = line[5:].strip()
+                    if payload == "[DONE]":
+                        break
+                    try:
+                        evt = json.loads(payload)
+                    except json.JSONDecodeError:
+                        continue
+                    choices = evt.get("choices") or []
+                    if choices:
+                        delta = (choices[0] or {}).get("delta") or {}
+                        chunk = delta.get("content")
+                        if chunk:
+                            output_text_chars += len(chunk)
+                            yield ("token", chunk)
+                    usage = evt.get("usage") or {}
+                    if usage:
+                        input_tokens  = int(usage.get("prompt_tokens")     or usage.get("input_tokens")  or 0)
+                        output_tokens = int(usage.get("completion_tokens") or usage.get("output_tokens") or 0)
+        # Many local servers omit a token-count usage block. Fall back to a
+        # crude char-based estimate so the UI's "N out" counter isn't always 0.
+        if not output_tokens:
+            output_tokens = max(1, output_text_chars // 4)
+        yield ("done", {"input_tokens": input_tokens, "output_tokens": output_tokens})
+    except httpx.ConnectError:
+        yield ("error", f"Cannot reach local LLM at {url}. Is your server running? (Ollama: 'ollama serve'; LM Studio: enable the server toggle.)")
+    except httpx.ReadTimeout:
+        yield ("error", "Local LLM timed out while reading the response. Try a smaller model or increase your server's timeout.")
+    except Exception as e:
+        yield ("error", f"Local LLM request failed: {e}")
+
+
 @app.post("/chat/stream")
 def chat_stream(req: ChatRequest):
     if not _session_cache.get("token"):
@@ -3001,46 +3315,54 @@ def chat_stream(req: ChatRequest):
         )
     # ── End KB short-circuit ────────────────────────────────────────────────
 
-    api_key = _session_cache.get("anthropic_key")
-    if not api_key:
-        raise HTTPException(
-            status_code=401,
-            detail="Session key missing. Please log out and log back in."
-        )
-
-    token      = _session_cache["token"]
+    token      = _session_cache.get("token")
     tier       = _session_cache.get("tier", "free")
+    settings   = load_settings()
+    provider   = _effective_provider(settings, tier)
     config_len = len(req.config_text or "")
 
-    # Free tier: large config pastes count as MAX_QUERY_WEIGHT queries to reflect
-    # the higher token cost. The user is warned in the UI before submitting.
-    query_weight = MAX_QUERY_WEIGHT if (tier == "free" and config_len > MAX_CONFIG_LEN_FREE) else 1
-
-    # Check/increment query count via license server (atomic, weight-aware)
-    check = _license_post("/query/check", {"token": token, "weight": query_weight})
-
-    if not check.get("allowed", False):
-        base_detail = check.get("detail", "Query limit reached.")
-        if query_weight == MAX_QUERY_WEIGHT:
-            detail = (
-                f"{base_detail} "
-                f"This config paste ({config_len:,} chars) counted as {MAX_QUERY_WEIGHT} queries — "
-                f"free tier charges {MAX_QUERY_WEIGHT} queries for configs over {MAX_CONFIG_LEN_FREE:,} characters. "
-                f"Upgrade to Pro for full config analysis with advanced models: "
-                f"adkcyber.com/pan-copilot.html"
+    # ── Cloud-only preflight: quota + API key checks ────────────────────────
+    # In local mode the user is running the LLM on their own hardware, so we
+    # skip the license-server quota check entirely (no per-query cost).
+    if provider == "cloud":
+        api_key = _session_cache.get("anthropic_key")
+        if not api_key:
+            raise HTTPException(
+                status_code=401,
+                detail="Session key missing. Please log out and log back in."
             )
-        else:
-            detail = base_detail
-        raise HTTPException(status_code=429, detail=detail)
 
-    # Sync usage into session cache
-    for key in ("queries_used", "queries_limit", "queries_remaining", "period"):
-        if check.get(key) is not None:
-            _session_cache[key] = check[key]
-    if check.get("weekly_used") is not None:
-        _session_cache["weekly_used"] = check["weekly_used"]
+        # Free tier: large config pastes count as MAX_QUERY_WEIGHT queries to
+        # reflect the higher token cost. The user is warned in the UI first.
+        query_weight = MAX_QUERY_WEIGHT if (tier == "free" and config_len > MAX_CONFIG_LEN_FREE) else 1
+        check = _license_post("/query/check", {"token": token, "weight": query_weight})
 
-    # Strip credential values from config and message before sending to Anthropic
+        if not check.get("allowed", False):
+            base_detail = check.get("detail", "Query limit reached.")
+            if query_weight == MAX_QUERY_WEIGHT:
+                detail = (
+                    f"{base_detail} "
+                    f"This config paste ({config_len:,} chars) counted as {MAX_QUERY_WEIGHT} queries — "
+                    f"free tier charges {MAX_QUERY_WEIGHT} queries for configs over {MAX_CONFIG_LEN_FREE:,} characters. "
+                    f"Upgrade to Pro for full config analysis with advanced models: "
+                    f"adkcyber.com/pan-copilot.html"
+                )
+            else:
+                detail = base_detail
+            raise HTTPException(status_code=429, detail=detail)
+
+        # Sync usage into session cache
+        for key in ("queries_used", "queries_limit", "queries_remaining", "period"):
+            if check.get(key) is not None:
+                _session_cache[key] = check[key]
+        if check.get("weekly_used") is not None:
+            _session_cache["weekly_used"] = check["weekly_used"]
+    else:
+        api_key = None  # not used in local mode
+
+    # Strip credential values from config + message before transmitting (applies
+    # to both providers — even your own local LLM shouldn't see PAN admin
+    # passwords or pre-shared keys in plaintext if redaction is in flight).
     cfg_sanitized, cfg_redactions = (
         sanitize_config_text(req.config_text)
         if req.config_text and req.config_text.strip()
@@ -3054,57 +3376,84 @@ def chat_stream(req: ChatRequest):
     })
 
     conv_id    = get_or_create_conversation(req.conversation_id)
-    db_history = load_conversation_history(conv_id)   # source of truth for memory
+    db_history = load_conversation_history(conv_id)
     messages   = build_messages(sanitized_req, db_history=db_history)
-    client     = anthropic.Anthropic(api_key=api_key)
 
-    # Resolve model:
-    #   - Free tier is always Haiku (enforced here regardless of req.model)
-    #   - Paid tiers: "auto" → route by complexity; explicit model → honour it
-    #   - Paid tiers + images on "auto" → at least Sonnet (vision benefits from
-    #     a stronger model; Haiku still works but is weaker at reading dense
-    #     screenshots like CLI output or dashboards)
-    if tier == "free":
-        resolved_model = "claude-haiku-4-5-20251001"
-    elif req.model == "auto":
-        resolved_model = _select_model(req.message, req.config_text, tier=tier)
-        if req.images and resolved_model == "claude-haiku-4-5-20251001":
-            resolved_model = "claude-sonnet-4-6"
+    # ── Resolve model + system prompt + provider stream ─────────────────────
+    if provider == "local":
+        resolved_model = (settings.get("local_model") or "qwen2.5:14b").strip()
+        system_prompt  = SYSTEM_PROMPT_LOCAL
+        provider_iter  = _stream_openai_compat(
+            base_url   = settings.get("local_base_url") or "",
+            model      = resolved_model,
+            system     = system_prompt,
+            messages   = messages,
+            api_key    = (settings.get("local_api_key") or None),
+            max_tokens = req.max_tokens,
+        )
     else:
-        resolved_model = req.model
+        # Cloud: free tier locked to Haiku; auto routes by complexity; vision
+        # gets a Sonnet floor.
+        if tier == "free":
+            resolved_model = "claude-haiku-4-5-20251001"
+        elif req.model == "auto":
+            resolved_model = _select_model(req.message, req.config_text, tier=tier)
+            if req.images and resolved_model == "claude-haiku-4-5-20251001":
+                resolved_model = "claude-sonnet-4-6"
+        else:
+            resolved_model = req.model
+        system_prompt = SYSTEM_PROMPT
+        provider_iter = _stream_anthropic(
+            api_key    = api_key,
+            model      = resolved_model,
+            system     = system_prompt,
+            messages   = messages,
+            max_tokens = req.max_tokens,
+        )
 
     def event_generator():
         full_reply = []
-        try:
-            with client.messages.stream(
-                model=resolved_model,
-                max_tokens=req.max_tokens,
-                system=SYSTEM_PROMPT,
-                messages=messages,
-            ) as stream:
-                for text in stream.text_stream:
-                    full_reply.append(text)
-                    yield f"data: {json.dumps({'type': 'token', 'text': text})}\n\n"
-                final = stream.get_final_message()
-                reply_text = "".join(full_reply)
-                # Persist a text-only summary so DB history stays text. The
-                # marker tells future turns (and the user reviewing history)
-                # that images were part of the original turn even though the
-                # bytes themselves aren't replayed.
-                n_imgs = len(req.images) if req.images else 0
-                persisted_msg = req.message
-                if n_imgs:
-                    suffix = f"\n\n[{n_imgs} image{'s' if n_imgs != 1 else ''} attached]"
-                    persisted_msg = (persisted_msg or "").rstrip() + suffix
-                save_messages(conv_id, persisted_msg, reply_text)
-                auto_title(conv_id, persisted_msg)
-                yield f"data: {json.dumps({'type': 'done', 'model': resolved_model, 'input_tokens': final.usage.input_tokens, 'output_tokens': final.usage.output_tokens, 'conversation_id': conv_id, 'queries_used': _session_cache.get('queries_used'), 'queries_limit': _session_cache.get('queries_limit'), 'queries_remaining': _session_cache.get('queries_remaining'), 'period': _session_cache.get('period', 'weekly'), 'tier': _session_cache.get('tier'), 'redactions': total_redactions})}\n\n"
-        except anthropic.AuthenticationError:
-            yield f"data: {json.dumps({'type': 'error', 'detail': 'API key error. Please contact support@adkcyber.com.'})}\n\n"
-        except anthropic.RateLimitError:
-            yield f"data: {json.dumps({'type': 'error', 'detail': 'Rate limit reached. Try again in a moment.'})}\n\n"
-        except anthropic.APIError as e:
-            yield f"data: {json.dumps({'type': 'error', 'detail': str(e)})}\n\n"
+        usage = {"input_tokens": 0, "output_tokens": 0}
+        terminal_error = None
+        for kind, payload in provider_iter:
+            if kind == "token":
+                full_reply.append(payload)
+                yield f"data: {json.dumps({'type': 'token', 'text': payload})}\n\n"
+            elif kind == "done":
+                usage = payload
+            elif kind == "error":
+                terminal_error = payload
+
+        if terminal_error:
+            yield f"data: {json.dumps({'type': 'error', 'detail': terminal_error})}\n\n"
+            return
+
+        reply_text = "".join(full_reply)
+        # Persist a text-only summary so DB history stays text-only. The marker
+        # tells future turns (and the user reviewing history) that images were
+        # part of the original turn even though the bytes aren't replayed.
+        n_imgs = len(req.images) if req.images else 0
+        persisted_msg = req.message
+        if n_imgs:
+            suffix = f"\n\n[{n_imgs} image{'s' if n_imgs != 1 else ''} attached]"
+            persisted_msg = (persisted_msg or "").rstrip() + suffix
+        save_messages(conv_id, persisted_msg, reply_text)
+        auto_title(conv_id, persisted_msg)
+
+        yield "data: " + json.dumps({
+            "type":              "done",
+            "model":             resolved_model,
+            "provider":          provider,
+            "input_tokens":      usage.get("input_tokens", 0),
+            "output_tokens":     usage.get("output_tokens", 0),
+            "conversation_id":   conv_id,
+            "queries_used":      _session_cache.get("queries_used") if provider == "cloud" else None,
+            "queries_limit":     _session_cache.get("queries_limit") if provider == "cloud" else None,
+            "queries_remaining": _session_cache.get("queries_remaining") if provider == "cloud" else None,
+            "period":            _session_cache.get("period", "weekly") if provider == "cloud" else None,
+            "tier":              _session_cache.get("tier"),
+            "redactions":        total_redactions,
+        }) + "\n\n"
 
     return StreamingResponse(
         event_generator(),
