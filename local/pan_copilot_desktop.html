@@ -1650,9 +1650,11 @@ function renderProviderUI() {
 function onProviderChange() {
   const radio = document.querySelector('input[name="chat_provider"]:checked');
   if (!radio) return;
-  // Reflect immediately in the UI; "Save" call actually persists.
   _providerState.settings.chat_provider = radio.value;
   document.getElementById('provider-section').classList.toggle('show-local', radio.value === 'local');
+  // Persist immediately — selecting a provider should switch right away, no
+  // separate Save click. (Field edits still use the Save button.)
+  saveProvider();
 }
 
 // One-click switch via the mode pill. Only meaningful when the tier has both
