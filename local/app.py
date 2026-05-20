@@ -3217,6 +3217,8 @@ def _stream_openai_compat(
     input_tokens = 0
     output_tokens = 0
     output_text_chars = 0
+    saw_reasoning = False
+    reasoning_closed = False
     try:
         with httpx.Client(timeout=httpx.Timeout(connect=10.0, read=None, write=30.0, pool=10.0)) as client:
             with client.stream("POST", url, json=body, headers=headers) as resp:
@@ -3241,8 +3243,24 @@ def _stream_openai_compat(
                     choices = evt.get("choices") or []
                     if choices:
                         delta = (choices[0] or {}).get("delta") or {}
+                        # Reasoning models (Qwen3, DeepSeek-R1, etc.) stream their
+                        # chain-of-thought in a separate `reasoning_content` field.
+                        # Surface it under a "Thinking" header so the reply isn't
+                        # blank while the model reasons, then divider the answer.
+                        reasoning = delta.get("reasoning_content")
+                        if reasoning:
+                            if not saw_reasoning:
+                                yield ("token", "💭 **Thinking**\n\n")
+                                saw_reasoning = True
+                            yield ("token", reasoning)
                         chunk = delta.get("content")
                         if chunk:
+                            if saw_reasoning and not reasoning_closed:
+                                yield ("token", "\n\n---\n\n")
+                                reasoning_closed = True
+                            # Some models inline reasoning as <think>…</think> in
+                            # content; drop the literal tags so they don't render.
+                            chunk = chunk.replace("<think>", "").replace("</think>", "")
                             output_text_chars += len(chunk)
                             yield ("token", chunk)
                     usage = evt.get("usage") or {}
@@ -3389,7 +3407,10 @@ def chat_stream(req: ChatRequest):
             system     = system_prompt,
             messages   = messages,
             api_key    = (settings.get("local_api_key") or None),
-            max_tokens = req.max_tokens,
+            # Reasoning models spend a chunk of the budget "thinking" before they
+            # emit an answer; give local mode extra headroom so the reply isn't
+            # truncated mid-reasoning.
+            max_tokens = max(req.max_tokens or 2048, 4096),
         )
     else:
         # Cloud: free tier locked to Haiku; auto routes by complexity; vision

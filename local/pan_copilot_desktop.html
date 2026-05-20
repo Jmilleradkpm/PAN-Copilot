@@ -1702,6 +1702,9 @@ async function testLocalLLM() {
     }
     result.className = 'ok';
     result.textContent = `✓ Connected · ${data.latency_ms} ms · ${data.model || ''}`;
+    // Auto-save on a successful test — a tested-but-unsaved provider is the
+    // most common "it won't connect" trap, so persist it immediately.
+    await saveProvider();
   } catch (e) {
     result.className = 'error';
     result.textContent = '✗ Connection failed — server unreachable.';
@@ -1978,6 +1981,9 @@ function updateTierUI(tier, queriesUsed, queriesLimit, period) {
   } else if (tier === 'local') {
     badge.className = 'pro';  // reuse the green-ish pro styling
     badge.textContent = '⚙ Local · runs on your machine';
+  } else if (tier === 'owner') {
+    badge.className = 'max';
+    badge.textContent = '★ Owner · unlimited';
   } else {
     badge.className = 'free';
     const used = queriesUsed ?? 0;
