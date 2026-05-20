@@ -204,6 +204,7 @@ _DEFAULT_SETTINGS = {
     "local_base_url": "http://localhost:11434/v1",   # Ollama default
     "local_model":    "qwen2.5:14b",                  # placeholder; user picks
     "local_api_key":  "",                             # most local servers need none
+    "local_history_turns": 40,                        # messages of history sent to a local model (≈20 exchanges)
 }
 
 
@@ -238,10 +239,11 @@ def save_settings(data: dict):
 
 
 class SettingsPayload(BaseModel):
-    chat_provider:  Optional[str] = None
-    local_base_url: Optional[str] = None
-    local_model:    Optional[str] = None
-    local_api_key:  Optional[str] = None
+    chat_provider:       Optional[str] = None
+    local_base_url:      Optional[str] = None
+    local_model:         Optional[str] = None
+    local_api_key:       Optional[str] = None
+    local_history_turns: Optional[int] = None
 
 
 class LocalLLMTestRequest(BaseModel):
@@ -2617,17 +2619,19 @@ def now_iso() -> str:
 
 _MAX_HISTORY_TURNS = 40  # cap at 20 user/assistant pairs to stay well within context limits
 
-def load_conversation_history(conversation_id: str) -> list:
+def load_conversation_history(conversation_id: str, limit: int = _MAX_HISTORY_TURNS) -> list:
     """
     Load recent messages for a conversation from SQLite.
     Returns a list of {"role": ..., "content": ...} dicts in chronological order.
     The frontend always sends history=[] as a placeholder; the DB is the source of truth.
+    `limit` caps how many recent messages are returned (local mode makes this
+    user-configurable; cloud uses the default).
     """
     with get_db() as db:
         rows = db.execute(
             "SELECT role, content FROM messages "
             "WHERE conversation_id = ? ORDER BY created_at DESC LIMIT ?",
-            (conversation_id, _MAX_HISTORY_TURNS),
+            (conversation_id, limit),
         ).fetchall()
     # fetchall is newest-first (DESC); reverse for chronological order
     return [{"role": r["role"], "content": r["content"]} for r in reversed(rows)]
@@ -2971,6 +2975,9 @@ def update_settings(req: SettingsPayload):
         updated["local_model"] = req.local_model.strip()
     if req.local_api_key is not None:
         updated["local_api_key"] = req.local_api_key.strip()
+    if req.local_history_turns is not None:
+        # Clamp to a sane range; the model's loaded context length is the real ceiling.
+        updated["local_history_turns"] = max(2, min(int(req.local_history_turns), 400))
     save_settings(updated)
     return {
         "ok": True,
@@ -3394,7 +3401,11 @@ def chat_stream(req: ChatRequest):
     })
 
     conv_id    = get_or_create_conversation(req.conversation_id)
-    db_history = load_conversation_history(conv_id)
+    if provider == "local":
+        hist_limit = int(settings.get("local_history_turns") or _MAX_HISTORY_TURNS)
+        db_history = load_conversation_history(conv_id, limit=hist_limit)
+    else:
+        db_history = load_conversation_history(conv_id)
     messages   = build_messages(sanitized_req, db_history=db_history)
 
     # ── Resolve model + system prompt + provider stream ─────────────────────

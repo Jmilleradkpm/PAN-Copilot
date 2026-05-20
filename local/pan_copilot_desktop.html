@@ -1379,6 +1379,11 @@
             <span>API key (optional)</span>
             <input id="local-api-key" type="password" placeholder="(blank if your server doesn't require one)" autocomplete="off">
           </label>
+          <label class="provider-field">
+            <span>Conversation memory (messages)</span>
+            <input id="local-history-turns" type="number" min="2" max="400" step="2" placeholder="40">
+          </label>
+          <div style="font-size:10px;color:var(--text-dim);margin:-2px 0 4px;line-height:1.4;">Recent messages your model sees each turn (default 40 ≈ 20 exchanges). Higher remembers more but needs a larger model context length.</div>
           <button id="local-test-btn" type="button" onclick="testLocalLLM()">Test connection</button>
           <div id="local-test-result"></div>
           <div id="provider-save-row">
@@ -1584,6 +1589,7 @@ function renderProviderUI() {
   document.getElementById('local-base-url').value = st.local_base_url || '';
   document.getElementById('local-model').value    = st.local_model    || '';
   document.getElementById('local-api-key').value  = st.local_api_key  || '';
+  document.getElementById('local-history-turns').value = st.local_history_turns || 40;
 
   // Show the local-fields group only when local is the current selection.
   section.classList.toggle('show-local', st.chat_provider === 'local');
@@ -1653,6 +1659,7 @@ async function saveProvider() {
     local_base_url: document.getElementById('local-base-url').value.trim(),
     local_model:    document.getElementById('local-model').value.trim(),
     local_api_key:  document.getElementById('local-api-key').value,
+    local_history_turns: parseInt(document.getElementById('local-history-turns').value, 10) || 40,
   };
   try {
     const res = await fetch(`${API}/api/settings`, {
