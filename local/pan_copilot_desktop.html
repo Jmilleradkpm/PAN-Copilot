@@ -1300,7 +1300,7 @@
         <button class="model-pill"        data-model="claude-haiku-4-5-20251001" onclick="setModel('claude-haiku-4-5-20251001')">Haiku</button>
         <button class="model-pill"        data-model="claude-sonnet-4-6"         onclick="setModel('claude-sonnet-4-6')">Sonnet</button>
         <button class="model-pill"        data-model="claude-opus-4-7"           onclick="setModel('claude-opus-4-7')">Opus</button>
-        <span id="provider-mode-pill" title="Click Settings in the sidebar to change provider."></span>
+        <span id="provider-mode-pill" onclick="toggleProvider()"></span>
       </div>
       <div id="input-hint">
         <span>Shift+Enter for newline · Enter to send</span>
@@ -1622,12 +1622,17 @@ function renderProviderUI() {
   if (pill) {
     pill.classList.remove('cloud', 'local');
     pill.classList.add(eff);
-    pill.textContent = eff === 'local'
-      ? `Local · ${st.local_model || '?'}`
-      : 'Cloud';
-    pill.title = eff === 'local'
-      ? `Local provider at ${st.local_base_url}`
-      : 'Cloud provider (Anthropic). Click Settings → Chat Provider to switch.';
+    const canToggle = avail.cloud && avail.local;
+    const baseLabel = eff === 'local' ? `Local · ${st.local_model || '?'}` : 'Cloud';
+    pill.textContent = canToggle ? `${baseLabel}  ⇄` : baseLabel;
+    pill.style.cursor = canToggle ? 'pointer' : 'default';
+    if (canToggle) {
+      pill.title = eff === 'local' ? 'Click to switch to Cloud' : 'Click to switch to Local';
+    } else {
+      pill.title = eff === 'local'
+        ? `Local provider at ${st.local_base_url}`
+        : 'Cloud provider (Anthropic)';
+    }
   }
 
   // Hide the Anthropic model picker when in local mode (it's irrelevant).
@@ -1648,6 +1653,33 @@ function onProviderChange() {
   // Reflect immediately in the UI; "Save" call actually persists.
   _providerState.settings.chat_provider = radio.value;
   document.getElementById('provider-section').classList.toggle('show-local', radio.value === 'local');
+}
+
+// One-click switch via the mode pill. Only meaningful when the tier has both
+// providers available (owner/pro/max with a configured local endpoint).
+async function toggleProvider() {
+  const avail = _providerState.providers_available || {};
+  if (!avail.cloud || !avail.local) return;
+  const st   = _providerState.settings || {};
+  const cur  = st.chat_provider || 'cloud';
+  const next = cur === 'local' ? 'cloud' : 'local';
+  // Switching to local needs a configured endpoint — open settings if missing.
+  if (next === 'local' && !(st.local_base_url || '').trim()) {
+    document.getElementById('provider-section').classList.add('expanded');
+    return;
+  }
+  try {
+    const res = await fetch(`${API}/api/settings`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ chat_provider: next }),
+    });
+    if (!res.ok) return;
+    const data = await res.json();
+    _providerState.settings           = data.settings;
+    _providerState.effective_provider = data.effective_provider;
+    renderProviderUI();
+  } catch (e) { /* leave the pill as-is on failure */ }
 }
 
 async function saveProvider() {
