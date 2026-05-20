@@ -134,10 +134,11 @@ OWNER_LIMIT        = 999_999
 SESSION_TTL_DAYS   = 30
 MAX_QUERY_WEIGHT   = 3  # max cost multiplier per query (e.g. free-tier large config pastes)
 
-VALID_TIERS = frozenset({"free", "pro", "max", "owner"})
+VALID_TIERS = frozenset({"free", "local", "pro", "max", "owner"})
 
 TIER_LIMITS = {
     "free":  FREE_WEEKLY_LIMIT,
+    "local": 0,                  # local-tier users never consume cloud quota
     "pro":   PRO_MONTHLY_LIMIT,
     "max":   MAX_MONTHLY_LIMIT,
     "owner": OWNER_LIMIT,
@@ -238,21 +239,27 @@ def usage_response(user, queries_used: int = None, session_token: str = None) ->
     period  = "weekly" if tier == "free" else "monthly"
     unlimited = (tier == "owner")
 
-    encrypted_key = encrypt_api_key(ANTHROPIC_API_KEY, session_token) if session_token else None
+    # Local-tier accounts never get the Anthropic key. The app reads this
+    # field as the signal that cloud chat is unavailable and shows the
+    # "upgrade to Pro" lock in the provider settings panel.
+    if tier == "local":
+        encrypted_key = None
+    else:
+        encrypted_key = encrypt_api_key(ANTHROPIC_API_KEY, session_token) if session_token else None
 
     return {
         "email":             user["email"],
         "tier":              tier,
         "seats_allowed":     user["seats_allowed"],
-        "period":            period,
-        "queries_used":      used,
-        "queries_limit":     limit,
-        "queries_remaining": OWNER_LIMIT if unlimited else max(0, limit - used),
+        "period":            period if tier != "local" else None,
+        "queries_used":      used  if tier != "local" else None,
+        "queries_limit":     limit if tier != "local" else None,
+        "queries_remaining": OWNER_LIMIT if unlimited else (max(0, limit - used) if tier != "local" else None),
         "unlimited":         unlimited,
         "weekly_used":       used  if tier == "free" else None,
         "weekly_limit":      limit if tier == "free" else None,
-        "monthly_used":      used  if tier != "free" else None,
-        "monthly_limit":     limit if tier != "free" else None,
+        "monthly_used":      used  if tier not in ("free", "local") else None,
+        "monthly_limit":     limit if tier not in ("free", "local") else None,
         "anthropic_key":     encrypted_key,  # Fernet-encrypted, never plaintext
     }
 
@@ -403,6 +410,17 @@ def check_and_count(request: Request, req: TokenRequest):
             "queries_remaining": OWNER_LIMIT, "unlimited": True,
         }
 
+    # Local-tier accounts run chat on their own hardware — they should never
+    # actually hit this endpoint (the app skips the quota call in local mode),
+    # but if they do we answer "allowed, no count" so a misbehaving client
+    # can't get stuck. Their requests cost ADK Cyber nothing on Anthropic.
+    if tier == "local":
+        return {
+            "allowed": True, "tier": "local", "period": None,
+            "queries_used": None, "queries_limit": None,
+            "queries_remaining": None, "unlimited": False,
+        }
+
     # Atomic check-and-increment to prevent TOCTOU race.
     # weight > 1 for free-tier large-config submissions (counts as 3 queries).
     with get_db() as db:
@@ -430,7 +448,7 @@ def check_and_count(request: Request, req: TokenRequest):
             ).fetchone()
         current = row["count"] if row else limit
         period_label = "week" if tier == "free" else "month"
-        tier_label   = {"free": "Free", "pro": "Pro", "max": "MAX"}.get(tier, tier.title())
+        tier_label   = {"free": "Free", "pro": "Pro", "max": "MAX", "local": "Local"}.get(tier, tier.title())
         upgrade_msg  = (
             " Upgrade to Pro at adkcyber.com/pan-copilot.html for up to 1,000 queries/month."
             if tier == "free" else ""
