@@ -89,13 +89,14 @@ jobs:
       # the plaintext .md files are deleted after encryption so they can't
       # end up in the build artifact by accident.
       - name: Encrypt prompts
-        shell: pwsh
+        shell: bash
         env:
           PROMPT_AES_KEY_B64: ${{ secrets.PAN_COPILOT_PROMPT_AES_KEY }}
         run: |
-          if (-not $env:PROMPT_AES_KEY_B64) {
-            throw "PAN_COPILOT_PROMPT_AES_KEY secret is not set. Generate a 32-byte key with: python -c `"import secrets,base64;print(base64.b64encode(secrets.token_bytes(32)).decode())`""
-          }
+          if [ -z "$PROMPT_AES_KEY_B64" ]; then
+            echo "PAN_COPILOT_PROMPT_AES_KEY secret is not set. Generate a 32-byte key with: python -c \"import secrets,base64;print(base64.b64encode(secrets.token_bytes(32)).decode())\"" >&2
+            exit 1
+          fi
           python - <<'PY'
           import base64, os, pathlib, secrets
           from cryptography.hazmat.primitives.ciphers.aead import AESGCM
