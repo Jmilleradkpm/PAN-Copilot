@@ -1602,7 +1602,9 @@ function renderProviderUI() {
     lock.innerHTML = '🔒 Your account is on the <strong>Local</strong> tier — cloud chat is not included. <a href="https://adkcyber.com/pan-copilot.html" target="_blank" rel="noopener">Upgrade to Pro</a> to unlock cloud mode.';
     lock.classList.add('show');
   } else if (!avail.local) {
-    lock.innerHTML = 'Local-LLM mode is a paid feature. <a href="https://adkcyber.com/pan-copilot.html" target="_blank" rel="noopener">Subscribe</a> to use your own local model.';
+    const email = (document.getElementById('acct-email')?.textContent || '').trim();
+    const qs = email && email !== '—' ? `?checkout[email]=${encodeURIComponent(email)}` : '';
+    lock.innerHTML = `Local-LLM mode requires the <strong>Local</strong> tier ($5/mo). <a href="${LS_LOCAL_URL + qs}" target="_blank" rel="noopener">Get the Local tier</a> to use your own local model.`;
     lock.classList.add('show');
   } else {
     lock.classList.remove('show');
@@ -1920,8 +1922,9 @@ function tierLabel(tier) {
   return tier === 'pro' ? 'Pro ($20/mo)' : tier === 'max' ? 'MAX ($50/mo)' : 'Free';
 }
 
-const LS_PRO_URL = 'https://adkcyber.lemonsqueezy.com/checkout/buy/1c4c4370-4557-4651-a684-fadaf1a44404';
-const LS_MAX_URL = 'https://adkcyber.lemonsqueezy.com/checkout/buy/0475eb28-6e6b-4f68-adcc-9de6045192d6';
+const LS_PRO_URL   = 'https://adkcyber.lemonsqueezy.com/checkout/buy/1c4c4370-4557-4651-a684-fadaf1a44404';
+const LS_MAX_URL   = 'https://adkcyber.lemonsqueezy.com/checkout/buy/0475eb28-6e6b-4f68-adcc-9de6045192d6';
+const LS_LOCAL_URL = 'https://adkcyber.lemonsqueezy.com/checkout/buy/358bcb87-a7aa-4412-a546-77221ff418b6';
 
 function openUpgradeModal() {
   const email = document.getElementById('acct-email').textContent.trim();

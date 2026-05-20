@@ -43,41 +43,41 @@ finalize the local content.
 
 ---
 
-## 3. Stripe product
+## 3. Lemon Squeezy product
 
-Create a new product in Stripe Dashboard:
+> NOTE: Billing is **Lemon Squeezy**, not Stripe. The webhook in
+> `license_server/app.py` (`/webhook/lemonsqueezy`) assigns the tier by
+> matching the word `local`/`pro`/`max` in the variant or product name,
+> falling back to the `LS_VARIANT_TIER` variant-id map.
 
-- Product name: **PAN Copilot — Local Tier**
+Create a new product/variant in the Lemon Squeezy dashboard:
+
+- Product name: **PAN Copilot — Local Tier** (the word "local" in the
+  product or variant name is what the webhook keys off — keep it there)
 - Price: **$5.00 USD / month**
 - Description: "Run PAN Copilot against your own local LLM (Ollama,
   LM Studio, etc.). Queries and configs stay on your machine. No cloud
   AI included — best for security-conscious environments."
-- Metadata: `tier = local` (this is what the webhook handler reads)
 
-After creating the product, copy the price ID (`price_xxx`) and add it to
-the license server's environment vars on Render as `STRIPE_PRICE_LOCAL`.
+For belt-and-suspenders, also add the new variant's UUID to
+`LS_VARIANT_TIER` in `license_server/app.py` mapped to `"local"`, so the
+tier resolves correctly even if the product name is ever edited.
 
 ---
 
-## 4. Stripe webhook
+## 4. Lemon Squeezy webhook  ✅ DONE (code)
 
-The license server already has webhook plumbing for `pro` and `max` —
-extend the `customer.subscription.created` and `customer.subscription.updated`
-handlers to recognize the local price and set `tier = "local"`.
-
-Specifically: in `license_server/app.py`, find the webhook handler (search for
-`stripe.Webhook.construct_event` or `LS_WEBHOOK_SECRET`) and add a branch:
+The `/webhook/lemonsqueezy` handler now recognizes the local tier — a
+`local` branch was added alongside `pro`/`max`:
 
 ```python
-if price_id == os.environ.get("STRIPE_PRICE_LOCAL"):
+elif "local" in variant_name or "local" in product_name:
     tier = "local"
-elif price_id == os.environ.get("STRIPE_PRICE_PRO"):
-    tier = "pro"
-# ... etc
 ```
 
-The DB schema already accepts `local` as a valid tier (this PR's change to
-`VALID_TIERS`). No migration needed.
+The DB schema already accepts `local` as a valid tier (`VALID_TIERS`).
+No migration needed. Remaining work here is only the dashboard product
+(section 3) and deploying the updated license server to Render.
 
 ---
 

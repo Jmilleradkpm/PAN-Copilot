@@ -123,8 +123,12 @@ limiter = Limiter(key_func=_real_ip)
 # Lemon Squeezy variant map
 # ---------------------------------------------------------------------------
 LS_VARIANT_TIER = {
+    # Keys are the numeric variant_id as sent in webhook payloads (str()'d).
+    # The pro/max entries below are checkout-link UUIDs, NOT webhook variant_ids,
+    # so they never match — pro/max resolve via the name-match instead.
     "1c4c4370-4557-4651-a684-fadaf1a44404": "pro",
     "0475eb28-6e6b-4f68-adcc-9de6045192d6": "max",
+    "1680703": "local",
 }
 
 FREE_WEEKLY_LIMIT  = 10
@@ -536,6 +540,8 @@ async def lemonsqueezy_webhook(request: Request):
         tier = "max"
     elif "pro" in variant_name or "pro" in product_name:
         tier = "pro"
+    elif "local" in variant_name or "local" in product_name:
+        tier = "local"
     else:
         tier = LS_VARIANT_TIER.get(str(attrs.get("variant_id", ""))) or "pro"
 
