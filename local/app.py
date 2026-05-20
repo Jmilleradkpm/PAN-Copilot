@@ -66,6 +66,12 @@ def _base() -> Path:
 
 FRONTEND_PATH      = _base() / "pan_copilot_desktop.html"
 SYSTEM_PROMPT_PATH = _base() / "PAN_Copilot_Master_System_Prompt.md"
+# Cloud and local prompt variants. The encrypted (.enc) form is what production
+# exes ship; the plain .md form is what local dev installs read. The decrypt
+# helper below tries .enc first and falls back to .md, so both paths work.
+SYSTEM_PROMPT_CLOUD_ENC = _base() / "PAN_Copilot_Master_System_Prompt.md.enc"
+SYSTEM_PROMPT_LOCAL_MD  = _base() / "PAN_Copilot_Master_System_Prompt_Local.md"
+SYSTEM_PROMPT_LOCAL_ENC = _base() / "PAN_Copilot_Master_System_Prompt_Local.md.enc"
 KB_DIR             = _base() / "kb"
 
 # ---------------------------------------------------------------------------
@@ -252,22 +258,99 @@ init_db()
 # System prompt
 # ---------------------------------------------------------------------------
 
-def load_system_prompt() -> str:
-    if SYSTEM_PROMPT_PATH.exists():
-        raw = SYSTEM_PROMPT_PATH.read_text(encoding="utf-8")
-        marker = "## SYSTEM PROMPT (COPY EVERYTHING BELOW THIS LINE)"
-        if marker in raw:
-            return re.sub(r"^[\s\-]+", "", raw.split(marker, 1)[1]).strip()
-        return raw.strip()
-    return (
-        "You are ADK Cyber AI, an expert AI assistant for Palo Alto Networks engineers. "
-        "You have deep knowledge of the full PAN portfolio including PAN-OS 8.x through 11.x, "
-        "Panorama, Cortex XDR, XSIAM, XSOAR, Prisma Access, Prisma Cloud, Prisma SD-WAN, "
-        "GlobalProtect, WildFire, Advanced Threat Prevention, DNS Security, URL Filtering, "
-        "Strata Cloud Manager, and AI Runtime Security. "
-        "Be direct, precise, and practical. When the user pastes config or CLI output, "
-        "analyze it carefully before answering."
-    )
+def _load_prompt_aes_key() -> Optional[bytes]:
+    """Load the AES-256-GCM key used to decrypt the bundled prompt files.
+
+    The key lives in a private module local/_prompt_key.py that is gitignored
+    and written by CI from the PAN_COPILOT_PROMPT_AES_KEY GitHub Secret. Local
+    dev installs that haven't run the encrypt step won't have this file —
+    in that case we return None and the loader falls back to plaintext .md.
+    """
+    try:
+        import importlib
+        mod = importlib.import_module("_prompt_key")
+    except Exception:
+        return None
+    key_b64 = getattr(mod, "PROMPT_KEY_B64", None)
+    if not key_b64:
+        return None
+    try:
+        key = base64.b64decode(key_b64)
+    except Exception:
+        return None
+    if len(key) != 32:
+        logger.warning("PROMPT_KEY_B64 must decode to 32 bytes — got %d", len(key))
+        return None
+    return key
+
+
+def _decrypt_prompt_file(enc_path: Path, key: bytes) -> Optional[str]:
+    """Decrypt a .enc file produced by the CI encrypt step.
+
+    File format: [12-byte nonce][ciphertext+tag]. AES-256-GCM.
+    Returns the plaintext string, or None if decryption fails.
+    """
+    try:
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+        blob = enc_path.read_bytes()
+        if len(blob) < 13:
+            return None
+        nonce, ct = blob[:12], blob[12:]
+        return AESGCM(key).decrypt(nonce, ct, associated_data=None).decode("utf-8")
+    except Exception as e:
+        logger.warning("Failed to decrypt %s: %s", enc_path.name, e)
+        return None
+
+
+def _extract_prompt_body(raw: str) -> str:
+    """Strip the markdown header / 'COPY BELOW' marker so only the live prompt
+    body is returned. Same logic the original load_system_prompt used."""
+    marker = "## SYSTEM PROMPT (COPY EVERYTHING BELOW THIS LINE)"
+    if marker in raw:
+        return re.sub(r"^[\s\-]+", "", raw.split(marker, 1)[1]).strip()
+    return raw.strip()
+
+
+_FALLBACK_PROMPT = (
+    "You are ADK Cyber AI, an expert AI assistant for Palo Alto Networks engineers. "
+    "You have deep knowledge of the full PAN portfolio including PAN-OS 8.x through 11.x, "
+    "Panorama, Cortex XDR, XSIAM, XSOAR, Prisma Access, Prisma Cloud, Prisma SD-WAN, "
+    "GlobalProtect, WildFire, Advanced Threat Prevention, DNS Security, URL Filtering, "
+    "Strata Cloud Manager, and AI Runtime Security. "
+    "Be direct, precise, and practical. When the user pastes config or CLI output, "
+    "analyze it carefully before answering."
+)
+
+
+def load_system_prompt(variant: str = "cloud") -> str:
+    """Load the master system prompt.
+
+    variant="cloud" → the full 17 KB prompt used with Anthropic models.
+    variant="local" → a compressed prompt sized for local LLM context budgets.
+
+    Resolution order for each variant:
+      1. <name>.md.enc decrypted with the AES key from _prompt_key.py
+      2. <name>.md plaintext (local dev fallback)
+      3. A short inline fallback string
+    """
+    if variant == "local":
+        enc_path = SYSTEM_PROMPT_LOCAL_ENC
+        md_path  = SYSTEM_PROMPT_LOCAL_MD
+    else:
+        enc_path = SYSTEM_PROMPT_CLOUD_ENC
+        md_path  = SYSTEM_PROMPT_PATH
+
+    key = _load_prompt_aes_key()
+    if key and enc_path.exists():
+        plaintext = _decrypt_prompt_file(enc_path, key)
+        if plaintext:
+            return _extract_prompt_body(plaintext)
+        # decrypt failed — fall through to plaintext fallback below
+
+    if md_path.exists():
+        return _extract_prompt_body(md_path.read_text(encoding="utf-8"))
+
+    return _FALLBACK_PROMPT
 
 _RESPONSE_STYLE_ADDENDUM = """
 
@@ -284,7 +367,8 @@ Read the user's question carefully and match response length to the complexity o
 """
 
 
-SYSTEM_PROMPT = load_system_prompt() + _RESPONSE_STYLE_ADDENDUM
+SYSTEM_PROMPT       = load_system_prompt("cloud") + _RESPONSE_STYLE_ADDENDUM
+SYSTEM_PROMPT_LOCAL = load_system_prompt("local") + _RESPONSE_STYLE_ADDENDUM
 
 # ---------------------------------------------------------------------------
 # KB index — zero-token local responses
