@@ -1919,7 +1919,13 @@ function onAuthenticated(data) {
 }
 
 function tierLabel(tier) {
-  return tier === 'pro' ? 'Pro ($20/mo)' : tier === 'max' ? 'MAX ($50/mo)' : 'Free';
+  switch (tier) {
+    case 'pro':   return 'Pro ($20/mo)';
+    case 'max':   return 'MAX ($50/mo)';
+    case 'local': return 'Local ($5/mo)';
+    case 'owner': return 'Owner';
+    default:      return 'Free';
+  }
 }
 
 const LS_PRO_URL   = 'https://adkcyber.lemonsqueezy.com/checkout/buy/1c4c4370-4557-4651-a684-fadaf1a44404';
@@ -1998,6 +2004,17 @@ function updateUsageDisplay(queriesUsed, queriesLimit, tier, period) {
   const row   = document.getElementById('acct-usage-row');
   const label = document.querySelector('#acct-usage-row .acct-label');
   const val   = document.getElementById('acct-usage');
+  row.style.display = 'flex';
+  if (tier === 'local') {
+    if (label) label.textContent = 'Cloud queries';
+    val.innerHTML = '<span style="color:var(--text-sub)">N/A — runs on your machine</span>';
+    return;
+  }
+  if (tier === 'owner') {
+    if (label) label.textContent = 'Queries';
+    val.innerHTML = '<span style="color:var(--text-sub)">Unlimited</span>';
+    return;
+  }
   const used  = queriesUsed ?? 0;
   const lim   = queriesLimit ?? (tier === 'free' ? 10 : tier === 'pro' ? 1000 : 2500);
   const pct   = Math.min(100, Math.round((used / lim) * 100));
