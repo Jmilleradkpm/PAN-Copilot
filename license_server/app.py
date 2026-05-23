@@ -22,6 +22,7 @@ import hmac
 import json
 import logging
 import os
+import re
 import secrets
 import sqlite3
 import uuid
@@ -316,11 +317,14 @@ class AdminTierRequest(BaseModel):
 # ---------------------------------------------------------------------------
 # Auth endpoints
 # ---------------------------------------------------------------------------
+EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
 @app.post("/auth/register")
 @limiter.limit("3/hour")
 def register(request: Request, req: AuthRequest):
     email = req.email.strip().lower()
-    if not email or "@" not in email:
+    if not email or len(email) > 254 or not EMAIL_RE.match(email):
         raise HTTPException(status_code=400, detail="Invalid email address.")
     if len(req.password) < 8:
         raise HTTPException(status_code=400, detail="Password must be at least 8 characters.")
@@ -554,11 +558,16 @@ async def lemonsqueezy_webhook(request: Request):
     elif "local" in variant_name or "local" in product_name:
         tier = "local"
     else:
-        tier = LS_VARIANT_TIER.get(str(attrs.get("variant_id", ""))) or "pro"
+        # Unknown variant → leave tier unresolved rather than defaulting to a
+        # paid tier; the handler below refuses to upgrade on an unrecognized item.
+        tier = LS_VARIANT_TIER.get(str(attrs.get("variant_id", "")))
 
     if event in ("subscription_created", "subscription_updated", "subscription_resumed"):
         if not email:
             return {"ok": False, "reason": "no email in payload"}
+        if not tier:
+            logger.warning("Webhook %s: unrecognized variant/product for %s — tier unchanged.", event, email)
+            return {"ok": False, "reason": "unrecognized variant; tier unchanged"}
         with get_db() as db:
             db.execute("UPDATE users SET tier = ? WHERE email = ?", (tier, email))
             db.commit()

@@ -501,7 +501,8 @@ def chat(req: ChatRequest, user=Depends(get_current_user)):
     except anthropic.RateLimitError:
         raise HTTPException(status_code=429, detail="Upstream rate limit reached. Try again in a moment.")
     except anthropic.APIError as e:
-        raise HTTPException(status_code=502, detail=f"Anthropic API error: {str(e)}")
+        print(f"Anthropic API error: {e}")
+        raise HTTPException(status_code=502, detail="Upstream AI service error.")
 
     reply = response.content[0].text
     save_messages(conv_id, req.message, reply)
@@ -659,7 +660,8 @@ def serve_frontend():
             status_code=404
         )
     except Exception as e:
-        return HTMLResponse(f"<h1>Error loading frontend</h1><pre>{e}</pre><p>Path: {FRONTEND_PATH}</p>", status_code=500)
+        print(f"Error loading frontend: {e}")
+        return HTMLResponse("<h1>Error loading frontend</h1>", status_code=500)
 
 
 if __name__ == "__main__":

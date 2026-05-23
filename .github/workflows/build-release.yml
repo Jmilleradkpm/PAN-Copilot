@@ -37,6 +37,12 @@ jobs:
       id-token: write   # required for OIDC auth with Azure
       contents: read
 
+    # Pass the user-supplied version through an env var rather than interpolating
+    # ${{ inputs.version }} directly into PowerShell run-blocks (avoids script
+    # injection via a crafted workflow_dispatch input).
+    env:
+      RELEASE_VERSION_INPUT: ${{ inputs.version }}
+
     steps:
       # ── 1. Checkout ────────────────────────────────────────
       - name: Checkout repository
@@ -128,7 +134,7 @@ jobs:
       - name: Inject version
         shell: pwsh
         run: |
-          $version = "${{ inputs.version }}".TrimStart('v')
+          $version = "$env:RELEASE_VERSION_INPUT".TrimStart('v')
           (Get-Content "local/app.py") -replace 'APP_VERSION = ".*"', "APP_VERSION = `"$version`"" | Set-Content "local/app.py" -Encoding UTF8
           Write-Host "Injected APP_VERSION = $version"
 
@@ -169,7 +175,7 @@ jobs:
         working-directory: local
         shell: pwsh
         run: |
-          $version = "${{ inputs.version || github.ref_name }}"
+          $version = if ($env:RELEASE_VERSION_INPUT) { $env:RELEASE_VERSION_INPUT } else { "${{ github.ref_name }}" }
           $zipName = "PAN_Copilot_${version}.zip"
           Compress-Archive -Path "dist\PAN Copilot\*" -DestinationPath $zipName -Force
           Write-Host "Created: $zipName ($('{0:N1} MB' -f ((Get-Item $zipName).Length / 1MB)))"
@@ -179,7 +185,7 @@ jobs:
         working-directory: local
         shell: pwsh
         run: |
-          $version = "${{ inputs.version || github.ref_name }}"
+          $version = if ($env:RELEASE_VERSION_INPUT) { $env:RELEASE_VERSION_INPUT } else { "${{ github.ref_name }}" }
           $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
           & $iscc /DAppVersion=$version installer.iss
           $installer = "Output\PAN_Copilot_Setup_${version}.exe"
@@ -208,7 +214,7 @@ jobs:
         working-directory: local
         shell: pwsh
         run: |
-          $version = "${{ inputs.version || github.ref_name }}"
+          $version = if ($env:RELEASE_VERSION_INPUT) { $env:RELEASE_VERSION_INPUT } else { "${{ github.ref_name }}" }
           $ts      = (Get-Date -Format "yyyy-MM-ddTHH:mm:ssZ")
           $json = [ordered]@{
             version       = $version
