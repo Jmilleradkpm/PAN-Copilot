@@ -699,13 +699,13 @@ _SENSITIVE_XML_TAGS = (
 _CLI_SET_KEYWORDS = (
     "password", "secret", "pre-shared-key", "shared-secret",
     "auth-key", "authentication-key", "api-key", "passphrase",
-    "bind-password", "community",
+    "bind-password", "snmp-community-string", "community",
 )
 
 _CLI_DISPLAY_KEYWORDS = (
     "password", "secret", "shared-secret", "pre-shared-key",
     "auth-key", "authentication-key", "api-key", "passphrase",
-    "bind-password", "community", "phash",
+    "bind-password", "snmp-community-string", "community", "phash",
 )
 
 
