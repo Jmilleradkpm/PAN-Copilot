@@ -36,12 +36,41 @@ from pydantic import BaseModel, EmailStr
 # ---------------------------------------------------------------------------
 
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
-JWT_SECRET        = os.environ.get("JWT_SECRET", "change-me-in-production-use-a-long-random-string")
+JWT_SECRET        = os.environ.get("JWT_SECRET", "")
 JWT_ALGORITHM     = "HS256"
 JWT_EXPIRE_DAYS   = 30
 FREE_DAILY_LIMIT  = 10
 LS_SIGNING_SECRET = os.environ.get("LEMONSQUEEZY_SIGNING_SECRET", "")
 LS_PRO_VARIANT_ID = os.environ.get("LEMONSQUEEZY_PRO_VARIANT_ID", "")
+
+# Fail closed: a missing JWT secret in a public-repo codebase would mean
+# anyone could forge tokens for any user. Refuse to start without one.
+if not JWT_SECRET:
+    raise RuntimeError(
+        "JWT_SECRET is not set. Refusing to start — set a long random value "
+        "in the environment (e.g. `python -c \"import secrets;print(secrets.token_urlsafe(48))\"`)."
+    )
+
+# Allowed Anthropic models and output cap. Prevents a free-tier client from
+# requesting an arbitrarily expensive model or an unbounded max_tokens.
+ALLOWED_MODELS = {
+    "claude-haiku-4-5-20251001",
+    "claude-sonnet-4-6",
+    "claude-opus-4-7",
+}
+DEFAULT_MODEL     = "claude-sonnet-4-6"
+MAX_OUTPUT_TOKENS = 8192
+
+# Cross-origin: the UI is served same-origin from this app, so the browser
+# doesn't need a wildcard. Override with ALLOWED_ORIGINS (comma-separated) if
+# a separate frontend host is used.
+ALLOWED_ORIGINS = [
+    o.strip()
+    for o in os.environ.get(
+        "ALLOWED_ORIGINS", "http://localhost:8000,http://127.0.0.1:8000"
+    ).split(",")
+    if o.strip()
+]
 
 DB_PATH       = Path(__file__).parent / "pan_copilot.db"
 FRONTEND_PATH = Path(__file__).parent.parent / "pan_copilot.html"
@@ -60,10 +89,10 @@ app = FastAPI(title="PAN Copilot API", version="2.0.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "DELETE"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 # ---------------------------------------------------------------------------
@@ -269,6 +298,18 @@ def build_messages(req: ChatRequest) -> list:
     messages.append({"role": "user", "content": user_content})
     return messages
 
+def sanitize_model_and_tokens(req: ChatRequest) -> tuple[str, int]:
+    """Clamp client-supplied model + max_tokens to safe bounds so a (free) user
+    can't request an expensive model or an unbounded output length."""
+    model = req.model if req.model in ALLOWED_MODELS else DEFAULT_MODEL
+    try:
+        max_tokens = int(req.max_tokens or 2048)
+    except (TypeError, ValueError):
+        max_tokens = 2048
+    max_tokens = max(1, min(max_tokens, MAX_OUTPUT_TOKENS))
+    return model, max_tokens
+
+
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -447,10 +488,11 @@ def chat(req: ChatRequest, user=Depends(get_current_user)):
 
     if not ANTHROPIC_API_KEY:
         raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY is not configured.")
+    model, max_tokens = sanitize_model_and_tokens(req)
     try:
         response = client.messages.create(
-            model=req.model,
-            max_tokens=req.max_tokens,
+            model=model,
+            max_tokens=max_tokens,
             system=SYSTEM_PROMPT,
             messages=build_messages(req),
         )
@@ -483,13 +525,14 @@ def chat_stream(req: ChatRequest, user=Depends(get_current_user)):
 
     if not ANTHROPIC_API_KEY:
         raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY is not configured.")
+    model, max_tokens = sanitize_model_and_tokens(req)
 
     def event_generator():
         full_reply = []
         try:
             with client.messages.stream(
-                model=req.model,
-                max_tokens=req.max_tokens,
+                model=model,
+                max_tokens=max_tokens,
                 system=SYSTEM_PROMPT,
                 messages=messages,
             ) as stream:
@@ -535,16 +578,14 @@ async def lemonsqueezy_webhook(request: Request):
     """
     body = await request.body()
 
-    # Verify signature if secret is configured
-    if LS_SIGNING_SECRET:
-        sig = request.headers.get("X-Signature", "")
-        expected = hmac.new(
-            LS_SIGNING_SECRET.encode(),
-            body,
-            hashlib.sha256
-        ).hexdigest()
-        if not hmac.compare_digest(sig, expected):
-            raise HTTPException(status_code=401, detail="Invalid webhook signature.")
+    # Always verify — fail closed. Without a configured secret the endpoint is
+    # disabled, so an unsigned request can never upgrade an account.
+    if not LS_SIGNING_SECRET:
+        raise HTTPException(status_code=503, detail="Webhook not configured.")
+    sig = request.headers.get("X-Signature", "")
+    expected = hmac.new(LS_SIGNING_SECRET.encode(), body, hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(expected, sig):
+        raise HTTPException(status_code=401, detail="Invalid webhook signature.")
 
     try:
         payload = json.loads(body)
