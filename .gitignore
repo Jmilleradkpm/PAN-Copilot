@@ -16,6 +16,9 @@ env/
 
 # Secrets — NEVER commit these
 PAN_Copilot_Master_System_Prompt.md
+PAN_Copilot_Master_System_Prompt_Local.md
+*.md.enc
+local/_prompt_key.py
 *.env
 
 # Databases

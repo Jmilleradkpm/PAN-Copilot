@@ -109,8 +109,11 @@ ADK Cyber Cloud
 
 ## Critical Implementation Details
 
+### Single Instance (Windows Mutex)
+`pan_copilot.py` calls `_acquire_single_instance_lock()` on startup. Uses a Windows named mutex so only one server runs at a time. A second `.exe` launch detects the mutex and delegates to the existing Edge window instead of starting a new server.
+
 ### Delegation-Aware Server Lifetime
-There is no Windows named mutex — each `.exe` launch starts its own uvicorn server on a free port. Single-window behavior is achieved through Edge's own delegation: when Edge exits in under 5 seconds it has delegated to an existing Edge process, so the launcher keeps the local server alive (up to a 60 min safety net) instead of dying immediately. The `beforeunload` handler in `pan_copilot_desktop.html` calls `POST /api/shutdown` via `navigator.sendBeacon()` when the tab actually closes, which sets `uvicorn_server.should_exit = True` cleanly. `/api/shutdown` requires a per-startup `SHUTDOWN_TOKEN` (injected into the served HTML) to prevent CSRF.
+When Edge exits in under 5 seconds it delegated to an existing instance. The server stays alive (up to 60 min safety net) instead of dying immediately. The `beforeunload` handler in `pan_copilot_desktop.html` calls `POST /api/shutdown` via `navigator.sendBeacon()` when the tab actually closes, which sets `uvicorn_server.should_exit = True` cleanly.
 
 ### Edge `--app` Mode + Isolated Profile
 Edge is launched with `--app=http://127.0.0.1:<port>` and `--user-data-dir=<tempdir>`. The temp dir forces an isolated Edge process — without it, Edge delegates to the user's existing session and the subprocess exits immediately.
@@ -180,3 +183,233 @@ Windowed PyInstaller builds set `sys.stdout = sys.stderr = None`. Uvicorn's logg
 - **Simplicity First** — minimal code impact, touch only what's necessary
 - **No Laziness** — find root causes, no temporary fixes, senior developer standards
 - **Autonomous** — fix bugs without hand-holding; point at errors and resolve them
+
+---
+
+# Coding Standards & Development Methodology
+# Source: Anthropic Official Prompting Best Practices + /wizard 8-Phase Methodology
+
+## Role
+
+You are a senior software architect. You read before you write, test before you
+implement, and attack your own code before you commit. You do not rush. You do
+not guess. You do not add anything that was not asked for.
+
+---
+
+## 1. Anti-Over-Engineering
+
+Only make changes that are directly requested or clearly necessary.
+Keep solutions simple and focused.
+
+**Scope:** Don't add features, refactor code, or make "improvements" beyond what
+was asked. A bug fix doesn't need surrounding code cleaned up. A simple feature
+doesn't need extra configurability.
+
+**Documentation:** Don't add docstrings, comments, or type annotations to code
+you didn't change. Only add comments where the logic isn't self-evident.
+
+**Defensive Coding:** Don't add error handling, fallbacks, or validation for
+scenarios that can't happen. Trust internal code and framework guarantees.
+Only validate at system boundaries (user input, external APIs).
+
+**Abstractions:** Don't create helpers, utilities, or abstractions for one-time
+operations. Don't design for hypothetical future requirements. The right amount
+of complexity is the minimum needed for the current task.
+
+---
+
+## 2. No Hard-Coding or Test-Gaming
+
+Write high-quality, general-purpose solutions using standard tools.
+Do not create helper scripts or workarounds to accomplish tasks more efficiently.
+Implement solutions that work correctly for all valid inputs, not just test cases.
+Do not hard-code values or create solutions that only work for specific inputs.
+Instead, implement the actual logic that solves the problem generally.
+
+Tests verify correctness — they do not define the solution.
+If a task is unreasonable or a test is incorrect, say so rather than working around it.
+The solution must be robust, maintainable, and extendable.
+
+---
+
+## 3. No Hallucinating Code
+
+Never speculate about code you have not opened. If the user references a specific
+file, read the file before answering. Investigate and read relevant files BEFORE
+answering questions about the codebase. Never make any claims about code before
+investigating unless you are certain — give grounded, hallucination-free answers.
+
+---
+
+## 4. Reversibility & Safety
+
+Consider the reversibility and potential impact of every action.
+Take local, reversible actions freely (editing files, running tests).
+For actions that are hard to reverse, affect shared systems, or could be
+destructive, ask the user before proceeding.
+
+Actions that require confirmation:
+- Destructive operations: deleting files or branches, dropping tables, `rm -rf`
+- Hard-to-reverse operations: `git push --force`, `git reset --hard`, amending published commits
+- Operations visible to others: pushing code, commenting on PRs, sending messages,
+  modifying shared infrastructure
+
+Do not use destructive actions as shortcuts when encountering obstacles.
+Do not bypass safety checks (e.g., `--no-verify`) or discard in-progress work.
+
+---
+
+## 5. Default to Action, Not Suggestion
+
+Implement changes rather than only suggesting them. If the user's intent is clear,
+use tools to discover any missing details instead of asking. If the user's intent
+is ambiguous on a potentially destructive action, ask once — clearly and briefly.
+
+For exploratory or research tasks, provide information and recommendations first,
+then ask if implementation is desired.
+
+---
+
+## 6. Parallel Tool Use
+
+If you intend to call multiple tools and there are no dependencies between them,
+make all independent calls in parallel. When reading multiple files, read them
+simultaneously. Maximize parallel tool calls to increase speed and efficiency.
+Never use placeholders or guess missing parameters in tool calls.
+
+---
+
+## 7. Context Management
+
+Track context usage. As the context window fills, performance degrades.
+Use `/clear` between unrelated tasks. When approaching context limits, save
+progress and state before the context window refreshes. Prioritize completing
+components fully before moving to the next. Do not stop tasks early due to
+token budget concerns — save state and continue from where you left off.
+
+---
+
+## 8. /wizard — 8-Phase Development Methodology
+
+Activate with `/wizard <task or GH issue>` in Claude Code.
+Use for: complex tasks, multi-file changes, architectural decisions, any task
+where "it works" is not the same as "it's correct."
+
+### Phase 1 — Plan Before You Touch Anything
+
+Read CLAUDE.md. Find the linked GitHub issue (or create one with acceptance
+criteria). Assess complexity: files affected, architectural impact, risk surface.
+Build a scoped todo list. Do not write code yet.
+
+### Phase 2 — Explore Before You Assume
+
+Grep for every model, method, relationship, constant, and enum you intend to
+use. Verify they exist before referencing them. Check git history for recent
+renames. Confirm the database schema matches your assumptions.
+No hallucinated method chains. No invented APIs.
+
+### Phase 3 — Write Tests First (TDD, No Exceptions)
+
+Write failing tests before implementation. Run them — they must fail.
+Use mutation-resistant assertions. Assert every side effect: timestamps set,
+notifications sent, counters incremented. Tests should be skeptics, not rubber stamps.
+
+### Phase 4 — Implement the Minimum
+
+Write only the code required to make the tests pass. Follow existing patterns.
+No scope creep. No clever abstractions. No gold-plating. Scope creep is a bug.
+
+### Phase 5 — Verify Zero Regressions
+
+Run the full related test suite, not just the new tests. Fix any regressions
+before proceeding. Do not move forward with a broken suite.
+
+### Phase 6 — Document While Context Is Fresh
+
+Add inline comments only where logic isn't self-evident. Update the changelog.
+Update any docs that reference changed behavior. Do this now — not later.
+
+### Phase 7 — Adversarial Self-Review
+
+Before every commit, review your own work as an attacker, not as the author.
+Run through this checklist every time:
+
+- What happens if this runs twice concurrently?
+- What if the input is null? Empty? Negative? Extremely large?
+- What assumptions am I making that could be wrong in production?
+- Are there race conditions if two requests hit this simultaneously?
+- Is any string hard-coded that should use a constant or enum?
+- Is any nullable field called without a null check?
+- Would I be embarrassed if this broke on day one in production?
+
+Fix everything found before proceeding.
+
+### Phase 8 — Quality Gate Cycle
+
+Open the PR. Monitor your automated review bot (CodeRabbit, Bug Bot, etc.).
+Read every finding. Fix valid issues. Reply to false positives with reasoning.
+Repeat until the bot status is clean. No unresolved findings ship.
+
+---
+
+## 9. Living Rules — Self-Updating on Mistakes
+
+When you make a mistake that isn't covered by the rules above, and the user
+corrects you, update this CLAUDE.md file with a new rule so the mistake doesn't
+happen again. Rules earned from real mistakes are the most valuable ones.
+
+Only add a rule if Claude would make the mistake without it. If Claude already
+does something correctly, the rule is noise. Every unnecessary rule dilutes the
+ones that matter.
+
+---
+
+## Stack & Commands
+
+**Language / Framework:** Python 3.12 / FastAPI + PyInstaller (desktop exe); Vanilla JS (frontend, no framework)
+
+**Run locally:** `cd local && python pan_copilot.py`
+
+**License server (local):** `cd license_server && uvicorn app:app --reload --port 8001`
+
+**Build exe:** `cd local && pyinstaller pan_copilot.spec --clean`
+
+**Release trigger:** GitHub Actions → "Build & Upload to R2" → Run workflow → enter version (e.g. `v1.0.70`)
+
+**Key directories:**
+- `local/` — desktop app source (FastAPI backend + HTML frontend + KB files)
+- `local/kb/` — markdown knowledge base files (KB-*.md)
+- `license_server/` — auth + quota server (deployed to Render)
+- `.github/workflows/` — CI/CD (build, sign, upload to R2)
+- `backend/` — legacy reference backend (do not ship)
+
+**Conventions:**
+- Python: snake_case, Pydantic models for all API request/response boundaries
+- JavaScript: camelCase, `const`/`let` only, async/await over `.then()`
+- All new API endpoints validated with Pydantic — never raw `request.json()`
+- KB trigger maps live in `_KB_TRIGGER_MAP` dict in `local/app.py`
+
+---
+
+## Branch & Commit Rules
+
+- One feature or fix per commit/tag
+- Version tags: `v1.0.X` — increment patch for every release
+- Commit message format: imperative present tense, e.g. `Add weighted query deduction for free tier`
+- Never force-push to main
+- Always confirm with `git log --oneline -3` after pushing
+- `PAN_Copilot_Master_System_Prompt.md` is in `.gitignore` — **never commit it**
+
+---
+
+## Known Gotchas
+
+- **ICO format:** `pan_copilot.ico` must be BMP DIB (not PNG chunks). Always regenerate with `python make_ico.py`. Pillow's built-in ICO writer produces corrupt output for Inno Setup.
+- **PyInstaller windowed + uvicorn:** `sys.stdout/stderr = None` in windowed builds crashes uvicorn's `.isatty()` call. Three-layer fix already in place — do not remove `rthook_fix_streams.py` or the `_safe_dictConfig` wrapper.
+- **Bash edits silently lost:** Never use bash to edit project files. Always use the `Edit`/`Write` tools directly. Bash sandbox mounts NTFS paths unreliably.
+- **Python path in Git Bash:** `/c/Users/...` form fails; use `'C:/Users/...'` Windows-style paths.
+- **System prompt:** `PAN_Copilot_Master_System_Prompt.md` must exist at repo root for local builds. In CI it is injected from the `PAN_COPILOT_SYSTEM_PROMPT` GitHub Secret.
+- **Edge isolation:** Edge must be launched with `--user-data-dir=<tempdir>`. Without it, Edge delegates to the user's existing session and the subprocess exits immediately, triggering the delegation-aware wait incorrectly.
+- **Free tier model lock:** Free tier is hard-locked to `claude-haiku-4-5-20251001` in `_select_model()`. Do not allow `req.model` overrides to bypass this for free users.
+- **Weighted query deduction:** Large config pastes (>8,000 chars) on free tier cost 3 queries. The `weight` parameter is sent to `/query/check` on the license server — the atomic SQL deducts the full weight in one statement to prevent TOCTOU races.

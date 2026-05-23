@@ -230,17 +230,29 @@
       margin: 0 6px; user-select: none; flex-shrink: 0;
     }
     #kb-dropdown-wrap { position: relative; display: inline-flex; align-items: center; flex-shrink: 0; }
+    @keyframes kb-glow-pulse {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(0,212,228,0.0); }
+      50%       { box-shadow: 0 0 0 3px rgba(0,212,228,0.18); }
+    }
     #kb-dropdown-btn {
-      display: inline-flex; align-items: center; gap: 5px;
-      padding: 3px 10px 3px 9px; border: 1px solid var(--border);
-      border-radius: 5px; background: var(--surface2);
-      color: var(--text-sub); font-size: 11px; cursor: pointer;
-      transition: all 0.12s; white-space: nowrap; font-family: inherit;
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 5px 12px 5px 10px;
+      border: 1px solid var(--accent);
+      border-radius: 6px;
+      background: var(--accent-dim);
+      color: var(--accent);
+      font-size: 12px; font-weight: 600;
+      cursor: pointer; white-space: nowrap; font-family: inherit;
+      transition: background 0.15s, box-shadow 0.15s, color 0.15s;
+      animation: kb-glow-pulse 2.8s ease-in-out 4;
     }
     #kb-dropdown-btn:hover, #kb-dropdown-btn.open {
-      border-color: var(--accent); color: var(--text);
+      background: rgba(0,212,228,0.22);
+      box-shadow: 0 0 10px rgba(0,212,228,0.25);
+      color: var(--text);
+      animation: none;
     }
-    #kb-dropdown-caret { font-size: 8px; transition: transform 0.15s; line-height: 1; }
+    #kb-dropdown-caret { font-size: 9px; transition: transform 0.15s; line-height: 1; }
     #kb-dropdown-btn.open #kb-dropdown-caret { transform: rotate(180deg); }
     #kb-dropdown-menu {
       display: none; position: absolute; top: calc(100% + 6px); left: 0;
@@ -473,6 +485,40 @@
     #send-btn:disabled { background: var(--accent-dim); cursor: not-allowed; }
     #input-hint { font-size: 11px; color: var(--text-dim); margin-top: 5px; padding: 0 2px; display: flex; justify-content: space-between; }
 
+    /* Pasted-image attachment strip (above composer + above config paste). */
+    .attach-strip {
+      display: none; flex-wrap: wrap; gap: 6px;
+      margin: 0 0 6px 0; padding: 0;
+    }
+    .attach-strip.has-items { display: flex; }
+    .attach-chip {
+      position: relative;
+      width: 56px; height: 56px; border-radius: 6px;
+      border: 1px solid var(--border); overflow: hidden;
+      background: var(--code-bg); flex-shrink: 0;
+    }
+    .attach-chip img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .attach-chip .attach-x {
+      position: absolute; top: 2px; right: 2px;
+      width: 16px; height: 16px; line-height: 14px; text-align: center;
+      border-radius: 50%; background: rgba(0,0,0,0.7); color: #fff;
+      border: none; cursor: pointer; font-size: 11px; font-weight: 700;
+      padding: 0;
+    }
+    .attach-chip .attach-x:hover { background: #f85149; }
+    .attach-chip .attach-size {
+      position: absolute; bottom: 0; left: 0; right: 0;
+      background: rgba(0,0,0,0.55); color: #fff;
+      font-size: 9px; text-align: center; padding: 1px 2px;
+      font-family: monospace;
+    }
+    /* Image thumbnails rendered inside a user-message bubble. */
+    .msg-attach-row { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+    .msg-attach-row img {
+      max-height: 120px; max-width: 180px; border-radius: 6px;
+      border: 1px solid var(--border); display: block; cursor: zoom-in;
+    }
+
     /* ── RIGHT SIDEBAR ─────────────────────────────────────────── */
     #right-sidebar {
       width: var(--right-w); flex-shrink: 0;
@@ -526,6 +572,20 @@
     #config-paste::placeholder { color: var(--text-dim); }
     #config-status { font-size: 11px; color: var(--text-dim); margin-top: 5px; min-height: 15px; }
     #config-status.has { color: var(--yellow); }
+    #large-cfg-warn {
+      display: none; margin-top: 6px; font-size: 11px;
+      color: #c9a227; background: rgba(201,162,39,0.08);
+      border: 1px solid rgba(201,162,39,0.25);
+      border-radius: 5px; padding: 5px 9px; line-height: 1.5;
+    }
+    #free-tier-info {
+      display: none; margin-top: 10px; font-size: 11px;
+      color: var(--text-dim); line-height: 1.65;
+      background: var(--surface2); border-radius: 6px;
+      padding: 9px 11px; border: 1px solid var(--border);
+    }
+    #free-tier-info a { color: var(--accent); text-decoration: none; }
+    #free-tier-info a:hover { text-decoration: underline; }
     .rs-divider2 { height: 1px; background: var(--border-dim); margin: 6px 12px 10px; }
     #quick-section { padding: 0 12px 12px; }
     .qa-btn {
@@ -751,6 +811,140 @@
       font-size: 14px; padding: 2px 6px; opacity: 0.7;
     }
     .update-dismiss:hover { opacity: 1; }
+
+    /* ── PAN Security Advisory banner ──────────────────────────── */
+    /* Red when ANY active advisory is CRITICAL, amber when all are HIGH.
+       Sits below the update banner (which gets first row) so both stack. */
+    #advisory-banner {
+      display: none; flex-direction: column;
+      position: fixed; left: 0; right: 0; z-index: 89;
+      top: calc(var(--header-h) + var(--update-banner-h, 0px));
+      background: #4a1414; border-bottom: 1px solid #6b1f1f;
+      color: #ffdada; font-size: 13px;
+    }
+    #advisory-banner.sev-high { background: #4a3614; border-bottom-color: #7a5a1f; color: #ffe7b0; }
+    #advisory-banner.show { display: flex; }
+    #advisory-header {
+      display: flex; align-items: center; gap: 10px;
+      padding: 7px 16px; cursor: pointer;
+    }
+    #advisory-header:hover { filter: brightness(1.15); }
+    #advisory-icon { font-size: 15px; flex-shrink: 0; }
+    #advisory-summary { flex: 1; font-weight: 600; }
+    #advisory-chevron {
+      font-family: monospace; font-size: 12px; opacity: 0.8;
+      transition: transform 0.15s;
+    }
+    #advisory-banner.expanded #advisory-chevron { transform: rotate(90deg); }
+    #advisory-list { display: none; padding: 2px 12px 8px; gap: 4px; flex-direction: column; }
+    #advisory-banner.expanded #advisory-list { display: flex; }
+    .advisory-row {
+      display: flex; align-items: center; gap: 9px;
+      padding: 5px 6px; border-radius: 5px; font-size: 12.5px;
+      background: rgba(0,0,0,0.18);
+    }
+    .advisory-row:hover { background: rgba(0,0,0,0.28); }
+    .advisory-sev {
+      flex-shrink: 0; font-size: 10px; font-weight: 700;
+      padding: 2px 7px; border-radius: 3px; letter-spacing: 0.04em;
+      font-family: monospace;
+    }
+    .advisory-sev.CRITICAL { background: #b71c1c; color: #fff; }
+    .advisory-sev.HIGH     { background: #b08416; color: #1a0f00; }
+    .advisory-title {
+      flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      color: inherit; text-decoration: none;
+    }
+    .advisory-title:hover { text-decoration: underline; }
+    .advisory-date { flex-shrink: 0; font-size: 10.5px; opacity: 0.7; font-family: monospace; }
+    .advisory-dismiss {
+      background: none; border: none; color: inherit; cursor: pointer;
+      font-size: 14px; padding: 0 4px; opacity: 0.6; flex-shrink: 0;
+    }
+    .advisory-dismiss:hover { opacity: 1; color: #fff; }
+    #advisory-close-all {
+      background: none; border: none; color: inherit; cursor: pointer;
+      font-size: 15px; padding: 2px 6px; opacity: 0.65; flex-shrink: 0;
+      margin-left: 4px;
+    }
+    #advisory-close-all:hover { opacity: 1; color: #fff; }
+
+    /* ── Chat provider settings (right sidebar) ─────────────── */
+    #provider-toggle {
+      display: flex; align-items: center; gap: 6px; cursor: pointer;
+      padding: 4px 0 6px; user-select: none;
+    }
+    #provider-toggle:hover { filter: brightness(1.2); }
+    #provider-mode-label {
+      flex: 1; font-size: 11px; color: var(--text-sub);
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    #provider-chevron {
+      font-family: monospace; font-size: 12px; color: var(--text-dim);
+      transition: transform 0.15s;
+    }
+    #provider-section.expanded #provider-chevron { transform: rotate(90deg); }
+    #provider-panel { display: none; flex-direction: column; gap: 5px; }
+    #provider-section.expanded #provider-panel { display: flex; }
+    .provider-radio {
+      display: flex; gap: 8px; align-items: flex-start; padding: 5px 4px;
+      border-radius: 6px; cursor: pointer; font-size: 12px;
+      transition: background 0.12s;
+    }
+    .provider-radio:hover { background: var(--code-bg); }
+    .provider-radio input { margin-top: 2px; flex-shrink: 0; }
+    .provider-radio strong { color: var(--text); font-weight: 600; font-size: 12px; display: block; }
+    .provider-radio-sub {
+      display: block; font-size: 10.5px; color: var(--text-dim);
+      margin-top: 2px; line-height: 1.4;
+    }
+    .provider-radio.disabled {
+      opacity: 0.45; cursor: not-allowed;
+    }
+    .provider-radio.disabled:hover { background: transparent; }
+    #local-llm-fields { display: none; flex-direction: column; gap: 6px; margin-top: 6px; }
+    #provider-section.show-local #local-llm-fields { display: flex; }
+    .provider-field {
+      display: flex; flex-direction: column; gap: 3px; font-size: 10.5px;
+      color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.04em;
+    }
+    .provider-field input {
+      background: var(--code-bg); border: 1px solid var(--border);
+      border-radius: 5px; color: var(--text); font-family: 'Consolas','Cascadia Code',monospace;
+      font-size: 11.5px; padding: 6px 8px; text-transform: none; letter-spacing: 0;
+    }
+    .provider-field input:focus { outline: none; border-color: var(--accent); }
+    #local-test-btn, #provider-save-btn {
+      background: var(--code-bg); border: 1px solid var(--border);
+      border-radius: 5px; color: var(--text); cursor: pointer;
+      font-size: 11.5px; padding: 6px 10px; transition: all 0.12s;
+    }
+    #local-test-btn:hover, #provider-save-btn:hover { border-color: var(--accent); }
+    #provider-save-btn { background: var(--accent); color: #fff; border-color: var(--accent); font-weight: 600; }
+    #provider-save-btn:hover { background: var(--accent-hover); }
+    #local-test-result { font-size: 11px; min-height: 14px; line-height: 1.4; }
+    #local-test-result.ok    { color: #4caf50; }
+    #local-test-result.error { color: #f85149; }
+    #provider-save-row { display: flex; align-items: center; gap: 9px; margin-top: 2px; }
+    #provider-save-status { font-size: 11px; color: var(--text-dim); }
+    #provider-tier-lock {
+      display: none; margin-top: 6px; font-size: 11px; line-height: 1.5;
+      color: #c9a227; background: rgba(201,162,39,0.08);
+      border: 1px solid rgba(201,162,39,0.25);
+      border-radius: 5px; padding: 6px 9px;
+    }
+    #provider-tier-lock.show { display: block; }
+    #provider-tier-lock a { color: var(--accent); text-decoration: none; }
+    #provider-tier-lock a:hover { text-decoration: underline; }
+    /* Mode pill next to the model picker. */
+    #provider-mode-pill {
+      display: none; padding: 2px 8px; border-radius: 4px;
+      font-size: 10px; font-weight: 600; letter-spacing: 0.04em;
+      text-transform: uppercase; font-family: monospace;
+      margin-left: auto;
+    }
+    #provider-mode-pill.cloud { background: rgba(56,139,253,0.18); color: #58a6ff; border: 1px solid rgba(56,139,253,0.4); display: inline-block; }
+    #provider-mode-pill.local { background: rgba(76,175,80,0.18); color: #4caf50; border: 1px solid rgba(76,175,80,0.4); display: inline-block; }
   </style>
 </head>
 <body>
@@ -840,6 +1034,13 @@
       <span class="acct-value" id="acct-usage">0 / 10</span>
     </div>
 
+    <div id="free-tier-info">
+      <strong style="color:var(--text-sub);">Free tier limits</strong><br>
+      Model: <strong style="color:var(--text-sub);">Claude Haiku</strong> — fast &amp; efficient<br>
+      Config pastes &gt;8,000 chars count as <strong style="color:var(--text-sub);">3 queries</strong><br>
+      <a href="https://adkcyber.com/pan-copilot.html#pricing" target="_blank">Upgrade for Sonnet &amp; Opus →</a>
+    </div>
+
     <button id="upgrade-link" onclick="openUpgradeModal()">
       ↗ Upgrade plan
     </button>
@@ -857,7 +1058,20 @@
 <div id="update-banner">
   <span id="update-banner-msg">Update available</span>
   <button id="update-install-btn" onclick="installUpdate()">Update Now</button>
-  <button class="update-dismiss" onclick="document.getElementById('update-banner').style.display='none'" title="Dismiss">✕</button>
+  <button class="update-dismiss" onclick="hideUpdateBanner()" title="Dismiss">✕</button>
+</div>
+
+<!-- ── PAN SECURITY ADVISORY BANNER ────────────────────────────── -->
+<!-- Fed by /api/advisories. Backend polls security.paloaltonetworks.com
+     hourly and only surfaces HIGH/CRITICAL items published after install. -->
+<div id="advisory-banner">
+  <div id="advisory-header" onclick="toggleAdvisoryBanner()">
+    <span id="advisory-icon">⚠️</span>
+    <span id="advisory-summary"></span>
+    <span id="advisory-chevron">›</span>
+    <button id="advisory-close-all" onclick="dismissAllAdvisories(event)" title="Close — will only reappear if a new High or Critical advisory is found">✕</button>
+  </div>
+  <div id="advisory-list"></div>
 </div>
 
 <div id="app">
@@ -989,6 +1203,55 @@
                 <span class="kb-dd-id">KB-PAN-APPID-001</span>
               </span>
             </button>
+            <button class="kb-dd-item" onclick="askKb('kb-pan-ha-001'); closeKbDropdown()">
+              <span class="kb-dd-icon">🔄</span>
+              <span class="kb-dd-text">
+                <span class="kb-dd-title">HA Failover &amp; Stuck-in-Initial</span>
+                <span class="kb-dd-id">KB-PAN-HA-001</span>
+              </span>
+            </button>
+            <button class="kb-dd-item" onclick="askKb('kb-sec-uid-001'); closeKbDropdown()">
+              <span class="kb-dd-icon">👤</span>
+              <span class="kb-dd-text">
+                <span class="kb-dd-title">User-ID — Users Not in Traffic Logs</span>
+                <span class="kb-dd-id">KB-SEC-UID-001</span>
+              </span>
+            </button>
+            <button class="kb-dd-item" onclick="askKb('kb-pan-vpn-001'); closeKbDropdown()">
+              <span class="kb-dd-icon">🔗</span>
+              <span class="kb-dd-text">
+                <span class="kb-dd-title">IPsec VPN — Tunnel Up, No Traffic</span>
+                <span class="kb-dd-id">KB-PAN-VPN-001</span>
+              </span>
+            </button>
+            <button class="kb-dd-item" onclick="askKb('kb-pan-mgmt-001'); closeKbDropdown()">
+              <span class="kb-dd-icon">🖥️</span>
+              <span class="kb-dd-text">
+                <span class="kb-dd-title">Panorama — Commit, Push &amp; Design</span>
+                <span class="kb-dd-id">KB-PAN-MGMT-001</span>
+              </span>
+            </button>
+            <button class="kb-dd-item" onclick="askKb('kb-cortex-xdr-001'); closeKbDropdown()">
+              <span class="kb-dd-icon">🛡️</span>
+              <span class="kb-dd-text">
+                <span class="kb-dd-title">Cortex XDR/XSIAM — Alert Grouping, Network Location &amp; CIE</span>
+                <span class="kb-dd-id">KB-CORTEX-XDR-001</span>
+              </span>
+            </button>
+            <button class="kb-dd-item" onclick="askKb('kb-pa-routing-001'); closeKbDropdown()">
+              <span class="kb-dd-icon">🌐</span>
+              <span class="kb-dd-text">
+                <span class="kb-dd-title">Prisma Access — Routing, Service Connections &amp; BGP</span>
+                <span class="kb-dd-id">KB-PA-ROUTING-001</span>
+              </span>
+            </button>
+            <button class="kb-dd-item" onclick="askKb('kb-scm-aiops-0001'); closeKbDropdown()">
+              <span class="kb-dd-icon">📊</span>
+              <span class="kb-dd-text">
+                <span class="kb-dd-title">AIOps &amp; SCM — Telemetry Onboarding &amp; Troubleshooting</span>
+                <span class="kb-dd-id">KB-SCM-AIOPS-0001</span>
+              </span>
+            </button>
           </div>
         </div>
       </div>
@@ -1020,9 +1283,10 @@
     </div>
 
     <div id="input-bar">
+      <div id="chat-attach-strip" class="attach-strip" aria-label="Pasted screenshots to send"></div>
       <div id="input-wrap">
         <textarea id="user-input" rows="1"
-          placeholder="Ask about any Palo Alto Networks product…"
+          placeholder="Ask about any Palo Alto Networks product… (paste screenshots to attach)"
           onkeydown="handleKey(event)" oninput="autoResize(this)"></textarea>
         <button id="send-btn" onclick="sendMessage()">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
@@ -1036,10 +1300,14 @@
         <button class="model-pill"        data-model="claude-haiku-4-5-20251001" onclick="setModel('claude-haiku-4-5-20251001')">Haiku</button>
         <button class="model-pill"        data-model="claude-sonnet-4-6"         onclick="setModel('claude-sonnet-4-6')">Sonnet</button>
         <button class="model-pill"        data-model="claude-opus-4-7"           onclick="setModel('claude-opus-4-7')">Opus</button>
+        <span id="provider-mode-pill" onclick="toggleProvider()"></span>
       </div>
       <div id="input-hint">
         <span>Shift+Enter for newline · Enter to send</span>
-        <span id="config-ind"></span>
+        <span style="display:flex;gap:10px;align-items:center;">
+          <span id="config-ind"></span>
+          <span id="app-version" onclick="recheckVersion()" title="Installed version (click to re-check for updates)" style="cursor:pointer;opacity:0.7;"></span>
+        </span>
       </div>
     </div>
   </main>
@@ -1075,6 +1343,60 @@
 
     <div class="rs-divider"></div>
 
+    <!-- ── Chat provider settings ──────────────────────────────── -->
+    <div id="provider-section" class="rs-section" style="padding-bottom:6px;">
+      <div id="provider-toggle" onclick="toggleProviderPanel()">
+        <span class="rs-label" style="margin-bottom:0;">Chat Provider</span>
+        <span id="provider-mode-label"></span>
+        <span id="provider-chevron">›</span>
+      </div>
+      <div id="provider-panel">
+        <label class="provider-radio">
+          <input type="radio" name="chat_provider" value="cloud" onchange="onProviderChange()">
+          <span>
+            <strong>ADK Cyber AI (cloud)</strong>
+            <span class="provider-radio-sub">Anthropic-backed · best reasoning · queries count toward your quota</span>
+          </span>
+        </label>
+        <label class="provider-radio">
+          <input type="radio" name="chat_provider" value="local" onchange="onProviderChange()">
+          <span>
+            <strong>My local LLM</strong>
+            <span class="provider-radio-sub">Stays on your machine · no quota · best-effort responses</span>
+          </span>
+        </label>
+
+        <div id="local-llm-fields">
+          <label class="provider-field">
+            <span>Base URL</span>
+            <input id="local-base-url" type="text" placeholder="http://localhost:11434/v1" spellcheck="false">
+          </label>
+          <label class="provider-field">
+            <span>Model</span>
+            <input id="local-model" type="text" placeholder="qwen2.5:14b" spellcheck="false">
+          </label>
+          <label class="provider-field">
+            <span>API key (optional)</span>
+            <input id="local-api-key" type="password" placeholder="(blank if your server doesn't require one)" autocomplete="off">
+          </label>
+          <label class="provider-field">
+            <span>Conversation memory (messages)</span>
+            <input id="local-history-turns" type="number" min="2" max="400" step="2" placeholder="40">
+          </label>
+          <div style="font-size:10px;color:var(--text-dim);margin:-2px 0 4px;line-height:1.4;">Recent messages your model sees each turn (default 40 ≈ 20 exchanges). Higher remembers more but needs a larger model context length.</div>
+          <button id="local-test-btn" type="button" onclick="testLocalLLM()">Test connection</button>
+          <div id="local-test-result"></div>
+          <div id="provider-save-row">
+            <button id="provider-save-btn" type="button" onclick="saveProvider()">Save</button>
+            <span id="provider-save-status"></span>
+          </div>
+        </div>
+        <div id="provider-tier-lock"></div>
+      </div>
+    </div>
+
+    <div class="rs-divider"></div>
+
     <!-- File / Config paste area -->
     <div id="config-section" class="rs-section" style="padding:8px 12px 6px;flex-shrink:0;">
       <span class="rs-label">Paste Config / CLI Output</span>
@@ -1087,10 +1409,12 @@
       <input type="file" id="upload-file" accept=".txt,.xml,.cfg,.conf,.log" onchange="uploadFile(this)"/>
       <div id="upload-status"></div>
 
+      <div id="cfg-attach-strip" class="attach-strip" aria-label="Pasted screenshots to send"></div>
       <textarea id="config-paste" rows="5"
-        placeholder="# paste the relevant section — e.g., a specific policy rule, BGP neighbor config, or IKE profile…"
+        placeholder="# paste the relevant section — e.g., a specific policy rule, BGP neighbor config, or IKE profile… (or paste a screenshot)"
         oninput="updateConfigStatus()"></textarea>
       <div id="config-status"></div>
+      <div id="large-cfg-warn">⚠ Config &gt;8,000 chars — counts as <strong>3 queries</strong> on Free tier</div>
     </div>
 
     <div class="rs-divider2"></div>
@@ -1115,7 +1439,9 @@
    ADK Cyber AI — Local Desktop JS
    ================================================================ */
 
-const API = 'http://127.0.0.1:' + (window.location.port || 80);
+const _apiPort = window.location.port;
+if (!_apiPort) throw new Error('ADK Cyber AI: no port in URL — server may not be running.');
+const API = 'http://127.0.0.1:' + _apiPort;
 
 // Product metadata
 const PRODUCTS = {
@@ -1146,11 +1472,13 @@ const PRODUCTS = {
 };
 
 // State
-let currentProduct    = null;
-let currentConvId     = null;
-let configText        = '';
-let isStreaming       = false;
-let authMode          = 'login'; // 'login' | 'register'
+let currentProduct       = null;
+let currentConvId        = null;
+let configText           = '';
+let isStreaming          = false;
+let authMode             = 'login'; // 'login' | 'register'
+let currentTier          = 'free';  // updated on login/refresh; drives model & quota UI
+let _kbScrollToTop       = false;   // set by askKb(); clears after done event scrolls to top of response
 
 // ── Model selection ───────────────────────────────────────────────
 let selectedModel = 'auto';
@@ -1175,6 +1503,24 @@ async function init() {
   applyTheme();
   await checkAuthStatus();
   checkForUpdate();
+  loadAdvisories();
+  loadProviderSettings();
+  // Re-poll advisories every 10 min so a new HIGH/CRITICAL surfaces within
+  // ~10 min of the next hourly backend fetch.
+  setInterval(loadAdvisories, 10 * 60 * 1000);
+}
+
+function hideUpdateBanner() {
+  const b = document.getElementById('update-banner');
+  b.style.display = 'none';
+  document.documentElement.style.setProperty('--update-banner-h', '0px');
+}
+
+function showUpdateBanner() {
+  const b = document.getElementById('update-banner');
+  b.style.display = 'flex';
+  // Publish the live height so the advisory banner can stack underneath.
+  document.documentElement.style.setProperty('--update-banner-h', b.offsetHeight + 'px');
 }
 
 // ── Auto-update ───────────────────────────────────────────────────
@@ -1183,12 +1529,351 @@ async function checkForUpdate() {
     const res = await fetch(`${API}/api/version`);
     if (!res.ok) return;
     const data = await res.json();
+    // Always render the installed version label so users can confirm at a
+    // glance which build they're running.
+    const verEl = document.getElementById('app-version');
+    if (verEl && data.current_version) {
+      const cur    = data.current_version.replace(/^v/, '');
+      const latest = (data.latest_version || cur).replace(/^v/, '');
+      verEl.textContent = 'v' + cur;
+      verEl.title = data.update_available
+        ? `Installed v${cur} · update available: v${latest} (click to re-check)`
+        : `Installed v${cur} · latest available: v${latest} (click to re-check)`;
+    }
     if (data.update_available) {
       document.getElementById('update-banner-msg').textContent =
         `Update available: v${data.latest_version} — install and restart automatically.`;
-      document.getElementById('update-banner').style.display = 'flex';
+      showUpdateBanner();
     }
   } catch (e) { /* silent — app works fine without update check */ }
+}
+
+// ── Chat provider settings (cloud vs local LLM) ────────────────────
+// State pulled from GET /api/settings — kept in sync with the backend so the
+// mode pill, quota UI, and request branching all reflect the same truth.
+let _providerState = {
+  settings:           { chat_provider: 'cloud', local_base_url: '', local_model: '', local_api_key: '' },
+  tier:               'free',
+  effective_provider: 'cloud',
+  providers_available:{ cloud: true, local: true },
+};
+
+function toggleProviderPanel() {
+  document.getElementById('provider-section').classList.toggle('expanded');
+}
+
+async function loadProviderSettings() {
+  try {
+    const res = await fetch(`${API}/api/settings`);
+    if (!res.ok) return;
+    _providerState = await res.json();
+    renderProviderUI();
+  } catch (e) { /* silent — defaults stay in place */ }
+}
+
+function renderProviderUI() {
+  const st     = _providerState.settings || {};
+  const eff    = _providerState.effective_provider || 'cloud';
+  const avail  = _providerState.providers_available || {};
+  const tier   = _providerState.tier || 'free';
+  const section = document.getElementById('provider-section');
+
+  // Hydrate radios + fields
+  document.querySelectorAll('input[name="chat_provider"]').forEach(r => {
+    r.checked  = (r.value === st.chat_provider);
+    const row = r.closest('.provider-radio');
+    const isDisabled = avail[r.value] === false;
+    if (row) row.classList.toggle('disabled', isDisabled);
+    r.disabled = isDisabled;
+  });
+  document.getElementById('local-base-url').value = st.local_base_url || '';
+  document.getElementById('local-model').value    = st.local_model    || '';
+  document.getElementById('local-api-key').value  = st.local_api_key  || '';
+  document.getElementById('local-history-turns').value = st.local_history_turns || 40;
+
+  // Show the local-fields group only when local is the current selection.
+  section.classList.toggle('show-local', st.chat_provider === 'local');
+
+  // Header label summarising the effective mode
+  const label = document.getElementById('provider-mode-label');
+  if (eff === 'local') {
+    label.textContent = `Local · ${st.local_model || '(no model)'}`;
+  } else {
+    label.textContent = 'Cloud · ADK Cyber AI';
+  }
+
+  // Tier-aware lock messaging
+  const lock = document.getElementById('provider-tier-lock');
+  if (tier === 'local') {
+    lock.innerHTML = '🔒 Your account is on the <strong>Local</strong> tier — cloud chat is not included. <a href="https://adkcyber.com/pan-copilot.html" target="_blank" rel="noopener">Upgrade to Pro</a> to unlock cloud mode.';
+    lock.classList.add('show');
+  } else if (!avail.local) {
+    const email = (document.getElementById('acct-email')?.textContent || '').trim();
+    const qs = email && email !== '—' ? `?checkout[email]=${encodeURIComponent(email)}` : '';
+    lock.innerHTML = `Local-LLM mode requires the <strong>Local</strong> tier ($5/mo). <a href="${LS_LOCAL_URL + qs}" target="_blank" rel="noopener">Get the Local tier</a> to use your own local model.`;
+    lock.classList.add('show');
+  } else {
+    lock.classList.remove('show');
+    lock.textContent = '';
+  }
+
+  // Mode pill next to the model picker
+  const pill = document.getElementById('provider-mode-pill');
+  if (pill) {
+    pill.classList.remove('cloud', 'local');
+    pill.classList.add(eff);
+    const canToggle = avail.cloud && avail.local;
+    const baseLabel = eff === 'local' ? `Local · ${st.local_model || '?'}` : 'Cloud';
+    pill.textContent = canToggle ? `${baseLabel}  ⇄` : baseLabel;
+    pill.style.cursor = canToggle ? 'pointer' : 'default';
+    if (canToggle) {
+      pill.title = eff === 'local' ? 'Click to switch to Cloud' : 'Click to switch to Local';
+    } else {
+      pill.title = eff === 'local'
+        ? `Local provider at ${st.local_base_url}`
+        : 'Cloud provider (Anthropic)';
+    }
+  }
+
+  // Hide the Anthropic model picker when in local mode (it's irrelevant).
+  document.querySelectorAll('.model-pill[data-model]').forEach(b => {
+    b.style.display = (eff === 'local') ? 'none' : '';
+  });
+  const lbl = document.getElementById('model-picker-label');
+  if (lbl) lbl.style.display = (eff === 'local') ? 'none' : '';
+
+  // Hide the "config >8K = 3 queries" weight warning in local mode (no quota).
+  const cfgWarn = document.getElementById('large-cfg-warn');
+  if (cfgWarn) cfgWarn.style.display = (eff === 'local') ? 'none' : cfgWarn.style.display;
+}
+
+function onProviderChange() {
+  const radio = document.querySelector('input[name="chat_provider"]:checked');
+  if (!radio) return;
+  _providerState.settings.chat_provider = radio.value;
+  document.getElementById('provider-section').classList.toggle('show-local', radio.value === 'local');
+  // Persist immediately — selecting a provider should switch right away, no
+  // separate Save click. (Field edits still use the Save button.)
+  saveProvider();
+}
+
+// One-click switch via the mode pill. Only meaningful when the tier has both
+// providers available (owner/pro/max with a configured local endpoint).
+async function toggleProvider() {
+  const avail = _providerState.providers_available || {};
+  if (!avail.cloud || !avail.local) return;
+  const st   = _providerState.settings || {};
+  const cur  = st.chat_provider || 'cloud';
+  const next = cur === 'local' ? 'cloud' : 'local';
+  // Switching to local needs a configured endpoint — open settings if missing.
+  if (next === 'local' && !(st.local_base_url || '').trim()) {
+    document.getElementById('provider-section').classList.add('expanded');
+    return;
+  }
+  try {
+    const res = await fetch(`${API}/api/settings`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ chat_provider: next }),
+    });
+    if (!res.ok) return;
+    const data = await res.json();
+    _providerState.settings           = data.settings;
+    _providerState.effective_provider = data.effective_provider;
+    renderProviderUI();
+  } catch (e) { /* leave the pill as-is on failure */ }
+}
+
+async function saveProvider() {
+  const radio  = document.querySelector('input[name="chat_provider"]:checked');
+  const status = document.getElementById('provider-save-status');
+  status.textContent = 'Saving…';
+  const body = {
+    chat_provider:  radio ? radio.value : 'cloud',
+    local_base_url: document.getElementById('local-base-url').value.trim(),
+    local_model:    document.getElementById('local-model').value.trim(),
+    local_api_key:  document.getElementById('local-api-key').value,
+    local_history_turns: parseInt(document.getElementById('local-history-turns').value, 10) || 40,
+  };
+  try {
+    const res = await fetch(`${API}/api/settings`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      status.textContent = err.detail || `Save failed (${res.status})`;
+      status.style.color = '#f85149';
+      return;
+    }
+    const data = await res.json();
+    _providerState.settings           = data.settings;
+    _providerState.effective_provider = data.effective_provider;
+    renderProviderUI();
+    status.textContent = '✓ Saved';
+    status.style.color = '#4caf50';
+    setTimeout(() => { status.textContent = ''; }, 2500);
+  } catch (e) {
+    status.textContent = 'Save failed — server unreachable.';
+    status.style.color = '#f85149';
+  }
+}
+
+async function testLocalLLM() {
+  const result = document.getElementById('local-test-result');
+  result.className = '';
+  result.textContent = 'Testing…';
+  const body = {
+    base_url: document.getElementById('local-base-url').value.trim(),
+    model:    document.getElementById('local-model').value.trim(),
+    api_key:  document.getElementById('local-api-key').value || null,
+  };
+  try {
+    const res = await fetch(`${API}/api/local_llm/test`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify(body),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      result.className = 'error';
+      result.textContent = '✗ ' + (data.detail || `HTTP ${res.status}`);
+      return;
+    }
+    result.className = 'ok';
+    result.textContent = `✓ Connected · ${data.latency_ms} ms · ${data.model || ''}`;
+    // Auto-save on a successful test — a tested-but-unsaved provider is the
+    // most common "it won't connect" trap, so persist it immediately.
+    await saveProvider();
+  } catch (e) {
+    result.className = 'error';
+    result.textContent = '✗ Connection failed — server unreachable.';
+  }
+}
+
+// ── PAN security advisory banner ──────────────────────────────────
+// Backend polls https://security.paloaltonetworks.com/rss.xml hourly and
+// only surfaces HIGH/CRITICAL items published after install. We just render
+// whatever the backend returns.
+let _advisoryCache = [];
+
+async function loadAdvisories(force) {
+  try {
+    const url = `${API}/api/advisories${force ? '?force=1' : ''}`;
+    const res = await fetch(url);
+    if (!res.ok) return;
+    const data = await res.json();
+    _advisoryCache = Array.isArray(data.advisories) ? data.advisories : [];
+    renderAdvisoryBanner();
+  } catch (e) { /* silent — banner just stays in its previous state */ }
+}
+
+function renderAdvisoryBanner() {
+  const banner  = document.getElementById('advisory-banner');
+  const summary = document.getElementById('advisory-summary');
+  const list    = document.getElementById('advisory-list');
+  if (!banner || !summary || !list) return;
+
+  const items = _advisoryCache;
+  if (!items.length) {
+    banner.classList.remove('show');
+    banner.classList.remove('expanded');
+    return;
+  }
+
+  const nCritical = items.filter(i => i.severity === 'CRITICAL').length;
+  const nHigh     = items.filter(i => i.severity === 'HIGH').length;
+  banner.classList.toggle('sev-high', nCritical === 0);
+
+  const parts = [];
+  if (nCritical) parts.push(`${nCritical} Critical`);
+  if (nHigh)     parts.push(`${nHigh} High`);
+  const noun = items.length === 1 ? 'advisory' : 'advisories';
+  summary.textContent = `${parts.join(' · ')} Palo Alto security ${noun} — click to view`;
+
+  list.innerHTML = items.map(it => {
+    const sev   = (it.severity || '').toUpperCase();
+    const date  = (it.pub_date || '').slice(0, 10);  // YYYY-MM-DD
+    const href  = it.link || '';
+    const title = it.title || it.cve_id || '';
+    return (
+      `<div class="advisory-row">` +
+        `<span class="advisory-sev ${sev}">${sev}</span>` +
+        `<a class="advisory-title" href="${escAttr(href)}" target="_blank" rel="noopener noreferrer" title="${escAttr(title)}">${escHtml(title)}</a>` +
+        `<span class="advisory-date">${escHtml(date)}</span>` +
+        `<button class="advisory-dismiss" onclick="dismissAdvisory('${escAttr(it.cve_id)}', event)" title="Dismiss">✕</button>` +
+      `</div>`
+    );
+  }).join('');
+
+  banner.classList.add('show');
+}
+
+function toggleAdvisoryBanner() {
+  document.getElementById('advisory-banner').classList.toggle('expanded');
+}
+
+async function dismissAdvisory(cveId, evt) {
+  if (evt) evt.stopPropagation();
+  if (!cveId) return;
+  // Optimistic: drop from local cache and re-render before the request returns.
+  _advisoryCache = _advisoryCache.filter(i => i.cve_id !== cveId);
+  renderAdvisoryBanner();
+  try {
+    await fetch(`${API}/api/advisories/dismiss`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ cve_id: cveId }),
+    });
+  } catch (e) { /* swallow — local cache already reflects dismissal */ }
+}
+
+// Top-level close: dismiss every currently-shown advisory. Banner stays hidden
+// until the next hourly backend poll inserts a brand-new HIGH/CRITICAL row.
+async function dismissAllAdvisories(evt) {
+  if (evt) evt.stopPropagation();
+  _advisoryCache = [];
+  renderAdvisoryBanner();
+  try {
+    await fetch(`${API}/api/advisories/dismiss_all`, { method: 'POST' });
+  } catch (e) { /* swallow — local cache already reflects dismissal */ }
+}
+
+// HTML-attribute-safe escape: same as escHtml but also handles quote chars.
+function escAttr(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+// Manual re-check: bypass the backend's 1-hour update cache via ?force=1.
+async function recheckVersion() {
+  const verEl = document.getElementById('app-version');
+  if (verEl) verEl.textContent = '…';
+  try {
+    const res = await fetch(`${API}/api/version?force=1`);
+    if (!res.ok) {
+      if (verEl) verEl.textContent = 'v?';
+      return;
+    }
+    const data = await res.json();
+    const cur    = (data.current_version || '?').replace(/^v/, '');
+    const latest = (data.latest_version || cur).replace(/^v/, '');
+    if (verEl) {
+      verEl.textContent = 'v' + cur;
+      verEl.title = data.update_available
+        ? `Installed v${cur} · update available: v${latest} (click to re-check)`
+        : `Installed v${cur} · latest available: v${latest} (click to re-check)`;
+    }
+    if (data.update_available) {
+      document.getElementById('update-banner-msg').textContent =
+        `Update available: v${data.latest_version} — install and restart automatically.`;
+      showUpdateBanner();
+    }
+  } catch (e) {
+    if (verEl) verEl.textContent = 'v?';
+  }
 }
 
 async function installUpdate() {
@@ -1278,11 +1963,18 @@ function onAuthenticated(data) {
 }
 
 function tierLabel(tier) {
-  return tier === 'pro' ? 'Pro ($20/mo)' : tier === 'max' ? 'MAX ($50/mo)' : 'Free';
+  switch (tier) {
+    case 'pro':   return 'Pro ($20/mo)';
+    case 'max':   return 'MAX ($50/mo)';
+    case 'local': return 'Local ($5/mo)';
+    case 'owner': return 'Owner';
+    default:      return 'Free';
+  }
 }
 
-const LS_PRO_URL = 'https://adkcyber.lemonsqueezy.com/checkout/buy/1c4c4370-4557-4651-a684-fadaf1a44404';
-const LS_MAX_URL = 'https://adkcyber.lemonsqueezy.com/checkout/buy/0475eb28-6e6b-4f68-adcc-9de6045192d6';
+const LS_PRO_URL   = 'https://adkcyber.lemonsqueezy.com/checkout/buy/1c4c4370-4557-4651-a684-fadaf1a44404';
+const LS_MAX_URL   = 'https://adkcyber.lemonsqueezy.com/checkout/buy/0475eb28-6e6b-4f68-adcc-9de6045192d6';
+const LS_LOCAL_URL = 'https://adkcyber.lemonsqueezy.com/checkout/buy/358bcb87-a7aa-4412-a546-77221ff418b6';
 
 function openUpgradeModal() {
   const email = document.getElementById('acct-email').textContent.trim();
@@ -1314,24 +2006,44 @@ function ackDataDisclosure() {
 }
 
 function updateTierUI(tier, queriesUsed, queriesLimit, period) {
+  currentTier = tier || 'free'; // keep module-level state in sync
   const badge = document.getElementById('tier-badge');
   badge.style.display = 'flex';
   if (tier === 'pro') {
     badge.className = 'pro';
     const used = queriesUsed ?? 0;
     const lim  = queriesLimit ?? 1000;
-    const pct  = Math.round((used / lim) * 100);
     badge.textContent = `★ Pro · ${used.toLocaleString()}/${lim.toLocaleString()} this month`;
   } else if (tier === 'max') {
     badge.className = 'max';
     const used = queriesUsed ?? 0;
     const lim  = queriesLimit ?? 2500;
     badge.textContent = `★ MAX · ${used.toLocaleString()}/${lim.toLocaleString()} this month`;
+  } else if (tier === 'local') {
+    badge.className = 'pro';  // reuse the green-ish pro styling
+    badge.textContent = '⚙ Local · runs on your machine';
+  } else if (tier === 'owner') {
+    badge.className = 'max';
+    badge.textContent = '★ Owner · unlimited';
   } else {
     badge.className = 'free';
     const used = queriesUsed ?? 0;
     const lim  = queriesLimit ?? 10;
     badge.textContent = `Free · ${used}/${lim} this week`;
+  }
+  // Show the free-tier limitations box only for free users
+  document.getElementById('free-tier-info').style.display = (tier === 'free') ? 'block' : 'none';
+  // Re-evaluate the large-config warning with the current config value
+  updateConfigStatus();
+  // Refresh the provider panel — tier change can flip cloud availability.
+  if (_providerState) {
+    _providerState.tier = currentTier;
+    if (currentTier === 'local') {
+      _providerState.providers_available = { cloud: false, local: true };
+      _providerState.effective_provider  = 'local';
+      _providerState.settings.chat_provider = 'local';
+    }
+    renderProviderUI();
   }
 }
 
@@ -1339,6 +2051,17 @@ function updateUsageDisplay(queriesUsed, queriesLimit, tier, period) {
   const row   = document.getElementById('acct-usage-row');
   const label = document.querySelector('#acct-usage-row .acct-label');
   const val   = document.getElementById('acct-usage');
+  row.style.display = 'flex';
+  if (tier === 'local') {
+    if (label) label.textContent = 'Cloud queries';
+    val.innerHTML = '<span style="color:var(--text-sub)">N/A — runs on your machine</span>';
+    return;
+  }
+  if (tier === 'owner') {
+    if (label) label.textContent = 'Queries';
+    val.innerHTML = '<span style="color:var(--text-sub)">Unlimited</span>';
+    return;
+  }
   const used  = queriesUsed ?? 0;
   const lim   = queriesLimit ?? (tier === 'free' ? 10 : tier === 'pro' ? 1000 : 2500);
   const pct   = Math.min(100, Math.round((used / lim) * 100));
@@ -1595,6 +2318,7 @@ function closeKbDropdown() {
 // Sets the chat input to the KB trigger phrase and submits.
 function askKb(trigger) {
   if (isStreaming) return;
+  _kbScrollToTop = true;
   const input = document.getElementById('user-input');
   input.value = trigger;
   sendMessage();
@@ -1643,11 +2367,23 @@ function hideWelcome() {
   document.getElementById('welcome')?.remove();
 }
 
-function appendUserMessage(text) {
+function appendUserMessage(text, attachments) {
   hideWelcome();
   const div = document.createElement('div');
   div.className = 'msg-row user';
-  div.innerHTML = `<div class="msg-bubble"><div class="msg-label">You</div><div class="msg-text">${escHtml(text)}</div></div>`;
+  let attachHtml = '';
+  if (attachments && attachments.length) {
+    const thumbs = attachments
+      .map(a => `<img alt="pasted screenshot" src="${a.dataUrl}" onclick="window.open(this.src,'_blank')">`)
+      .join('');
+    attachHtml = `<div class="msg-attach-row">${thumbs}</div>`;
+  }
+  div.innerHTML =
+    `<div class="msg-bubble">` +
+      `<div class="msg-label">You</div>` +
+      attachHtml +
+      `<div class="msg-text">${escHtml(text)}</div>` +
+    `</div>`;
   document.getElementById('messages').appendChild(div);
   scrollBottom();
 }
@@ -1694,25 +2430,152 @@ function prefillInput(text) {
   input.focus();
 }
 
+// ── Pasted-image attachments ─────────────────────────────────────
+// Mirrors the backend limits in app.py — keep these in sync.
+const MAX_IMAGES_PER_MSG = 4;
+const MAX_IMAGE_BYTES    = 5 * 1024 * 1024;
+const ALLOWED_IMAGE_TYPES = new Set(['image/png','image/jpeg','image/gif','image/webp']);
+let pendingImages = [];  // [{ media_type, data (b64), dataUrl, sizeBytes }]
+
+function fmtKB(n) {
+  if (n < 1024) return n + ' B';
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+  return (n / (1024*1024)).toFixed(1) + ' MB';
+}
+
+function renderAttachStrip() {
+  const strip = document.getElementById('chat-attach-strip');
+  if (!strip) return;
+  strip.innerHTML = '';
+  pendingImages.forEach((img, idx) => {
+    const chip = document.createElement('div');
+    chip.className = 'attach-chip';
+    chip.title = `${img.media_type} · ${fmtKB(img.sizeBytes)}`;
+    chip.innerHTML =
+      `<img alt="pasted screenshot" src="${img.dataUrl}">` +
+      `<button type="button" class="attach-x" aria-label="Remove image" data-idx="${idx}">×</button>` +
+      `<div class="attach-size">${fmtKB(img.sizeBytes)}</div>`;
+    strip.appendChild(chip);
+  });
+  strip.classList.toggle('has-items', pendingImages.length > 0);
+  // Mirror the strip's contents into the config sidebar so the user sees the
+  // pending attachments from either paste site.
+  const mirror = document.getElementById('cfg-attach-strip');
+  if (mirror) {
+    mirror.innerHTML = strip.innerHTML;
+    mirror.classList.toggle('has-items', pendingImages.length > 0);
+  }
+}
+
+function removePendingImage(idx) {
+  pendingImages.splice(idx, 1);
+  renderAttachStrip();
+}
+
+function clearPendingImages() {
+  pendingImages = [];
+  renderAttachStrip();
+}
+
+function readImageFile(file) {
+  return new Promise((resolve, reject) => {
+    if (!ALLOWED_IMAGE_TYPES.has(file.type)) {
+      reject(new Error(`Unsupported image type ${file.type}. Use PNG, JPEG, GIF, or WEBP.`));
+      return;
+    }
+    if (file.size > MAX_IMAGE_BYTES) {
+      reject(new Error(`Image too large (${fmtKB(file.size)}). Max ${fmtKB(MAX_IMAGE_BYTES)}.`));
+      return;
+    }
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('Could not read pasted image.'));
+    reader.onload = () => {
+      const dataUrl = reader.result;  // "data:image/png;base64,AAAA..."
+      const comma = dataUrl.indexOf(',');
+      const b64   = comma >= 0 ? dataUrl.slice(comma + 1) : '';
+      resolve({
+        media_type: file.type,
+        data:       b64,
+        dataUrl:    dataUrl,
+        sizeBytes:  file.size,
+      });
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+async function handlePasteImages(e) {
+  const cd = e.clipboardData;
+  if (!cd) return;
+  // Collect images from clipboardData.items; fall back to .files if items is empty.
+  const imageFiles = [];
+  if (cd.items && cd.items.length) {
+    for (const item of cd.items) {
+      if (item.kind === 'file') {
+        const f = item.getAsFile();
+        if (f && f.type && f.type.startsWith('image/')) imageFiles.push(f);
+      }
+    }
+  } else if (cd.files && cd.files.length) {
+    for (const f of cd.files) {
+      if (f.type && f.type.startsWith('image/')) imageFiles.push(f);
+    }
+  }
+  if (!imageFiles.length) return;   // text paste — let the default run
+  e.preventDefault();
+  if (pendingImages.length + imageFiles.length > MAX_IMAGES_PER_MSG) {
+    alert(`You can attach up to ${MAX_IMAGES_PER_MSG} images per message.`);
+    return;
+  }
+  for (const f of imageFiles) {
+    try {
+      const img = await readImageFile(f);
+      pendingImages.push(img);
+    } catch (err) {
+      alert(err.message || 'Failed to attach image.');
+    }
+  }
+  renderAttachStrip();
+}
+
+// Wire up paste listeners + delegated remove-button clicks once the DOM is ready.
+document.addEventListener('DOMContentLoaded', () => {
+  const chatInput = document.getElementById('user-input');
+  const cfgInput  = document.getElementById('config-paste');
+  if (chatInput) chatInput.addEventListener('paste', handlePasteImages);
+  if (cfgInput)  cfgInput.addEventListener('paste', handlePasteImages);
+  // Single delegated click handler covers both strips.
+  document.addEventListener('click', (e) => {
+    const btn = e.target.closest('.attach-x');
+    if (!btn) return;
+    const idx = parseInt(btn.getAttribute('data-idx'), 10);
+    if (!Number.isNaN(idx)) removePendingImage(idx);
+  });
+});
+
 async function sendMessage() {
   if (isStreaming) return;
   const input = document.getElementById('user-input');
-  const msg   = input.value.trim();
-  if (!msg) return;
+  let   msg   = input.value.trim();
+  const imgs  = pendingImages.slice();   // snapshot — clear after dispatch
+  if (!msg && imgs.length === 0) return;
+  // Allow image-only sends with a default prompt so the model has a question to anchor to.
+  if (!msg && imgs.length) msg = 'Please analyze the attached screenshot(s) and explain what you see.';
 
-  // One-time disclosure before first config submission
+  // One-time disclosure before first config submission OR first image upload.
   const hasCfg = document.getElementById('config-paste').value.trim() || configText;
-  if (hasCfg && !localStorage.getItem('pcop_data_ack')) {
+  if ((hasCfg || imgs.length) && !localStorage.getItem('pcop_data_ack')) {
     showDataDisclosure();
     return; // user must acknowledge; ackDataDisclosure() will re-call sendMessage()
   }
 
   input.value = '';
   autoResize(input);
+  clearPendingImages();
   isStreaming = true;
   document.getElementById('send-btn').disabled = true;
 
-  appendUserMessage(msg);
+  appendUserMessage(msg, imgs);
   const thinking = appendThinking();
 
   const cfgText = document.getElementById('config-paste').value.trim() || configText;
@@ -1728,6 +2591,9 @@ async function sendMessage() {
         conversation_id: currentConvId,
         product_id:      currentProduct,
         model:           selectedModel,
+        images:          imgs.length
+          ? imgs.map(i => ({ media_type: i.media_type, data: i.data }))
+          : undefined,
       }),
     });
 
@@ -1779,6 +2645,13 @@ async function sendMessage() {
             updateTierUI(tier, data.queries_used, data.queries_limit, period);
             updateUsageDisplay(data.queries_used, data.queries_limit, tier, period);
           }
+          // KB articles: scroll back to the top of the response so the user
+          // reads from the beginning rather than landing at the end.
+          if (_kbScrollToTop) {
+            _kbScrollToTop = false;
+            const msgsEl = document.getElementById('messages');
+            msgsEl.scrollTop = placeholder.offsetTop - msgsEl.offsetTop;
+          }
           loadConversations();
         } else if (data.type === 'error') {
           contentEl.innerHTML = `<span style="color:#f85149">⚠️ ${escHtml(data.detail)}</span>`;
@@ -1808,15 +2681,20 @@ function autoResize(el) {
 
 // ── Config paste ──────────────────────────────────────────────────
 function updateConfigStatus() {
-  const val = document.getElementById('config-paste').value.trim();
-  const el  = document.getElementById('config-status');
+  const val  = document.getElementById('config-paste').value.trim();
+  const el   = document.getElementById('config-status');
+  const warn = document.getElementById('large-cfg-warn');
   if (val) {
     const lines = val.split('\n').length;
-    el.textContent = `${lines} lines ready to attach`;
+    el.textContent = `${lines} lines · ${val.length.toLocaleString()} chars`;
     el.className   = 'has';
   } else {
     el.textContent = '';
     el.className   = '';
+  }
+  // Show large-config warning only for free-tier users with >8,000 char configs
+  if (warn) {
+    warn.style.display = (currentTier === 'free' && val.length > 8000) ? 'block' : 'none';
   }
   document.getElementById('config-ind').textContent = val ? '📎 Config attached' : '';
 }

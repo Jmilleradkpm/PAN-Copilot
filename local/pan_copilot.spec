@@ -20,14 +20,30 @@ block_cipher = None
 # Data files to bundle alongside the executable
 datas = [
     # (source_path, dest_folder_inside_bundle)
-    ("pan_copilot_desktop.html",              "."),
-    ("pan_copilot.ico",                       "."),
-    ("../PAN_Copilot_Master_System_Prompt.md", "."),
-    ("kb",                                    "kb"),  # KB articles directory
+    ("pan_copilot_desktop.html",                            "."),
+    ("pan_copilot.ico",                                     "."),
+    ("kb",                                                  "kb"),  # KB articles directory
 ]
+
+# Prompt files: CI runs the "Encrypt prompts" step which produces .enc files
+# (and deletes the .md plaintext). Local dev builds skip the encrypt step and
+# bundle the plaintext .md instead. We add whichever exists at build time, so
+# both CI and `python -m pyinstaller pan_copilot.spec` from a dev box work.
+_repo_root = Path("..").resolve()
+for _name in [
+    "PAN_Copilot_Master_System_Prompt.md.enc",
+    "PAN_Copilot_Master_System_Prompt_Local.md.enc",
+    "PAN_Copilot_Master_System_Prompt.md",
+    "PAN_Copilot_Master_System_Prompt_Local.md",
+]:
+    _src = _repo_root / _name
+    if _src.exists():
+        datas.append((str(_src), "."))
+        print(f"[spec] bundling {_name}")
 
 # Hidden imports that uvicorn/anyio need but PyInstaller misses
 hidden_imports = [
+    "_prompt_key",  # AES key module written by CI; loaded via importlib at runtime
     "uvicorn.logging",
     "uvicorn.loops",
     "uvicorn.loops.auto",

@@ -123,8 +123,12 @@ limiter = Limiter(key_func=_real_ip)
 # Lemon Squeezy variant map
 # ---------------------------------------------------------------------------
 LS_VARIANT_TIER = {
+    # Keys are the numeric variant_id as sent in webhook payloads (str()'d).
+    # The pro/max entries below are checkout-link UUIDs, NOT webhook variant_ids,
+    # so they never match — pro/max resolve via the name-match instead.
     "1c4c4370-4557-4651-a684-fadaf1a44404": "pro",
     "0475eb28-6e6b-4f68-adcc-9de6045192d6": "max",
+    "1680703": "local",
 }
 
 FREE_WEEKLY_LIMIT  = 10
@@ -132,9 +136,13 @@ PRO_MONTHLY_LIMIT  = 1_000
 MAX_MONTHLY_LIMIT  = 2_500
 OWNER_LIMIT        = 999_999
 SESSION_TTL_DAYS   = 30
+MAX_QUERY_WEIGHT   = 3  # max cost multiplier per query (e.g. free-tier large config pastes)
+
+VALID_TIERS = frozenset({"free", "local", "pro", "max", "owner"})
 
 TIER_LIMITS = {
     "free":  FREE_WEEKLY_LIMIT,
+    "local": 0,                  # local-tier users never consume cloud quota
     "pro":   PRO_MONTHLY_LIMIT,
     "max":   MAX_MONTHLY_LIMIT,
     "owner": OWNER_LIMIT,
@@ -235,21 +243,27 @@ def usage_response(user, queries_used: int = None, session_token: str = None) ->
     period  = "weekly" if tier == "free" else "monthly"
     unlimited = (tier == "owner")
 
-    encrypted_key = encrypt_api_key(ANTHROPIC_API_KEY, session_token) if session_token else None
+    # Local-tier accounts never get the Anthropic key. The app reads this
+    # field as the signal that cloud chat is unavailable and shows the
+    # "upgrade to Pro" lock in the provider settings panel.
+    if tier == "local":
+        encrypted_key = None
+    else:
+        encrypted_key = encrypt_api_key(ANTHROPIC_API_KEY, session_token) if session_token else None
 
     return {
         "email":             user["email"],
         "tier":              tier,
         "seats_allowed":     user["seats_allowed"],
-        "period":            period,
-        "queries_used":      used,
-        "queries_limit":     limit,
-        "queries_remaining": OWNER_LIMIT if unlimited else max(0, limit - used),
+        "period":            period if tier != "local" else None,
+        "queries_used":      used  if tier != "local" else None,
+        "queries_limit":     limit if tier != "local" else None,
+        "queries_remaining": OWNER_LIMIT if unlimited else (max(0, limit - used) if tier != "local" else None),
         "unlimited":         unlimited,
         "weekly_used":       used  if tier == "free" else None,
         "weekly_limit":      limit if tier == "free" else None,
-        "monthly_used":      used  if tier != "free" else None,
-        "monthly_limit":     limit if tier != "free" else None,
+        "monthly_used":      used  if tier not in ("free", "local") else None,
+        "monthly_limit":     limit if tier not in ("free", "local") else None,
         "anthropic_key":     encrypted_key,  # Fernet-encrypted, never plaintext
     }
 
@@ -281,6 +295,7 @@ class AuthRequest(BaseModel):
 
 class TokenRequest(BaseModel):
     token: str
+    weight: int = 1  # query cost multiplier: 1 = normal, 3 = free-tier large config (>8k chars)
 
 class AdminTierRequest(BaseModel):
     email: str
@@ -323,11 +338,8 @@ def register(request: Request, req: AuthRequest):
         )
         db.commit()
 
-    class _User:
-        def __getitem__(self, k):
-            return {"id": user_id, "email": email, "tier": "free", "seats_allowed": 1}[k]
-
-    payload = usage_response(_User(), queries_used=0, session_token=token)
+    new_user = {"id": user_id, "email": email, "tier": "free", "seats_allowed": 1}
+    payload = usage_response(new_user, queries_used=0, session_token=token)
     payload["token"] = token
     return payload
 
@@ -390,9 +402,10 @@ def check_and_count(request: Request, req: TokenRequest):
     if not user:
         raise HTTPException(status_code=401, detail="Session expired. Please log in again.")
 
-    tier  = user["tier"]
-    limit = query_limit_for(tier)
-    pk    = period_key(tier)
+    tier   = user["tier"]
+    limit  = query_limit_for(tier)
+    pk     = period_key(tier)
+    weight = max(1, min(req.weight, MAX_QUERY_WEIGHT))  # clamp to [1, MAX_QUERY_WEIGHT]
 
     if tier == "owner":
         return {
@@ -401,20 +414,33 @@ def check_and_count(request: Request, req: TokenRequest):
             "queries_remaining": OWNER_LIMIT, "unlimited": True,
         }
 
-    # Atomic check-and-increment to prevent TOCTOU race
+    # Local-tier accounts run chat on their own hardware — they should never
+    # actually hit this endpoint (the app skips the quota call in local mode),
+    # but if they do we answer "allowed, no count" so a misbehaving client
+    # can't get stuck. Their requests cost ADK Cyber nothing on Anthropic.
+    if tier == "local":
+        return {
+            "allowed": True, "tier": "local", "period": None,
+            "queries_used": None, "queries_limit": None,
+            "queries_remaining": None, "unlimited": False,
+        }
+
+    # Atomic check-and-increment to prevent TOCTOU race.
+    # weight > 1 for free-tier large-config submissions (counts as 3 queries).
     with get_db() as db:
-        # Try to increment only if under limit
+        # Ensure row exists
         db.execute("""
             INSERT INTO query_counts (user_id, period_key, count) VALUES (?, ?, 0)
             ON CONFLICT(user_id, period_key) DO NOTHING
         """, (user["id"], pk))
         db.commit()
 
+        # Only increment if count + weight fits within the limit
         result = db.execute("""
-            UPDATE query_counts SET count = count + 1
-            WHERE user_id = ? AND period_key = ? AND count < ?
+            UPDATE query_counts SET count = count + ?
+            WHERE user_id = ? AND period_key = ? AND count + ? <= ?
             RETURNING count
-        """, (user["id"], pk, limit)).fetchone()
+        """, (weight, user["id"], pk, weight, limit)).fetchone()
         db.commit()
 
     if result is None:
@@ -426,7 +452,7 @@ def check_and_count(request: Request, req: TokenRequest):
             ).fetchone()
         current = row["count"] if row else limit
         period_label = "week" if tier == "free" else "month"
-        tier_label   = {"free": "Free", "pro": "Pro", "max": "MAX"}.get(tier, tier.title())
+        tier_label   = {"free": "Free", "pro": "Pro", "max": "MAX", "local": "Local"}.get(tier, tier.title())
         upgrade_msg  = (
             " Upgrade to Pro at adkcyber.com/pan-copilot.html for up to 1,000 queries/month."
             if tier == "free" else ""
@@ -463,8 +489,8 @@ def _check_admin(authorization: str):
 @app.post("/admin/set-tier")
 def set_tier(req: AdminTierRequest, authorization: str = Header(default="")):
     _check_admin(authorization)
-    if req.tier not in ("free", "pro", "max", "owner"):
-        raise HTTPException(status_code=400, detail="tier must be free, pro, max, or owner.")
+    if req.tier not in VALID_TIERS:
+        raise HTTPException(status_code=400, detail=f"tier must be one of: {', '.join(sorted(VALID_TIERS))}.")
     with get_db() as db:
         result = db.execute(
             "UPDATE users SET tier = ?, seats_allowed = ? WHERE email = ?",
@@ -514,6 +540,8 @@ async def lemonsqueezy_webhook(request: Request):
         tier = "max"
     elif "pro" in variant_name or "pro" in product_name:
         tier = "pro"
+    elif "local" in variant_name or "local" in product_name:
+        tier = "local"
     else:
         tier = LS_VARIANT_TIER.get(str(attrs.get("variant_id", ""))) or "pro"
 

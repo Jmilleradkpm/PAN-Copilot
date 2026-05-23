@@ -1,26 +1,3 @@
----
-kb_id: KB-GP-PRELOGON-001
-title: GlobalProtect Always Pre-Logon (Always On) — Complete Setup Guide
-triggers:
-  - pre-logon
-  - pre logon
-  - prelogon
-  - always pre-logon
-  - always pre logon
-  - gp pre-logon
-  - gp pre logon
-  - globalprotect pre-logon
-  - globalprotect pre logon
-  - globalprotect always on
-  - always-on vpn
-  - always on vpn
-  - machine cert globalprotect
-  - globalprotect machine cert
-  - machine certificate globalprotect
-  - globalprotect machine certificate
-  - kb-gp-prelogon
-  - kb-gp-prelogon-001
----
 # KB-GP-PRELOGON-001 — GlobalProtect Always Pre-Logon (Always On): Complete Setup Guide
 **Using Certificates Generated Directly on the Palo Alto Networks Firewall**
 

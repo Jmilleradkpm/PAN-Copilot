@@ -14,6 +14,7 @@ What it does:
 Everything runs on your machine. Your configs never leave.
 """
 
+import ctypes
 import os
 import socket
 import sys
@@ -74,6 +75,30 @@ def _show_crash_dialog(message: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Single-instance mutex (Windows named mutex)
+# ---------------------------------------------------------------------------
+
+_MUTEX_NAME   = "ADKCyberAI_SingleInstance_v1"
+_mutex_handle = None  # kept alive for the process lifetime
+
+def _acquire_single_instance_lock() -> bool:
+    """
+    Try to acquire a Windows named mutex.
+    Returns True  if this is the first instance (mutex created, server should start).
+    Returns False if another instance already holds it (delegate and exit quickly).
+    """
+    global _mutex_handle
+    try:
+        _mutex_handle = ctypes.windll.kernel32.CreateMutexW(None, True, _MUTEX_NAME)
+        last_error = ctypes.windll.kernel32.GetLastError()
+        if last_error == 183:  # ERROR_ALREADY_EXISTS
+            return False
+        return True
+    except Exception:
+        return True  # If ctypes fails (non-Windows?), allow startup
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
@@ -125,6 +150,12 @@ def find_browser() -> list:
 # ---------------------------------------------------------------------------
 
 def main():
+    if not _acquire_single_instance_lock():
+        # Another instance is already running — its delegation-aware wait will
+        # keep the server alive. This process exits immediately so Edge can
+        # delegate the window to the existing instance.
+        sys.exit(0)
+
     port = find_free_port()
     url  = f"http://127.0.0.1:{port}"
 
