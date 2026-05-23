@@ -262,7 +262,6 @@ app.add_middleware(
     allow_origins=[
         "http://localhost",
         "http://127.0.0.1",
-        "null",
     ],
     allow_origin_regex=r"http://(localhost|127\.0\.0\.1)(:\d+)?",
     allow_credentials=True,
@@ -3544,8 +3543,54 @@ def get_version(force: int = 0):
     return _fetch_update_info(force=bool(force))
 
 
+_LOOPBACK_ORIGIN_RE = re.compile(r"^https?://(127\.0\.0\.1|localhost)(:\d+)?$", re.IGNORECASE)
+
+
+def _verify_authenticode(exe_path: Path) -> tuple[bool, str]:
+    """Return (ok, detail). ok is True only when Windows reports a Valid
+    Authenticode signature (trusted chain + untampered file). If the
+    UPDATE_EXPECTED_SIGNER env var is set, the signer subject must also contain
+    it (publisher pinning). The path is passed via env, never interpolated into
+    the PowerShell command, to avoid command injection."""
+    ps = (
+        "$ErrorActionPreference='Stop';"
+        "$s=Get-AuthenticodeSignature -LiteralPath $env:ADK_UPDATE_FILE;"
+        "Write-Output $s.Status;"
+        "Write-Output $s.SignerCertificate.Subject"
+    )
+    try:
+        proc = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
+            env={**os.environ, "ADK_UPDATE_FILE": str(exe_path)},
+            capture_output=True, text=True, timeout=30,
+        )
+    except Exception as exc:
+        return False, f"verification error: {exc}"
+    lines = [ln.strip() for ln in (proc.stdout or "").splitlines() if ln.strip()]
+    status = lines[0] if lines else ""
+    subject = lines[1] if len(lines) > 1 else ""
+    if status != "Valid":
+        return False, f"signature status: {status or 'unknown'}"
+    expected = os.environ.get("UPDATE_EXPECTED_SIGNER", "").strip()
+    if expected:
+        if expected.lower() not in subject.lower():
+            return False, f"unexpected signer: {subject or '(none)'}"
+    else:
+        logger.warning(
+            "UPDATE_EXPECTED_SIGNER not set — accepting any validly-signed installer. "
+            "Set it to your code-signing subject to pin the publisher."
+        )
+    return True, subject
+
+
 @app.post("/api/update")
-def install_update():
+def install_update(request: Request):
+    # CSRF guard: only the local app UI may trigger an update. A cross-site page
+    # carries its own Origin (or none); require a loopback Origin so a malicious
+    # page the user is browsing can't force a download-and-execute.
+    if not _LOOPBACK_ORIGIN_RE.match(request.headers.get("origin", "")):
+        raise HTTPException(status_code=403, detail="Forbidden.")
+
     info = _fetch_update_info()
     if not info.get("update_available"):
         raise HTTPException(status_code=400, detail="No update available.")
@@ -3557,9 +3602,23 @@ def install_update():
         try:
             r = httpx.get(installer_url, timeout=180.0, follow_redirects=True)
             r.raise_for_status()
-            version = info.get("latest_version", "update")
+            # Sanitize the (remote-sourced) version before using it in a path.
+            raw_version = str(info.get("latest_version", "update"))
+            version = re.sub(r"[^A-Za-z0-9._-]", "", raw_version) or "update"
             tmp = Path(tempfile.gettempdir()) / f"PAN_Copilot_Setup_{version}.exe"
             tmp.write_bytes(r.content)
+
+            # Integrity gate: never execute a binary we can't verify is a
+            # validly-signed, untampered installer (defends against an R2 or
+            # transport compromise swapping in a malicious payload).
+            ok, detail = _verify_authenticode(tmp)
+            if not ok:
+                logger.error("Refusing to run update — Authenticode check failed (%s).", detail)
+                try:
+                    tmp.unlink()
+                except Exception:
+                    pass
+                return
 
             # Launch installer first, then shut down this process so the installer
             # can overwrite all bundled files without hitting locked-file errors.

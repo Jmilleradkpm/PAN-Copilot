@@ -111,10 +111,21 @@ def encrypt_api_key(api_key: str, session_token: str) -> Optional[str]:
 # ---------------------------------------------------------------------------
 # Rate limiter
 # ---------------------------------------------------------------------------
+# Number of trusted reverse-proxy hops in front of this app. Each proxy APPENDS
+# the address it received the connection from, so the right-most entries of
+# X-Forwarded-For are added by infrastructure we control and the left-most are
+# attacker-controllable. Render adds exactly 1 hop; override if your topology
+# differs. Taking the left-most value (the old behaviour) let a client spoof
+# X-Forwarded-For to mint a fresh rate-limit bucket per request.
+TRUSTED_PROXY_HOPS = int(os.environ.get("TRUSTED_PROXY_HOPS", "1"))
+
 def _real_ip(request: Request) -> str:
     forwarded = request.headers.get("X-Forwarded-For")
     if forwarded:
-        return forwarded.split(",")[0].strip()
+        parts = [p.strip() for p in forwarded.split(",") if p.strip()]
+        if parts:
+            idx = len(parts) - TRUSTED_PROXY_HOPS
+            return parts[idx] if 0 <= idx < len(parts) else parts[0]
     return request.client.host if request.client else "unknown"
 
 limiter = Limiter(key_func=_real_ip)
