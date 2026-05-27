@@ -317,6 +317,37 @@ def init_db():
 
 init_db()
 
+
+# Strip the "💭 **Thinking**\n\n…\n\n---\n\n" prefix from any assistant rows
+# that were saved before the persist-side fix landed. Local reasoning models
+# stream their chain-of-thought wrapped in that marker; if it stays in the DB
+# and is replayed on the next turn, some GGUF chat templates fail to render
+# the assistant message and the server returns an empty stream — making old
+# conversations appear to break after one continuation. Idempotent: the LIKE
+# filter restricts work to candidate rows and the regex is anchored to the
+# row start, so reruns are no-ops.
+_THINKING_PREFIX_RE = re.compile(
+    r"^💭 \*\*Thinking\*\*\n\n.*?\n\n---\n\n",
+    flags=re.DOTALL,
+)
+
+def _strip_thinking_from_existing_rows():
+    with get_db() as db:
+        rows = db.execute(
+            "SELECT id, content FROM messages "
+            "WHERE role = 'assistant' AND content LIKE '💭 **Thinking**%'"
+        ).fetchall()
+        for row in rows:
+            cleaned = _THINKING_PREFIX_RE.sub("", row["content"], count=1)
+            if cleaned != row["content"]:
+                db.execute(
+                    "UPDATE messages SET content = ? WHERE id = ?",
+                    (cleaned, row["id"]),
+                )
+        db.commit()
+
+_strip_thinking_from_existing_rows()
+
 # ---------------------------------------------------------------------------
 # System prompt
 # ---------------------------------------------------------------------------
@@ -2628,9 +2659,15 @@ def load_conversation_history(conversation_id: str, limit: int = _MAX_HISTORY_TU
     user-configurable; cloud uses the default).
     """
     with get_db() as db:
+        # rowid is SQLite's monotonically-increasing implicit primary key — used
+        # as a tiebreaker because save_messages writes the user and assistant
+        # rows of a single turn with the same created_at, and without a stable
+        # secondary sort the pair can flip on load. A flipped pair sends
+        # [assistant, user] back to the model, which some chat templates
+        # reject with "No user query found in messages."
         rows = db.execute(
             "SELECT role, content FROM messages "
-            "WHERE conversation_id = ? ORDER BY created_at DESC LIMIT ?",
+            "WHERE conversation_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?",
             (conversation_id, limit),
         ).fetchall()
     # fetchall is newest-first (DESC); reverse for chronological order
@@ -3250,20 +3287,21 @@ def _stream_openai_compat(
                     choices = evt.get("choices") or []
                     if choices:
                         delta = (choices[0] or {}).get("delta") or {}
-                        # Reasoning models (Qwen3, DeepSeek-R1, etc.) stream their
-                        # chain-of-thought in a separate `reasoning_content` field.
-                        # Surface it under a "Thinking" header so the reply isn't
-                        # blank while the model reasons, then divider the answer.
+                        # Reasoning models (Qwen3, DeepSeek-R1, etc.) stream
+                        # their chain-of-thought in a separate `reasoning_content`
+                        # field. We don't surface the reasoning text in the chat
+                        # — only the final answer — so the chat stays compact.
+                        # Instead we emit thinking_start / thinking_end events so
+                        # the frontend can show a "researching the answer…"
+                        # indicator while reasoning is in progress.
                         reasoning = delta.get("reasoning_content")
-                        if reasoning:
-                            if not saw_reasoning:
-                                yield ("token", "💭 **Thinking**\n\n")
-                                saw_reasoning = True
-                            yield ("token", reasoning)
+                        if reasoning and not saw_reasoning:
+                            yield ("thinking_start", None)
+                            saw_reasoning = True
                         chunk = delta.get("content")
                         if chunk:
                             if saw_reasoning and not reasoning_closed:
-                                yield ("token", "\n\n---\n\n")
+                                yield ("thinking_end", None)
                                 reasoning_closed = True
                             # Some models inline reasoning as <think>…</think> in
                             # content; drop the literal tags so they don't render.
@@ -3274,6 +3312,21 @@ def _stream_openai_compat(
                     if usage:
                         input_tokens  = int(usage.get("prompt_tokens")     or usage.get("input_tokens")  or 0)
                         output_tokens = int(usage.get("completion_tokens") or usage.get("output_tokens") or 0)
+        # If the stream closed cleanly but produced no content at all, the
+        # server didn't time out from our side — it returned an empty reply.
+        # Surface a real error instead of fabricating a "1 out" success, which
+        # masks model-name mismatches, thinking models that exhaust max_tokens
+        # inside <think>, and chat-template bugs in the local server.
+        if output_text_chars == 0 and not saw_reasoning:
+            yield ("error",
+                f"Local LLM returned an empty response (model: {model!r}). "
+                "Common causes: (1) the model name doesn't match what your local "
+                "server has loaded; (2) it's a reasoning model whose entire "
+                "max_tokens budget was spent inside <think> with no answer "
+                "emitted — raise max_tokens or disable thinking mode; "
+                "(3) the loaded chat template is producing empty output. "
+                "Check your local server's log for details.")
+            return
         # Many local servers omit a token-count usage block. Fall back to a
         # crude char-based estimate so the UI's "N out" counter isn't always 0.
         if not output_tokens:
@@ -3421,7 +3474,7 @@ def chat_stream(req: ChatRequest):
             # Reasoning models spend a chunk of the budget "thinking" before they
             # emit an answer; give local mode extra headroom so the reply isn't
             # truncated mid-reasoning.
-            max_tokens = max(req.max_tokens or 2048, 4096),
+            max_tokens = max(req.max_tokens or 2048, 8192),
         )
     else:
         # Cloud: free tier locked to Haiku; auto routes by complexity; vision
@@ -3451,6 +3504,10 @@ def chat_stream(req: ChatRequest):
             if kind == "token":
                 full_reply.append(payload)
                 yield f"data: {json.dumps({'type': 'token', 'text': payload})}\n\n"
+            elif kind == "thinking_start":
+                yield f"data: {json.dumps({'type': 'thinking_start'})}\n\n"
+            elif kind == "thinking_end":
+                yield f"data: {json.dumps({'type': 'thinking_end'})}\n\n"
             elif kind == "done":
                 usage = payload
             elif kind == "error":
