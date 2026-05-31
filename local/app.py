@@ -160,6 +160,16 @@ _session_cache: dict = {
     "weekly_limit": 10,
 }
 
+# Guards _session_cache mutations so concurrent auth + chat requests can't
+# leave the cache half-updated (e.g. new token paired with stale api_key).
+_session_lock = threading.Lock()
+
+
+def _session_snapshot() -> dict:
+    """Return a consistent copy of the session cache under the lock."""
+    with _session_lock:
+        return dict(_session_cache)
+
 # ---------------------------------------------------------------------------
 # Config — stores session token only (not the API key)
 # ---------------------------------------------------------------------------
@@ -259,11 +269,11 @@ app = FastAPI(title="ADK Cyber AI", version="4.0.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost",
-        "http://127.0.0.1",
-        "null",
-    ],
+    # The regex covers every http://localhost / http://127.0.0.1 origin
+    # (with or without port). "null" is kept explicitly because that's the
+    # origin some browsers send for file:// or sandboxed contexts and the
+    # regex does not match it.
+    allow_origins=["null"],
     allow_origin_regex=r"http://(localhost|127\.0\.0\.1)(:\d+)?",
     allow_credentials=True,
     allow_methods=["*"],
@@ -297,6 +307,8 @@ def init_db():
                 created_at      TEXT NOT NULL,
                 FOREIGN KEY (conversation_id) REFERENCES conversations(id)
             );
+            CREATE INDEX IF NOT EXISTS idx_messages_conv_created
+                ON messages(conversation_id, created_at);
             -- Cached Palo Alto Networks security advisories. We populate this
             -- from https://security.paloaltonetworks.com/rss.xml once per hour.
             -- dismissed_at NULL means the row should appear in the alert banner;
@@ -2649,6 +2661,7 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 _MAX_HISTORY_TURNS = 40  # cap at 20 user/assistant pairs to stay well within context limits
+_MAX_HISTORY_CHARS = 80_000  # ~20K tokens; leaves headroom for fresh prompt + reply within 200K window
 
 def load_conversation_history(conversation_id: str, limit: int = _MAX_HISTORY_TURNS) -> list:
     """
@@ -2657,6 +2670,11 @@ def load_conversation_history(conversation_id: str, limit: int = _MAX_HISTORY_TU
     The frontend always sends history=[] as a placeholder; the DB is the source of truth.
     `limit` caps how many recent messages are returned (local mode makes this
     user-configurable; cloud uses the default).
+
+    Drops the oldest messages first once the cumulative character count would
+    exceed _MAX_HISTORY_CHARS — prevents context_length_exceeded when earlier
+    turns contained large pasted configs. The most recent message is always
+    kept even if it alone exceeds the budget.
     """
     with get_db() as db:
         # rowid is SQLite's monotonically-increasing implicit primary key — used
@@ -2670,8 +2688,15 @@ def load_conversation_history(conversation_id: str, limit: int = _MAX_HISTORY_TU
             "WHERE conversation_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?",
             (conversation_id, limit),
         ).fetchall()
-    # fetchall is newest-first (DESC); reverse for chronological order
-    return [{"role": r["role"], "content": r["content"]} for r in reversed(rows)]
+    kept = []
+    used = 0
+    for r in rows:  # newest-first
+        size = len(r["content"])
+        if kept and used + size > _MAX_HISTORY_CHARS:
+            break
+        kept.append(r)
+        used += size
+    return [{"role": r["role"], "content": r["content"]} for r in reversed(kept)]
 
 def build_messages(req: ChatRequest, db_history: list = None) -> list:
     """
@@ -2777,13 +2802,13 @@ _SENSITIVE_XML_TAGS = (
 _CLI_SET_KEYWORDS = (
     "password", "secret", "pre-shared-key", "shared-secret",
     "auth-key", "authentication-key", "api-key", "passphrase",
-    "bind-password", "community",
+    "bind-password", "snmp-community-string", "community",
 )
 
 _CLI_DISPLAY_KEYWORDS = (
     "password", "secret", "shared-secret", "pre-shared-key",
     "auth-key", "authentication-key", "api-key", "passphrase",
-    "bind-password", "community", "phash",
+    "bind-password", "snmp-community-string", "community", "phash",
 )
 
 
@@ -2882,23 +2907,24 @@ def _license_post(path: str, body: dict) -> dict:
 
 def _populate_session(data: dict):
     """Write license server response into the in-memory session cache."""
-    token = data.get("token") or _session_cache["token"]
-    _session_cache["token"]        = token
-    _session_cache["email"]        = data.get("email")
-    _session_cache["tier"]         = data.get("tier", "free")
-    _session_cache["period"]       = data.get("period", "weekly")
-    _session_cache["queries_used"]      = data.get("queries_used", 0) or 0
-    _session_cache["queries_limit"]     = data.get("queries_limit", 10) or 10
-    _session_cache["queries_remaining"] = data.get("queries_remaining", 10) or 10
-    _session_cache["weekly_used"]  = data.get("weekly_used") or data.get("queries_used", 0) or 0
-    _session_cache["weekly_limit"] = data.get("weekly_limit") or data.get("queries_limit", 10) or 10
+    with _session_lock:
+        token = data.get("token") or _session_cache["token"]
+        _session_cache["token"]        = token
+        _session_cache["email"]        = data.get("email")
+        _session_cache["tier"]         = data.get("tier", "free")
+        _session_cache["period"]       = data.get("period", "weekly")
+        _session_cache["queries_used"]      = data.get("queries_used", 0) or 0
+        _session_cache["queries_limit"]     = data.get("queries_limit", 10) or 10
+        _session_cache["queries_remaining"] = data.get("queries_remaining", 10) or 10
+        _session_cache["weekly_used"]  = data.get("weekly_used") or data.get("queries_used", 0) or 0
+        _session_cache["weekly_limit"] = data.get("weekly_limit") or data.get("queries_limit", 10) or 10
 
-    # Decrypt the API key using the session token as key material
-    encrypted_key = data.get("anthropic_key")
-    if encrypted_key and token:
-        _session_cache["anthropic_key"] = _decrypt_api_key(encrypted_key, token)
-    else:
-        _session_cache["anthropic_key"] = None
+        # Decrypt the API key using the session token as key material
+        encrypted_key = data.get("anthropic_key")
+        if encrypted_key and token:
+            _session_cache["anthropic_key"] = _decrypt_api_key(encrypted_key, token)
+        else:
+            _session_cache["anthropic_key"] = None
 
 # ---------------------------------------------------------------------------
 # Auth endpoints
@@ -2942,7 +2968,8 @@ def login(req: AuthRequest):
 
 @app.post("/api/auth/logout")
 def logout():
-    _session_cache.update({"token": None, "email": None, "tier": None, "anthropic_key": None})
+    with _session_lock:
+        _session_cache.update({"token": None, "email": None, "tier": None, "anthropic_key": None})
     cfg = load_config()
     cfg.pop("session_token", None)
     cfg.pop("session_email", None)
@@ -3077,12 +3104,14 @@ def auth_status():
     if not token:
         return {"authenticated": False}
 
-    _session_cache["token"] = token
+    with _session_lock:
+        _session_cache["token"] = token
 
     try:
         data = _license_post("/auth/validate", {"token": token})
         _populate_session(data)
-        _session_cache["token"] = token
+        with _session_lock:
+            _session_cache["token"] = token
         return {
             "authenticated": True,
             "email": data["email"],
@@ -3096,7 +3125,8 @@ def auth_status():
         cfg.pop("session_token", None)
         cfg.pop("session_email", None)
         save_config(cfg)
-        _session_cache["token"] = None
+        with _session_lock:
+            _session_cache["token"] = None
         return {"authenticated": False}
 
 # ---------------------------------------------------------------------------
@@ -3161,7 +3191,15 @@ async def upload_config(file: UploadFile = File(...)):
         text = content.decode("utf-8", errors="replace")
     except Exception:
         raise HTTPException(status_code=400, detail="Could not decode file as text.")
-    return {"filename": file.filename, "size": len(content), "text": text}
+    # Strip credential values before the text is shown in the UI, so secrets
+    # never sit in the textarea where they could be captured by a screenshot.
+    sanitized, redactions = sanitize_config_text(text)
+    return {
+        "filename":   file.filename,
+        "size":       len(content),
+        "text":       sanitized,
+        "redactions": redactions,
+    }
 
 # ---------------------------------------------------------------------------
 # Chat — streaming
@@ -3342,7 +3380,10 @@ def _stream_openai_compat(
 
 @app.post("/chat/stream")
 def chat_stream(req: ChatRequest):
-    if not _session_cache.get("token"):
+    # Snapshot the cache once so token/api_key/usage observed by this request
+    # are mutually consistent — a concurrent logout can't tear them apart.
+    session = _session_snapshot()
+    if not session.get("token"):
         raise HTTPException(
             status_code=401,
             detail="Not logged in. Please sign in to use ADK Cyber AI."
@@ -3377,11 +3418,11 @@ def chat_stream(req: ChatRequest):
                     "input_tokens":       0,
                     "output_tokens":      0,
                     "conversation_id":    conv_id,
-                    "queries_used":       _session_cache.get("queries_used"),
-                    "queries_limit":      _session_cache.get("queries_limit"),
-                    "queries_remaining":  _session_cache.get("queries_remaining"),
-                    "period":             _session_cache.get("period", "weekly"),
-                    "tier":               _session_cache.get("tier"),
+                    "queries_used":       session.get("queries_used"),
+                    "queries_limit":      session.get("queries_limit"),
+                    "queries_remaining":  session.get("queries_remaining"),
+                    "period":             session.get("period", "weekly"),
+                    "tier":               session.get("tier"),
                     "redactions":         0,
                 }) + "\n\n"
             )
@@ -3393,8 +3434,8 @@ def chat_stream(req: ChatRequest):
         )
     # ── End KB short-circuit ────────────────────────────────────────────────
 
-    token      = _session_cache.get("token")
-    tier       = _session_cache.get("tier", "free")
+    token      = session.get("token")
+    tier       = session.get("tier", "free")
     settings   = load_settings()
     provider   = _effective_provider(settings, tier)
     config_len = len(req.config_text or "")
@@ -3403,7 +3444,7 @@ def chat_stream(req: ChatRequest):
     # In local mode the user is running the LLM on their own hardware, so we
     # skip the license-server quota check entirely (no per-query cost).
     if provider == "cloud":
-        api_key = _session_cache.get("anthropic_key")
+        api_key = session.get("anthropic_key")
         if not api_key:
             raise HTTPException(
                 status_code=401,
@@ -3429,12 +3470,18 @@ def chat_stream(req: ChatRequest):
                 detail = base_detail
             raise HTTPException(status_code=429, detail=detail)
 
-        # Sync usage into session cache
-        for key in ("queries_used", "queries_limit", "queries_remaining", "period"):
-            if check.get(key) is not None:
-                _session_cache[key] = check[key]
-        if check.get("weekly_used") is not None:
-            _session_cache["weekly_used"] = check["weekly_used"]
+        # Sync usage into session cache (atomic under the lock), then refresh the
+        # local snapshot so the streamed `done` event reflects the new counts.
+        with _session_lock:
+            for key in ("queries_used", "queries_limit", "queries_remaining", "period"):
+                if check.get(key) is not None:
+                    _session_cache[key] = check[key]
+            if check.get("weekly_used") is not None:
+                _session_cache["weekly_used"] = check["weekly_used"]
+            session.update({
+                k: _session_cache[k]
+                for k in ("queries_used", "queries_limit", "queries_remaining", "period", "weekly_used")
+            })
     else:
         api_key = None  # not used in local mode
 
@@ -3536,11 +3583,11 @@ def chat_stream(req: ChatRequest):
             "input_tokens":      usage.get("input_tokens", 0),
             "output_tokens":     usage.get("output_tokens", 0),
             "conversation_id":   conv_id,
-            "queries_used":      _session_cache.get("queries_used") if provider == "cloud" else None,
-            "queries_limit":     _session_cache.get("queries_limit") if provider == "cloud" else None,
-            "queries_remaining": _session_cache.get("queries_remaining") if provider == "cloud" else None,
-            "period":            _session_cache.get("period", "weekly") if provider == "cloud" else None,
-            "tier":              _session_cache.get("tier"),
+            "queries_used":      session.get("queries_used") if provider == "cloud" else None,
+            "queries_limit":     session.get("queries_limit") if provider == "cloud" else None,
+            "queries_remaining": session.get("queries_remaining") if provider == "cloud" else None,
+            "period":            session.get("period", "weekly") if provider == "cloud" else None,
+            "tier":              session.get("tier"),
             "redactions":        total_redactions,
         }) + "\n\n"
 
