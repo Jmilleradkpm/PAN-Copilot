@@ -51,8 +51,9 @@ def test_parse_sample_vpn_tunnel(asa_text: str) -> None:
 def test_set_commands_emitted(asa_text: str) -> None:
     result = run_migration(asa_text)
     assert len(result.set_commands) > 20
-    assert any("set address obj_inside" in c for c in result.set_commands)
-    assert any("set rulebase security rules outside_in_1" in c for c in result.set_commands)
+    assert any("set vsys vsys1 address obj_inside" in c for c in result.set_commands)
+    assert any("set vsys vsys1 rulebase security rules outside_in_1" in c for c in result.set_commands)
+    assert not any("device-group" in c for c in result.set_commands)
 
 
 def test_merged_xml_contains_rules(asa_text: str) -> None:

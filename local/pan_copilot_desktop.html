@@ -2072,9 +2072,7 @@ function migFormData() {
   fd.append('cisco_config', migCiscoFile);
   if (migXmlFile) fd.append('base_xml', migXmlFile);
   fd.append('vsys', document.getElementById('mig-vsys').value || 'vsys1');
-  fd.append('mode', document.getElementById('mig-mode').value || 'firewall');
-  const dg = document.getElementById('mig-dg').value.trim();
-  if (dg) fd.append('device_group', dg);
+  fd.append('mode', 'firewall');
   return fd;
 }
 
@@ -3096,7 +3094,7 @@ function copyCode(btn) {
 <div id="migration-modal-backdrop" onclick="closeMigrationModal(event)">
   <div id="migration-modal" onclick="event.stopPropagation()">
     <h3>Cisco → PAN-OS Migration</h3>
-    <p class="mig-sub">Local conversion (ASA / Firepower ASA-syntax / FTD JSON). Outputs SET commands, merged XML, and migration report. Config never leaves your machine.</p>
+    <p class="mig-sub">Local conversion to a <strong>standalone NGFW</strong> (vsys policy/objects + device-level interfaces/VPN). Outputs SET commands for firewall import, merged XML under <code>vsys1</code>, and migration report. Not Panorama device-group format. Config never leaves your machine.</p>
     <div class="mig-grid">
       <div class="mig-drop" id="mig-cisco-drop" onclick="document.getElementById('mig-cisco-input').click()">
         <div>📄 Cisco config</div>
@@ -3104,20 +3102,15 @@ function copyCode(btn) {
         <input type="file" id="mig-cisco-input" accept=".txt,.cfg,.conf,.json,.log" hidden>
       </div>
       <div class="mig-drop" id="mig-xml-drop" onclick="document.getElementById('mig-xml-input').click()">
-        <div>🌐 Base Panorama XML (optional)</div>
-        <div id="mig-xml-label" style="margin-top:6px;font-size:11px;">Merge into existing template / DG</div>
+        <div>🌐 Base firewall XML (optional)</div>
+        <div id="mig-xml-label" style="margin-top:6px;font-size:11px;">Running-config export to merge into vsys1</div>
         <input type="file" id="mig-xml-input" accept=".xml" hidden>
       </div>
     </div>
-    <div style="display:flex;gap:12px;margin-bottom:12px;font-size:12px;">
-      <label>vsys <input id="mig-vsys" value="vsys1" style="width:72px;margin-left:4px;padding:4px 6px;border-radius:4px;border:1px solid var(--border);background:var(--surface2);color:var(--text);"></label>
-      <label>mode
-        <select id="mig-mode" style="margin-left:4px;padding:4px 6px;border-radius:4px;border:1px solid var(--border);background:var(--surface2);color:var(--text);">
-          <option value="firewall">firewall</option>
-          <option value="panorama">panorama</option>
-        </select>
-      </label>
-      <label>DG <input id="mig-dg" placeholder="optional" style="width:100px;margin-left:4px;padding:4px 6px;border-radius:4px;border:1px solid var(--border);background:var(--surface2);color:var(--text);"></label>
+    <div style="display:flex;gap:12px;margin-bottom:12px;font-size:12px;align-items:center;">
+      <label>Target vsys <input id="mig-vsys" value="vsys1" style="width:72px;margin-left:4px;padding:4px 6px;border-radius:4px;border:1px solid var(--border);background:var(--surface2);color:var(--text);"></label>
+      <span style="font-size:11px;color:var(--text-dim);">Output is NGFW import format — load SET on the firewall or merge XML into vsys, not Panorama DG.</span>
+      <input type="hidden" id="mig-mode" value="firewall">
     </div>
     <div class="mig-status" id="mig-status">Upload Cisco config to begin.</div>
     <div class="mig-actions">

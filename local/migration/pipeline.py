@@ -61,12 +61,28 @@ def run_migration(
 
     validate_ir(ir, report)
 
-    set_commands = emit_set_commands(ir)
+    # Default output: standalone NGFW (vsys-scoped policy/objects), not Panorama DG
+    output_mode = opts.mode if opts.mode == "panorama" else "firewall"
+    if output_mode == "firewall":
+        report.add(
+            Severity.AUTO,
+            "output",
+            f"SET and XML target standalone firewall vsys '{ir.vsys}' (not Panorama device-group).",
+        )
+    else:
+        report.add(
+            Severity.APPROXIMATION,
+            "output",
+            "Panorama device-group XML merge requested; verify import path on your Panorama.",
+        )
+
+    set_commands = emit_set_commands(ir, target=output_mode)
     merged_xml = merge_into_base_xml(
         base_xml,
         ir,
-        mode=opts.mode,
+        mode=output_mode,
         device_group=opts.device_group,
+        report=report,
     )
 
     report.add(

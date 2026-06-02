@@ -1,4 +1,4 @@
-"""Merge MigrationIR into base PAN-OS XML."""
+"""Merge MigrationIR into base PAN-OS XML (standalone firewall / vsys target)."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import xml.etree.ElementTree as ET
 from xml.dom import minidom
 
 from migration.models.ir import MigrationIR
+from migration.report import MigrationReport, Severity
 
 
 def merge_into_base_xml(
@@ -14,25 +15,58 @@ def merge_into_base_xml(
     *,
     mode: str = "firewall",
     device_group: str | None = None,
+    report: MigrationReport | None = None,
 ) -> str:
+    """
+    Merge migrated objects into vsys scope on a standalone NGFW export.
+
+    When mode is ``firewall`` (default), never writes into Panorama device-group
+    nodes even if the base XML came from Panorama.
+    """
+    if mode != "firewall" and report:
+        report.add(
+            Severity.APPROXIMATION,
+            "output",
+            f"XML merge mode '{mode}' is non-default; firewall (vsys) output is recommended for NGFW import.",
+        )
+
+    effective_mode = "firewall" if mode != "panorama" else mode
+
     if base_xml and base_xml.strip():
         root = ET.fromstring(base_xml)
+        if report and effective_mode == "firewall" and _xml_has_device_group(root):
+            report.add(
+                Severity.APPROXIMATION,
+                "output",
+                "Base XML contains Panorama device-group config; merged into vsys on firewall export shape, not device-group.",
+                pan_hint="Use a firewall running-config XML export (vsys1) as base, or import SET on the NGFW directly.",
+            )
     else:
-        root = ET.Element("config", {"version": "10.2.0", "urldb": "paloaltonetworks"})
-        devices = ET.SubElement(root, "devices")
-        entry = ET.SubElement(devices, "entry", {"name": "localhost.localdomain"})
-        device_config = ET.SubElement(entry, "deviceconfig")
-        ET.SubElement(device_config, "system")
-        vsys = ET.SubElement(entry, "vsys")
-        ET.SubElement(vsys, "entry", {"name": ir.vsys})
+        root = _empty_firewall_config_root(ir.vsys)
 
-    target = _find_target(root, mode=mode, device_group=device_group, vsys=ir.vsys)
+    target = _find_target(root, mode=effective_mode, device_group=device_group, vsys=ir.vsys)
     if target is None:
         target = _create_vsys_target(root, ir.vsys)
 
     _merge_addresses(target, ir)
     _merge_security_rules(target, ir)
     return _prettify(root)
+
+
+def _empty_firewall_config_root(vsys: str) -> ET.Element:
+    """Minimal PAN-OS config tree for a standalone firewall (not Panorama DG)."""
+    root = ET.Element("config", {"version": "10.2.0", "urldb": "paloaltonetworks"})
+    devices = ET.SubElement(root, "devices")
+    entry = ET.SubElement(devices, "entry", {"name": "localhost.localdomain"})
+    device_config = ET.SubElement(entry, "deviceconfig")
+    ET.SubElement(device_config, "system")
+    vsys_container = ET.SubElement(entry, "vsys")
+    ET.SubElement(vsys_container, "entry", {"name": vsys})
+    return root
+
+
+def _xml_has_device_group(root: ET.Element) -> bool:
+    return root.find(".//device-group") is not None
 
 
 def _find_target(root: ET.Element, *, mode: str, device_group: str | None, vsys: str) -> ET.Element | None:
@@ -50,8 +84,10 @@ def _find_target(root: ET.Element, *, mode: str, device_group: str | None, vsys:
         if dg is not None:
             return dg
 
-    vsys_entry = localhost.find(f'.//vsys/entry[@name="{vsys}"]')
-    return vsys_entry
+    vsys_entry = localhost.find(f'./vsys/entry[@name="{vsys}"]')
+    if vsys_entry is not None:
+        return vsys_entry
+    return localhost.find(f'.//vsys/entry[@name="{vsys}"]')
 
 
 def _create_vsys_target(root: ET.Element, vsys: str) -> ET.Element:
