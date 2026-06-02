@@ -721,6 +721,42 @@
     }
     #upgrade-modal-close:hover { color: var(--text-sub); }
 
+    /* Migration modal */
+    #migration-modal-backdrop {
+      display: none; position: fixed; inset: 0; z-index: 1000;
+      background: rgba(0,0,0,0.75); align-items: center; justify-content: center;
+      padding: 16px;
+    }
+    #migration-modal-backdrop.open { display: flex; }
+    #migration-modal {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 12px; padding: 24px; width: 720px; max-width: 96vw; max-height: 90vh;
+      overflow-y: auto;
+    }
+    #migration-modal h3 { font-size: 16px; margin-bottom: 4px; color: var(--text); }
+    #migration-modal .mig-sub { font-size: 12px; color: var(--text-sub); margin-bottom: 16px; }
+    .mig-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px; }
+    @media (max-width: 600px) { .mig-grid { grid-template-columns: 1fr; } }
+    .mig-drop {
+      border: 1px dashed var(--border); border-radius: 8px; padding: 20px 12px;
+      text-align: center; font-size: 12px; color: var(--text-sub); cursor: pointer;
+    }
+    .mig-drop:hover { border-color: var(--accent); color: var(--text); }
+    .mig-status {
+      background: var(--surface2); border-radius: 8px; padding: 12px;
+      font-family: var(--mono, monospace); font-size: 11px; color: var(--accent);
+      min-height: 80px; max-height: 200px; overflow-y: auto; margin-bottom: 12px;
+    }
+    .mig-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    .mig-actions button {
+      padding: 10px 16px; border-radius: 8px; border: 1px solid var(--border);
+      background: var(--surface2); color: var(--text); font-size: 12px; cursor: pointer;
+    }
+    .mig-actions button.primary {
+      background: var(--accent); color: #000; border-color: var(--accent); font-weight: 600;
+    }
+    .mig-actions button:disabled { opacity: 0.5; cursor: not-allowed; }
+
     /* Data disclosure modal (one-time) */
     #data-disclosure-backdrop {
       display: none; position: fixed; inset: 0; z-index: 2000;
@@ -1091,6 +1127,9 @@
       <button class="nav-item" onclick="selectProduct('vm-series')"    data-id="vm-series">    <span class="nav-icon">☁️</span> VM-Series</button>
       <button class="nav-item" onclick="selectProduct('cn-series')"    data-id="cn-series">    <span class="nav-icon">🐳</span> CN-Series</button>
       <button class="nav-item" onclick="selectProduct('panorama')"     data-id="panorama">     <span class="nav-icon">🗂️</span> Panorama</button>
+      <button class="nav-item" onclick="openMigrationModal()" title="Cisco ASA / Firepower → PAN-OS">
+        <span class="nav-icon">🔄</span> Config Migration
+      </button>
     </div>
 
     <div class="nav-divider"></div>
@@ -1987,6 +2026,102 @@ function openUpgradeModal() {
 function closeUpgradeModal(e) {
   if (!e || e.target === document.getElementById('upgrade-modal-backdrop') || e.target.id === 'upgrade-modal-close') {
     document.getElementById('upgrade-modal-backdrop').classList.remove('open');
+  }
+}
+
+// ── Cisco → PAN-OS migration (local /api/migrate) ─────────────────
+let migCiscoFile = null;
+let migXmlFile = null;
+
+function openMigrationModal() {
+  document.getElementById('migration-modal-backdrop').classList.add('open');
+}
+
+function closeMigrationModal(e) {
+  if (!e || e.target === document.getElementById('migration-modal-backdrop')) {
+    document.getElementById('migration-modal-backdrop').classList.remove('open');
+  }
+}
+
+function migUpdateReady() {
+  const ready = !!migCiscoFile;
+  document.getElementById('mig-run-btn').disabled = !ready;
+  document.getElementById('mig-zip-btn').disabled = !ready;
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  const cIn = document.getElementById('mig-cisco-input');
+  const xIn = document.getElementById('mig-xml-input');
+  if (cIn) {
+    cIn.addEventListener('change', () => {
+      migCiscoFile = cIn.files[0] || null;
+      document.getElementById('mig-cisco-label').textContent = migCiscoFile ? migCiscoFile.name : 'Drop or click';
+      migUpdateReady();
+    });
+  }
+  if (xIn) {
+    xIn.addEventListener('change', () => {
+      migXmlFile = xIn.files[0] || null;
+      document.getElementById('mig-xml-label').textContent = migXmlFile ? migXmlFile.name : 'Optional base XML';
+    });
+  }
+});
+
+function migFormData() {
+  const fd = new FormData();
+  fd.append('cisco_config', migCiscoFile);
+  if (migXmlFile) fd.append('base_xml', migXmlFile);
+  fd.append('vsys', document.getElementById('mig-vsys').value || 'vsys1');
+  fd.append('mode', document.getElementById('mig-mode').value || 'firewall');
+  const dg = document.getElementById('mig-dg').value.trim();
+  if (dg) fd.append('device_group', dg);
+  return fd;
+}
+
+async function runMigrationPreview() {
+  if (!migCiscoFile) return;
+  const st = document.getElementById('mig-status');
+  st.textContent = 'Running local migration preview…';
+  try {
+    const res = await fetch('/api/migrate/preview', { method: 'POST', body: migFormData() });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      st.textContent = 'Error: ' + (err.detail || res.statusText);
+      return;
+    }
+    const data = await res.json();
+    const s = data.summary || {};
+    st.textContent =
+      `Format: ${data.source_format}\n` +
+      `SET commands: ${data.counts.set_commands}\n` +
+      `Addresses: ${data.counts.addresses} | Rules: ${data.counts.security_rules} | NAT: ${data.counts.nat_rules} | VPN: ${data.counts.vpn_tunnels}\n` +
+      `Report: auto=${s.auto||0} approximation=${s.approximation||0} manual=${s.manual_required||0} blocker=${s.blocker||0} unmapped=${s.unmapped_lines||0}`;
+  } catch (e) {
+    st.textContent = 'Preview failed: ' + e.message;
+  }
+}
+
+async function downloadMigrationZip() {
+  if (!migCiscoFile) return;
+  const st = document.getElementById('mig-status');
+  st.textContent = 'Building ZIP bundle…';
+  try {
+    const res = await fetch('/api/migrate', { method: 'POST', body: migFormData() });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      st.textContent = 'Error: ' + (err.detail || res.statusText);
+      return;
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'pan_migration_bundle.zip';
+    a.click();
+    URL.revokeObjectURL(url);
+    st.textContent = 'Download started — review migration_report.json before commit.';
+  } catch (e) {
+    st.textContent = 'Download failed: ' + e.message;
   }
 }
 
@@ -2958,6 +3093,41 @@ function copyCode(btn) {
 </div>
 
 <!-- Upgrade modal -->
+<div id="migration-modal-backdrop" onclick="closeMigrationModal(event)">
+  <div id="migration-modal" onclick="event.stopPropagation()">
+    <h3>Cisco → PAN-OS Migration</h3>
+    <p class="mig-sub">Local conversion (ASA / Firepower ASA-syntax / FTD JSON). Outputs SET commands, merged XML, and migration report. Config never leaves your machine.</p>
+    <div class="mig-grid">
+      <div class="mig-drop" id="mig-cisco-drop" onclick="document.getElementById('mig-cisco-input').click()">
+        <div>📄 Cisco config</div>
+        <div id="mig-cisco-label" style="margin-top:6px;font-size:11px;">Drop or click — .txt .cfg .conf .json</div>
+        <input type="file" id="mig-cisco-input" accept=".txt,.cfg,.conf,.json,.log" hidden>
+      </div>
+      <div class="mig-drop" id="mig-xml-drop" onclick="document.getElementById('mig-xml-input').click()">
+        <div>🌐 Base Panorama XML (optional)</div>
+        <div id="mig-xml-label" style="margin-top:6px;font-size:11px;">Merge into existing template / DG</div>
+        <input type="file" id="mig-xml-input" accept=".xml" hidden>
+      </div>
+    </div>
+    <div style="display:flex;gap:12px;margin-bottom:12px;font-size:12px;">
+      <label>vsys <input id="mig-vsys" value="vsys1" style="width:72px;margin-left:4px;padding:4px 6px;border-radius:4px;border:1px solid var(--border);background:var(--surface2);color:var(--text);"></label>
+      <label>mode
+        <select id="mig-mode" style="margin-left:4px;padding:4px 6px;border-radius:4px;border:1px solid var(--border);background:var(--surface2);color:var(--text);">
+          <option value="firewall">firewall</option>
+          <option value="panorama">panorama</option>
+        </select>
+      </label>
+      <label>DG <input id="mig-dg" placeholder="optional" style="width:100px;margin-left:4px;padding:4px 6px;border-radius:4px;border:1px solid var(--border);background:var(--surface2);color:var(--text);"></label>
+    </div>
+    <div class="mig-status" id="mig-status">Upload Cisco config to begin.</div>
+    <div class="mig-actions">
+      <button type="button" class="primary" id="mig-run-btn" onclick="runMigrationPreview()" disabled>Preview report</button>
+      <button type="button" id="mig-zip-btn" onclick="downloadMigrationZip()" disabled>Download ZIP bundle</button>
+      <button type="button" onclick="closeMigrationModal()">Close</button>
+    </div>
+  </div>
+</div>
+
 <div id="upgrade-modal-backdrop" onclick="closeUpgradeModal(event)">
   <div id="upgrade-modal">
     <h3>Upgrade ADK Cyber AI</h3>

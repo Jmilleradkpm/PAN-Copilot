@@ -44,9 +44,12 @@ if APP_VERSION == "0.0.0":
 
 import anthropic
 import httpx
-from fastapi import FastAPI, HTTPException, UploadFile, File, Request
+import io
+import zipfile
+
+from fastapi import FastAPI, HTTPException, UploadFile, File, Request, Form
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, HTMLResponse
+from fastapi.responses import StreamingResponse, HTMLResponse, Response
 from pydantic import BaseModel, field_validator
 
 logger = logging.getLogger("pan_copilot")
@@ -3162,6 +3165,110 @@ async def upload_config(file: UploadFile = File(...)):
     except Exception:
         raise HTTPException(status_code=400, detail="Could not decode file as text.")
     return {"filename": file.filename, "size": len(content), "text": text}
+
+# ---------------------------------------------------------------------------
+# Cisco → PAN-OS migration (local only — no cloud API)
+# ---------------------------------------------------------------------------
+
+MIGRATE_MAX_BYTES = 5_000_000
+
+
+@app.post("/api/migrate")
+async def api_migrate(
+    cisco_config: UploadFile = File(...),
+    base_xml: UploadFile | None = File(None),
+    vsys: str = Form("vsys1"),
+    mode: str = Form("firewall"),
+    device_group: str = Form(""),
+):
+    """Convert Cisco ASA / Firepower config to PAN-OS SET + merged XML. Runs locally."""
+    from migration.pipeline import MigrationOptions, build_zip_bundle, run_migration
+
+    allowed = {".txt", ".xml", ".log", ".cfg", ".conf", ".json"}
+    ext = Path(cisco_config.filename or "").suffix.lower()
+    if ext not in allowed:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported Cisco config type '{ext}'. Allowed: {', '.join(sorted(allowed))}",
+        )
+
+    raw = await cisco_config.read(MIGRATE_MAX_BYTES + 1)
+    if len(raw) > MIGRATE_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="Cisco config too large. Max 5 MB.")
+
+    try:
+        cisco_text = raw.decode("utf-8", errors="replace")
+    except Exception:
+        raise HTTPException(status_code=400, detail="Could not decode Cisco config as UTF-8 text.")
+
+    base_text: str | None = None
+    if base_xml and base_xml.filename:
+        bx = await base_xml.read(MIGRATE_MAX_BYTES + 1)
+        if len(bx) > MIGRATE_MAX_BYTES:
+            raise HTTPException(status_code=413, detail="Base XML too large. Max 5 MB.")
+        try:
+            base_text = bx.decode("utf-8", errors="replace")
+        except Exception:
+            raise HTTPException(status_code=400, detail="Could not decode base XML.")
+
+    opts = MigrationOptions(
+        vsys=vsys or "vsys1",
+        mode=mode if mode in ("firewall", "panorama") else "firewall",
+        device_group=device_group or None,
+    )
+    result = run_migration(cisco_text, base_text, options=opts)
+    bundle = build_zip_bundle(result)
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for name, content in bundle.items():
+            zf.writestr(name, content)
+    buf.seek(0)
+
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/zip",
+        headers={"Content-Disposition": 'attachment; filename="pan_migration_bundle.zip"'},
+    )
+
+
+@app.post("/api/migrate/preview")
+async def api_migrate_preview(
+    cisco_config: UploadFile = File(...),
+    base_xml: UploadFile | None = File(None),
+    vsys: str = Form("vsys1"),
+    mode: str = Form("firewall"),
+    device_group: str = Form(""),
+):
+    """JSON preview of migration stats and report (no ZIP). Local only."""
+    from migration.pipeline import MigrationOptions, run_migration
+
+    raw = await cisco_config.read(MIGRATE_MAX_BYTES + 1)
+    if len(raw) > MIGRATE_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="Cisco config too large. Max 5 MB.")
+    cisco_text = raw.decode("utf-8", errors="replace")
+    base_text = None
+    if base_xml and base_xml.filename:
+        base_text = (await base_xml.read(MIGRATE_MAX_BYTES + 1)).decode("utf-8", errors="replace")
+
+    opts = MigrationOptions(
+        vsys=vsys or "vsys1",
+        mode=mode if mode in ("firewall", "panorama") else "firewall",
+        device_group=device_group or None,
+    )
+    result = run_migration(cisco_text, base_text, options=opts)
+    return {
+        "source_format": result.report.source_format,
+        "summary": result.report.summary(),
+        "report": result.report.to_dict(),
+        "counts": {
+            "set_commands": len(result.set_commands),
+            "addresses": len(result.ir.addresses),
+            "security_rules": len(result.ir.security_rules),
+            "nat_rules": len(result.ir.nat_rules),
+            "vpn_tunnels": len(result.ir.vpn_tunnels),
+        },
+    }
 
 # ---------------------------------------------------------------------------
 # Chat — streaming
