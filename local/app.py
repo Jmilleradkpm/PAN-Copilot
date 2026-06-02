@@ -3727,7 +3727,9 @@ def install_update():
 
             # Launch installer first, then shut down this process so the installer
             # can overwrite all bundled files without hitting locked-file errors.
-            subprocess.Popen([str(tmp), "/SILENT", "/FORCECLOSEAPPLICATIONS", "/RESTARTAPPLICATIONS"])
+            # Silent install relaunches PAN Copilot.exe in installer.iss CurStepChanged
+            # (skipifsilent blocks [Run]; /RESTARTAPPLICATIONS is unreliable after taskkill).
+            subprocess.Popen([str(tmp), "/SILENT", "/FORCECLOSEAPPLICATIONS"])
 
             # Give the installer process a moment to start up.
             time.sleep(1.5)

@@ -69,7 +69,7 @@ Name: "{group}\Uninstall ADK Cyber AI"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\ADK Cyber AI"; Filename: "{app}\PAN Copilot.exe"; Comment: "AI Assistant for Palo Alto Networks Engineers"; Tasks: desktopicon
 
 [Run]
-; Offer to launch after install
+; Interactive installs only — silent updates relaunch via CurStepChanged below
 Filename: "{app}\PAN Copilot.exe"; Description: "Launch ADK Cyber AI"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
@@ -133,5 +133,23 @@ begin
   Sleep(2000);
 
   Result := True;
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+var
+  ResultCode: Integer;
+  ExePath: String;
+begin
+  { In-app updates run the installer with /SILENT, which skips [Run] (skipifsilent).
+    Relaunch PAN Copilot here so the user gets the new build without manual start. }
+  if CurStep = ssPostInstall then
+  begin
+    if WizardSilent then
+    begin
+      ExePath := ExpandConstant('{app}\PAN Copilot.exe');
+      if FileExists(ExePath) then
+        Exec(ExePath, '', ExpandConstant('{app}'), SW_SHOW, ewNoWait, ResultCode);
+    end;
+  end;
 end;
 
