@@ -208,7 +208,27 @@ _DEFAULT_SETTINGS = {
     "local_model":    "qwen2.5:14b",                  # placeholder; user picks
     "local_api_key":  "",                             # most local servers need none
     "local_history_turns": 40,                        # messages of history sent to a local model (≈20 exchanges)
+    "local_context_tokens": 32768,                    # assumed context window for budget warnings
+    "local_truncate_config": True,                    # auto-truncate huge config pastes in local mode
+    "local_max_tokens": 8192,                         # max completion tokens sent to local server
+    "local_temperature": 0.2,                         # generation temperature (OpenAI-compatible)
+    "local_supports_vision": False,                   # enable only if the loaded model supports images
 }
+
+
+def _normalize_settings(data: dict) -> dict:
+    """Clamp local LLM settings to sane ranges."""
+    cleaned = {k: data.get(k, v) for k, v in _DEFAULT_SETTINGS.items()}
+    if cleaned["chat_provider"] not in _VALID_PROVIDERS:
+        cleaned["chat_provider"] = "cloud"
+    cleaned["local_history_turns"] = max(2, min(int(cleaned.get("local_history_turns") or 40), 400))
+    cleaned["local_context_tokens"] = max(4096, min(int(cleaned.get("local_context_tokens") or 32768), 200000))
+    cleaned["local_max_tokens"] = max(256, min(int(cleaned.get("local_max_tokens") or 8192), 131072))
+    temp = float(cleaned.get("local_temperature") if cleaned.get("local_temperature") is not None else 0.2)
+    cleaned["local_temperature"] = round(max(0.0, min(temp, 2.0)), 2)
+    cleaned["local_truncate_config"] = bool(cleaned.get("local_truncate_config", True))
+    cleaned["local_supports_vision"] = bool(cleaned.get("local_supports_vision", False))
+    return cleaned
 
 
 def load_settings() -> dict:
@@ -225,14 +245,12 @@ def load_settings() -> dict:
             pass
     if out.get("chat_provider") not in _VALID_PROVIDERS:
         out["chat_provider"] = "cloud"
-    return out
+    return _normalize_settings(out)
 
 
 def save_settings(data: dict):
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    cleaned = {k: data.get(k, v) for k, v in _DEFAULT_SETTINGS.items()}
-    if cleaned["chat_provider"] not in _VALID_PROVIDERS:
-        cleaned["chat_provider"] = "cloud"
+    cleaned = _normalize_settings(data)
     SETTINGS_FILE.write_text(json.dumps(cleaned, indent=2), encoding="utf-8")
     try:
         import stat
@@ -242,17 +260,132 @@ def save_settings(data: dict):
 
 
 class SettingsPayload(BaseModel):
-    chat_provider:       Optional[str] = None
-    local_base_url:      Optional[str] = None
-    local_model:         Optional[str] = None
-    local_api_key:       Optional[str] = None
-    local_history_turns: Optional[int] = None
+    chat_provider:         Optional[str] = None
+    local_base_url:        Optional[str] = None
+    local_model:           Optional[str] = None
+    local_api_key:         Optional[str] = None
+    local_history_turns:   Optional[int] = None
+    local_context_tokens:  Optional[int] = None
+    local_truncate_config: Optional[bool] = None
+    local_max_tokens:      Optional[int] = None
+    local_temperature:     Optional[float] = None
+    local_supports_vision: Optional[bool] = None
 
 
 class LocalLLMTestRequest(BaseModel):
     base_url: str
     model:    str
     api_key:  Optional[str] = None
+
+
+class LocalContextEstimateRequest(BaseModel):
+    config_text: Optional[str] = ""
+    message: Optional[str] = ""
+    conversation_id: Optional[str] = None
+
+
+_LOCAL_CONFIG_TRUNCATION_NOTE = (
+    "\n\n[... config truncated for local context budget — paste a smaller section "
+    "for full analysis ...]\n\n"
+)
+
+
+def _estimate_tokens(text: str) -> int:
+    return max(0, len(text or "") // 4)
+
+
+def _history_char_count(conversation_id: Optional[str], limit: int) -> int:
+    if not conversation_id:
+        return 0
+    hist = load_conversation_history(conversation_id, limit=limit)
+    return sum(len(str(t.get("content") or "")) for t in hist)
+
+
+def estimate_local_context_usage(
+    *,
+    config_text: str = "",
+    message: str = "",
+    conversation_id: Optional[str] = None,
+    settings: Optional[dict] = None,
+) -> dict:
+    """Rough token budget for local mode (chars/4 heuristic)."""
+    st = settings or load_settings()
+    context_limit = int(st.get("local_context_tokens") or 32768)
+    hist_limit = int(st.get("local_history_turns") or _MAX_HISTORY_TURNS)
+    system_tokens = _estimate_tokens(SYSTEM_PROMPT_LOCAL)
+    message_tokens = _estimate_tokens(message)
+    config_tokens = _estimate_tokens(config_text)
+    history_tokens = _estimate_tokens(
+        "x" * _history_char_count(conversation_id, hist_limit)
+    )
+    reserve_output = int(st.get("local_max_tokens") or 8192)
+    overhead = 200
+    estimated_input = system_tokens + message_tokens + config_tokens + history_tokens + overhead
+    total_estimated = estimated_input + reserve_output
+    warn_threshold = int(context_limit * 0.7)
+    return {
+        "context_limit": context_limit,
+        "estimated_input_tokens": estimated_input,
+        "estimated_total_tokens": total_estimated,
+        "reserve_output_tokens": reserve_output,
+        "breakdown": {
+            "system": system_tokens,
+            "message": message_tokens,
+            "config": config_tokens,
+            "history": history_tokens,
+            "overhead": overhead,
+        },
+        "warn": total_estimated >= warn_threshold,
+        "over_budget": total_estimated > context_limit,
+    }
+
+
+def _truncate_config_for_local(
+    config_text: str,
+    *,
+    settings: dict,
+    message: str,
+    conversation_id: Optional[str],
+) -> tuple[str, bool]:
+    if not config_text or not config_text.strip():
+        return config_text, False
+    if not settings.get("local_truncate_config", True):
+        return config_text, False
+
+    budget = estimate_local_context_usage(
+        config_text=config_text,
+        message=message,
+        conversation_id=conversation_id,
+        settings=settings,
+    )
+    if not budget["over_budget"]:
+        return config_text, False
+
+    context_limit = budget["context_limit"]
+    reserve = budget["reserve_output_tokens"]
+    hist_limit = int(settings.get("local_history_turns") or _MAX_HISTORY_TURNS)
+    fixed = (
+        budget["breakdown"]["system"]
+        + budget["breakdown"]["message"]
+        + budget["breakdown"]["history"]
+        + budget["breakdown"]["overhead"]
+        + reserve
+    )
+    config_budget_tokens = max(0, context_limit - fixed)
+    max_chars = config_budget_tokens * 4
+    if len(config_text) <= max_chars:
+        return config_text, False
+    if max_chars < 500:
+        head = max_chars // 2
+        tail = max_chars - head
+        truncated = (
+            config_text[:head]
+            + _LOCAL_CONFIG_TRUNCATION_NOTE
+            + config_text[-tail:]
+        )
+    else:
+        truncated = config_text[:max_chars] + _LOCAL_CONFIG_TRUNCATION_NOTE
+    return truncated, True
 
 # ---------------------------------------------------------------------------
 # FastAPI app
@@ -3016,8 +3149,18 @@ def update_settings(req: SettingsPayload):
     if req.local_api_key is not None:
         updated["local_api_key"] = req.local_api_key.strip()
     if req.local_history_turns is not None:
-        # Clamp to a sane range; the model's loaded context length is the real ceiling.
-        updated["local_history_turns"] = max(2, min(int(req.local_history_turns), 400))
+        updated["local_history_turns"] = req.local_history_turns
+    if req.local_context_tokens is not None:
+        updated["local_context_tokens"] = req.local_context_tokens
+    if req.local_truncate_config is not None:
+        updated["local_truncate_config"] = req.local_truncate_config
+    if req.local_max_tokens is not None:
+        updated["local_max_tokens"] = req.local_max_tokens
+    if req.local_temperature is not None:
+        updated["local_temperature"] = req.local_temperature
+    if req.local_supports_vision is not None:
+        updated["local_supports_vision"] = req.local_supports_vision
+    updated = _normalize_settings(updated)
     save_settings(updated)
     return {
         "ok": True,
@@ -3068,6 +3211,67 @@ def test_local_llm(req: LocalLLMTestRequest):
             detail=f"Server returned HTTP {r.status_code}: {r.text[:300]}",
         )
     return {"ok": True, "latency_ms": latency_ms, "model": req.model}
+
+
+@app.get("/api/local_llm/models")
+def list_local_llm_models(
+    base_url: str,
+    api_key: Optional[str] = None,
+):
+    """Proxy OpenAI GET /v1/models for the settings model picker."""
+    base = (base_url or "").rstrip("/")
+    if not base:
+        raise HTTPException(status_code=400, detail="base_url is required.")
+    url = f"{base}/models"
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    try:
+        r = httpx.get(url, headers=headers, timeout=15.0)
+    except httpx.ConnectError:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Cannot reach {url}. Is your local LLM server running?",
+        )
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=504, detail="Listing models timed out after 15s.")
+    if r.status_code >= 400:
+        raise HTTPException(
+            status_code=r.status_code,
+            detail=f"Server returned HTTP {r.status_code}: {r.text[:300]}",
+        )
+    try:
+        payload = r.json()
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=502, detail="Model list response was not valid JSON.")
+    models: list[str] = []
+    for item in payload.get("data") or []:
+        if isinstance(item, dict):
+            mid = item.get("id") or item.get("name")
+            if mid:
+                models.append(str(mid))
+        elif isinstance(item, str):
+            models.append(item)
+    models = sorted(set(models))
+    return {"models": models, "count": len(models)}
+
+
+@app.post("/api/local_llm/context_estimate")
+def local_context_estimate(req: LocalContextEstimateRequest):
+    """Estimate local context usage for UI warnings (no LLM call)."""
+    settings = load_settings()
+    tier = _session_cache.get("tier")
+    provider = _effective_provider(settings, tier)
+    est = estimate_local_context_usage(
+        config_text=req.config_text or "",
+        message=req.message or "",
+        conversation_id=req.conversation_id,
+        settings=settings,
+    )
+    est["effective_provider"] = provider
+    est["truncate_config_enabled"] = bool(settings.get("local_truncate_config", True))
+    return est
+
 
 @app.get("/api/auth/status")
 def auth_status():
@@ -3357,6 +3561,7 @@ def _stream_openai_compat(
     messages: list,
     api_key:  Optional[str],
     max_tokens: int,
+    temperature: Optional[float] = None,
 ):
     """Sync generator: yields (kind, payload) for an OpenAI-compatible server.
 
@@ -3374,6 +3579,8 @@ def _stream_openai_compat(
         "max_tokens": max_tokens,
         "stream": True,
     }
+    if temperature is not None:
+        body["temperature"] = temperature
     headers = {"Content-Type": "application/json"}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
@@ -3558,6 +3765,15 @@ def chat_stream(req: ChatRequest):
     else:
         api_key = None  # not used in local mode
 
+    if provider == "local" and req.images and not settings.get("local_supports_vision"):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Screenshot upload is disabled for local LLM mode. Enable "
+                "'Model supports vision' in Settings → My local LLM, or switch to Cloud."
+            ),
+        )
+
     # Strip credential values from config + message before transmitting (applies
     # to both providers — even your own local LLM shouldn't see PAN admin
     # passwords or pre-shared keys in plaintext if redaction is in flight).
@@ -3568,6 +3784,16 @@ def chat_stream(req: ChatRequest):
     )
     msg_sanitized, msg_redactions = sanitize_config_text(req.message)
     total_redactions = cfg_redactions + msg_redactions
+
+    config_truncated = False
+    if provider == "local" and cfg_sanitized and cfg_sanitized.strip():
+        cfg_sanitized, config_truncated = _truncate_config_for_local(
+            cfg_sanitized,
+            settings=settings,
+            message=msg_sanitized,
+            conversation_id=req.conversation_id,
+        )
+
     sanitized_req = req.copy(update={
         "config_text": cfg_sanitized,
         "message":     msg_sanitized,
@@ -3585,16 +3811,16 @@ def chat_stream(req: ChatRequest):
     if provider == "local":
         resolved_model = (settings.get("local_model") or "qwen2.5:14b").strip()
         system_prompt  = SYSTEM_PROMPT_LOCAL
+        local_max = int(settings.get("local_max_tokens") or 8192)
+        local_temp = float(settings.get("local_temperature") if settings.get("local_temperature") is not None else 0.2)
         provider_iter  = _stream_openai_compat(
             base_url   = settings.get("local_base_url") or "",
             model      = resolved_model,
             system     = system_prompt,
             messages   = messages,
             api_key    = (settings.get("local_api_key") or None),
-            # Reasoning models spend a chunk of the budget "thinking" before they
-            # emit an answer; give local mode extra headroom so the reply isn't
-            # truncated mid-reasoning.
-            max_tokens = max(req.max_tokens or 2048, 8192),
+            max_tokens = local_max,
+            temperature = local_temp,
         )
     else:
         # Cloud: free tier locked to Haiku; auto routes by complexity; vision
@@ -3662,6 +3888,7 @@ def chat_stream(req: ChatRequest):
             "period":            _session_cache.get("period", "weekly") if provider == "cloud" else None,
             "tier":              _session_cache.get("tier"),
             "redactions":        total_redactions,
+            "config_truncated":  config_truncated if provider == "local" else False,
         }) + "\n\n"
 
     return StreamingResponse(

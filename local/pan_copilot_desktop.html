@@ -950,6 +950,29 @@
       font-size: 11.5px; padding: 6px 8px; text-transform: none; letter-spacing: 0;
     }
     .provider-field input:focus { outline: none; border-color: var(--accent); }
+    .provider-field select {
+      background: var(--code-bg); border: 1px solid var(--border);
+      border-radius: 5px; color: var(--text); font-family: 'Consolas','Cascadia Code',monospace;
+      font-size: 11.5px; padding: 6px 8px; text-transform: none; letter-spacing: 0;
+    }
+    .provider-field-row { display: flex; gap: 6px; align-items: stretch; }
+    .provider-field-row input, .provider-field-row select { flex: 1; min-width: 0; }
+    .provider-mini-btn {
+      background: var(--code-bg); border: 1px solid var(--border);
+      border-radius: 5px; color: var(--text); cursor: pointer;
+      font-size: 10.5px; padding: 6px 8px; white-space: nowrap;
+    }
+    .provider-mini-btn:hover { border-color: var(--accent); }
+    .provider-check { display: flex; align-items: center; gap: 6px; font-size: 11px;
+      color: var(--text-sub); text-transform: none; letter-spacing: 0; cursor: pointer; }
+    .provider-check input { margin: 0; }
+    #local-context-warn {
+      display: none; margin-top: 6px; font-size: 11px; line-height: 1.45;
+      color: #c9a227; background: rgba(201,162,39,0.08);
+      border: 1px solid rgba(201,162,39,0.25); border-radius: 5px; padding: 6px 8px;
+    }
+    #local-context-warn.show { display: block; }
+    #local-context-warn.over { color: #f85149; border-color: rgba(248,81,73,0.35); background: rgba(248,81,73,0.08); }
     #local-test-btn, #provider-save-btn {
       background: var(--code-bg); border: 1px solid var(--border);
       border-radius: 5px; color: var(--text); cursor: pointer;
@@ -1412,17 +1435,43 @@
           </label>
           <label class="provider-field">
             <span>Model</span>
-            <input id="local-model" type="text" placeholder="qwen2.5:14b" spellcheck="false">
+            <div class="provider-field-row">
+              <select id="local-model-select" title="Pick from server list" onchange="onLocalModelSelect()">
+                <option value="">— refresh list —</option>
+              </select>
+              <button type="button" class="provider-mini-btn" onclick="refreshLocalModels()">List</button>
+            </div>
+            <input id="local-model" type="text" placeholder="qwen2.5:14b" spellcheck="false" style="margin-top:4px;">
           </label>
           <label class="provider-field">
             <span>API key (optional)</span>
             <input id="local-api-key" type="password" placeholder="(blank if your server doesn't require one)" autocomplete="off">
           </label>
           <label class="provider-field">
+            <span>Context window (tokens, estimate)</span>
+            <input id="local-context-tokens" type="number" min="4096" max="200000" step="1024" placeholder="32768">
+          </label>
+          <label class="provider-field">
+            <span>Max reply tokens</span>
+            <input id="local-max-tokens" type="number" min="256" max="131072" step="256" placeholder="8192">
+          </label>
+          <label class="provider-field">
+            <span>Temperature</span>
+            <input id="local-temperature" type="number" min="0" max="2" step="0.05" placeholder="0.2">
+          </label>
+          <label class="provider-field">
             <span>Conversation memory (messages)</span>
             <input id="local-history-turns" type="number" min="2" max="400" step="2" placeholder="40">
           </label>
-          <div style="font-size:10px;color:var(--text-dim);margin:-2px 0 4px;line-height:1.4;">Recent messages your model sees each turn (default 40 ≈ 20 exchanges). Higher remembers more but needs a larger model context length.</div>
+          <label class="provider-check">
+            <input type="checkbox" id="local-truncate-config" checked>
+            Auto-truncate oversized config pastes for local context
+          </label>
+          <label class="provider-check">
+            <input type="checkbox" id="local-supports-vision">
+            Model supports vision (screenshots in chat)
+          </label>
+          <div style="font-size:10px;color:var(--text-dim);margin:-2px 0 4px;line-height:1.4;">Match context window to your server (Ollama num_ctx / LM Studio). Lower memory on 8K–16K models.</div>
           <button id="local-test-btn" type="button" onclick="testLocalLLM()">Test connection</button>
           <div id="local-test-result"></div>
           <div id="provider-save-row">
@@ -1453,6 +1502,7 @@
         placeholder="# paste the relevant section — e.g., a specific policy rule, BGP neighbor config, or IKE profile… (or paste a screenshot)"
         oninput="updateConfigStatus()"></textarea>
       <div id="config-status"></div>
+      <div id="local-context-warn"></div>
       <div id="large-cfg-warn">⚠ Config &gt;8,000 chars — counts as <strong>3 queries</strong> on Free tier</div>
     </div>
 
@@ -1629,6 +1679,17 @@ function renderProviderUI() {
   document.getElementById('local-model').value    = st.local_model    || '';
   document.getElementById('local-api-key').value  = st.local_api_key  || '';
   document.getElementById('local-history-turns').value = st.local_history_turns || 40;
+  const ctxEl = document.getElementById('local-context-tokens');
+  if (ctxEl) ctxEl.value = st.local_context_tokens || 32768;
+  const maxEl = document.getElementById('local-max-tokens');
+  if (maxEl) maxEl.value = st.local_max_tokens || 8192;
+  const tempEl = document.getElementById('local-temperature');
+  if (tempEl) tempEl.value = st.local_temperature ?? 0.2;
+  const truncEl = document.getElementById('local-truncate-config');
+  if (truncEl) truncEl.checked = st.local_truncate_config !== false;
+  const visEl = document.getElementById('local-supports-vision');
+  if (visEl) visEl.checked = !!st.local_supports_vision;
+  syncLocalModelSelect(st.local_model || '');
 
   // Show the local-fields group only when local is the current selection.
   section.classList.toggle('show-local', st.chat_provider === 'local');
@@ -1684,6 +1745,110 @@ function renderProviderUI() {
   // Hide the "config >8K = 3 queries" weight warning in local mode (no quota).
   const cfgWarn = document.getElementById('large-cfg-warn');
   if (cfgWarn) cfgWarn.style.display = (eff === 'local') ? 'none' : cfgWarn.style.display;
+  updateLocalContextWarn();
+}
+
+function syncLocalModelSelect(modelName) {
+  const sel = document.getElementById('local-model-select');
+  if (!sel || !modelName) return;
+  const opts = Array.from(sel.options).map(o => o.value);
+  if (!opts.includes(modelName)) {
+    const opt = document.createElement('option');
+    opt.value = modelName;
+    opt.textContent = modelName;
+    sel.appendChild(opt);
+  }
+  sel.value = modelName;
+}
+
+function onLocalModelSelect() {
+  const sel = document.getElementById('local-model-select');
+  const inp = document.getElementById('local-model');
+  if (sel && sel.value && inp) inp.value = sel.value;
+}
+
+async function refreshLocalModels() {
+  const result = document.getElementById('local-test-result');
+  const base = document.getElementById('local-base-url').value.trim();
+  if (!base) {
+    if (result) { result.className = 'error'; result.textContent = 'Enter a base URL first.'; }
+    return;
+  }
+  const params = new URLSearchParams({ base_url: base });
+  const key = document.getElementById('local-api-key').value;
+  if (key) params.set('api_key', key);
+  if (result) { result.className = ''; result.textContent = 'Listing models…'; }
+  try {
+    const res = await fetch(`${API}/api/local_llm/models?${params}`);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      if (result) { result.className = 'error'; result.textContent = '✗ ' + (data.detail || res.statusText); }
+      return;
+    }
+    const sel = document.getElementById('local-model-select');
+    if (!sel) return;
+    const cur = document.getElementById('local-model').value.trim();
+    sel.innerHTML = '<option value="">— select model —</option>';
+    (data.models || []).forEach(m => {
+      const opt = document.createElement('option');
+      opt.value = m;
+      opt.textContent = m;
+      sel.appendChild(opt);
+    });
+    if (cur) syncLocalModelSelect(cur);
+    if (result) {
+      result.className = 'ok';
+      result.textContent = `✓ ${data.count || 0} model(s) listed`;
+    }
+  } catch (e) {
+    if (result) { result.className = 'error'; result.textContent = 'List failed: ' + e.message; }
+  }
+}
+
+let _contextEstimateTimer = null;
+async function updateLocalContextWarn() {
+  const warn = document.getElementById('local-context-warn');
+  if (!warn) return;
+  const eff = _providerState.effective_provider || 'cloud';
+  if (eff !== 'local') {
+    warn.classList.remove('show', 'over');
+    warn.textContent = '';
+    return;
+  }
+  const cfg = document.getElementById('config-paste')?.value || '';
+  const msg = document.getElementById('user-input')?.value || '';
+  try {
+    const res = await fetch(`${API}/api/local_llm/context_estimate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        config_text: cfg,
+        message: msg,
+        conversation_id: currentConvId || null,
+      }),
+    });
+    if (!res.ok) return;
+    const est = await res.json();
+    if (!est.warn && !est.over_budget) {
+      warn.classList.remove('show', 'over');
+      warn.textContent = '';
+      return;
+    }
+    const b = est.breakdown || {};
+    warn.classList.add('show');
+    warn.classList.toggle('over', !!est.over_budget);
+    const truncNote = est.truncate_config_enabled
+      ? ' Auto-truncate is on — server will trim config if needed.'
+      : '';
+    warn.innerHTML = est.over_budget
+      ? `⚠ ~${est.estimated_total_tokens.toLocaleString()} / ${est.context_limit.toLocaleString()} tokens (over budget). Paste a smaller config section or raise context window.${truncNote}`
+      : `⚠ ~${est.estimated_total_tokens.toLocaleString()} / ${est.context_limit.toLocaleString()} tokens (≥70% of context). Config ${b.config || 0} · history ${b.history || 0}.${truncNote}`;
+  } catch (e) { /* silent */ }
+}
+
+function scheduleContextEstimate() {
+  clearTimeout(_contextEstimateTimer);
+  _contextEstimateTimer = setTimeout(updateLocalContextWarn, 400);
 }
 
 function onProviderChange() {
@@ -1733,6 +1898,11 @@ async function saveProvider() {
     local_model:    document.getElementById('local-model').value.trim(),
     local_api_key:  document.getElementById('local-api-key').value,
     local_history_turns: parseInt(document.getElementById('local-history-turns').value, 10) || 40,
+    local_context_tokens: parseInt(document.getElementById('local-context-tokens').value, 10) || 32768,
+    local_max_tokens: parseInt(document.getElementById('local-max-tokens').value, 10) || 8192,
+    local_temperature: parseFloat(document.getElementById('local-temperature').value) || 0.2,
+    local_truncate_config: document.getElementById('local-truncate-config').checked,
+    local_supports_vision: document.getElementById('local-supports-vision').checked,
   };
   try {
     const res = await fetch(`${API}/api/settings`, {
@@ -2696,6 +2866,12 @@ document.addEventListener('DOMContentLoaded', () => {
   const cfgInput  = document.getElementById('config-paste');
   if (chatInput) chatInput.addEventListener('paste', handlePasteImages);
   if (cfgInput)  cfgInput.addEventListener('paste', handlePasteImages);
+  const userInput = document.getElementById('user-input');
+  if (userInput) userInput.addEventListener('input', scheduleContextEstimate);
+  ['local-context-tokens', 'local-history-turns', 'local-max-tokens'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('change', scheduleContextEstimate);
+  });
   // Single delegated click handler covers both strips.
   document.addEventListener('click', (e) => {
     const btn = e.target.closest('.attach-x');
@@ -2713,6 +2889,16 @@ async function sendMessage() {
   if (!msg && imgs.length === 0) return;
   // Allow image-only sends with a default prompt so the model has a question to anchor to.
   if (!msg && imgs.length) msg = 'Please analyze the attached screenshot(s) and explain what you see.';
+
+  const effProvider = _providerState.effective_provider || 'cloud';
+  const st = _providerState.settings || {};
+  if (effProvider === 'local' && imgs.length && !st.local_supports_vision) {
+    appendAssistantMessage(
+      '⚠️ Screenshot upload is disabled for local LLM mode. Enable **Model supports vision** in Settings → My local LLM, or switch to Cloud.',
+      null
+    );
+    return;
+  }
 
   // One-time disclosure before first config submission OR first image upload.
   const hasCfg = document.getElementById('config-paste').value.trim() || configText;
@@ -2808,7 +2994,10 @@ async function sendMessage() {
           const meta = document.createElement('div');
           meta.className = 'token-meta';
           const mLabel = modelLabel(data.model);
-          meta.innerHTML = `${mLabel ? `<span class="meta-model">${mLabel}</span>` : ''}<span>${data.input_tokens} in</span><span>${data.output_tokens} out</span>${data.redactions > 0 ? `<span class="meta-redacted">🔒 ${data.redactions} credential${data.redactions === 1 ? '' : 's'} auto-redacted</span>` : ''}`;
+          const truncNote = data.config_truncated
+            ? '<span class="meta-redacted">✂ config truncated for local context</span>'
+            : '';
+          meta.innerHTML = `${mLabel ? `<span class="meta-model">${mLabel}</span>` : ''}<span>${data.input_tokens} in</span><span>${data.output_tokens} out</span>${data.redactions > 0 ? `<span class="meta-redacted">🔒 ${data.redactions} credential${data.redactions === 1 ? '' : 's'} auto-redacted</span>` : ''}${truncNote}`;
           placeholder.querySelector('.msg-bubble').appendChild(meta);
           // Refresh query counter in header for all tiers
           if (data.queries_used != null) {
@@ -2867,9 +3056,11 @@ function updateConfigStatus() {
   }
   // Show large-config warning only for free-tier users with >8,000 char configs
   if (warn) {
-    warn.style.display = (currentTier === 'free' && val.length > 8000) ? 'block' : 'none';
+    const eff = _providerState.effective_provider || 'cloud';
+    warn.style.display = (eff !== 'local' && currentTier === 'free' && val.length > 8000) ? 'block' : 'none';
   }
   document.getElementById('config-ind').textContent = val ? '📎 Config attached' : '';
+  scheduleContextEstimate();
 }
 
 async function uploadFile(input) {
