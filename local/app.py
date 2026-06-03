@@ -3173,6 +3173,14 @@ async def upload_config(file: UploadFile = File(...)):
 MIGRATE_MAX_BYTES = 5_000_000
 
 
+@app.get("/api/migrate/coverage")
+async def api_migrate_coverage():
+    """Feature coverage matrix for multi-vendor Config Migration."""
+    from migration.coverage import coverage_snapshot
+
+    return coverage_snapshot()
+
+
 @app.post("/api/migrate")
 async def api_migrate(
     cisco_config: UploadFile = File(...),
@@ -3180,8 +3188,9 @@ async def api_migrate(
     vsys: str = Form("vsys1"),
     mode: str = Form("firewall"),
     device_group: str = Form(""),
+    source_vendor: str = Form("auto"),
 ):
-    """Convert Cisco ASA / Firepower config to PAN-OS SET + merged XML. Runs locally."""
+    """Convert third-party or Palo config to PAN-OS SET + merged XML. Runs locally."""
     from migration.pipeline import MigrationOptions, build_zip_bundle, run_migration
 
     allowed = {".txt", ".xml", ".log", ".cfg", ".conf", ".json"}
@@ -3189,17 +3198,17 @@ async def api_migrate(
     if ext not in allowed:
         raise HTTPException(
             status_code=400,
-            detail=f"Unsupported Cisco config type '{ext}'. Allowed: {', '.join(sorted(allowed))}",
+            detail=f"Unsupported config type '{ext}'. Allowed: {', '.join(sorted(allowed))}",
         )
 
     raw = await cisco_config.read(MIGRATE_MAX_BYTES + 1)
     if len(raw) > MIGRATE_MAX_BYTES:
-        raise HTTPException(status_code=413, detail="Cisco config too large. Max 5 MB.")
+        raise HTTPException(status_code=413, detail="Source config too large. Max 5 MB.")
 
     try:
         cisco_text = raw.decode("utf-8", errors="replace")
     except Exception:
-        raise HTTPException(status_code=400, detail="Could not decode Cisco config as UTF-8 text.")
+        raise HTTPException(status_code=400, detail="Could not decode source config as UTF-8 text.")
 
     base_text: str | None = None
     if base_xml and base_xml.filename:
@@ -3215,6 +3224,7 @@ async def api_migrate(
         vsys=vsys or "vsys1",
         mode=mode if mode in ("firewall", "panorama") else "firewall",
         device_group=device_group or None,
+        source_vendor=(source_vendor or "auto").lower(),
     )
     result = run_migration(cisco_text, base_text, options=opts)
     bundle = build_zip_bundle(result)
@@ -3239,13 +3249,14 @@ async def api_migrate_preview(
     vsys: str = Form("vsys1"),
     mode: str = Form("firewall"),
     device_group: str = Form(""),
+    source_vendor: str = Form("auto"),
 ):
     """JSON preview of migration stats and report (no ZIP). Local only."""
     from migration.pipeline import MigrationOptions, run_migration
 
     raw = await cisco_config.read(MIGRATE_MAX_BYTES + 1)
     if len(raw) > MIGRATE_MAX_BYTES:
-        raise HTTPException(status_code=413, detail="Cisco config too large. Max 5 MB.")
+        raise HTTPException(status_code=413, detail="Source config too large. Max 5 MB.")
     cisco_text = raw.decode("utf-8", errors="replace")
     base_text = None
     if base_xml and base_xml.filename:
@@ -3255,10 +3266,12 @@ async def api_migrate_preview(
         vsys=vsys or "vsys1",
         mode=mode if mode in ("firewall", "panorama") else "firewall",
         device_group=device_group or None,
+        source_vendor=(source_vendor or "auto").lower(),
     )
     result = run_migration(cisco_text, base_text, options=opts)
     return {
         "source_format": result.report.source_format,
+        "source_vendor": result.ir.source_vendor,
         "summary": result.report.summary(),
         "report": result.report.to_dict(),
         "counts": {

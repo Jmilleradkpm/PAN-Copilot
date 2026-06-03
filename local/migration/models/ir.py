@@ -95,6 +95,7 @@ class VpnTunnel(BaseModel):
 class MigrationIR(BaseModel):
     hostname: str | None = None
     vsys: str = "vsys1"
+    source_vendor: str = "cisco"
     zones: list[Zone] = Field(default_factory=list)
     addresses: list[AddressObject] = Field(default_factory=list)
     address_groups: list[AddressGroup] = Field(default_factory=list)

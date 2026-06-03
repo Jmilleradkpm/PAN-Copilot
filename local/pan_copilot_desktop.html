@@ -2029,7 +2029,7 @@ function closeUpgradeModal(e) {
   }
 }
 
-// ── Cisco → PAN-OS migration (local /api/migrate) ─────────────────
+// ── Multi-vendor → PAN-OS migration (local /api/migrate) ──────────
 let migCiscoFile = null;
 let migXmlFile = null;
 
@@ -2065,6 +2065,7 @@ document.addEventListener('DOMContentLoaded', () => {
       document.getElementById('mig-xml-label').textContent = migXmlFile ? migXmlFile.name : 'Optional base XML';
     });
   }
+  migVendorHint();
 });
 
 function migFormData() {
@@ -2073,7 +2074,25 @@ function migFormData() {
   if (migXmlFile) fd.append('base_xml', migXmlFile);
   fd.append('vsys', document.getElementById('mig-vsys').value || 'vsys1');
   fd.append('mode', 'firewall');
+  const vendor = document.getElementById('mig-vendor');
+  if (vendor) fd.append('source_vendor', vendor.value || 'auto');
   return fd;
+}
+
+const MIG_VENDOR_HINTS = {
+  auto: 'Auto-detect: Cisco ASA/FTD JSON, Check Point mgmt_cli, FortiGate show full-configuration, Junos security {}, PAN-OS XML/SET.',
+  cisco: 'ASA running-config, FMC ASA-syntax export, or FTD JSON policy export.',
+  checkpoint: 'R80+ mgmt_cli / show configuration (add host, add network, add access-rule).',
+  fortinet: 'Paste config firewall address + policy sections (single VDOM).',
+  juniper: 'Junos security policies or ScreenOS set policy lines.',
+  palo: 'PAN-OS running-config XML or SET export (Palo-to-Palo re-platform).',
+  panorama: 'Panorama shared config XML — objects/rules imported; map to standalone vsys manually.',
+};
+
+function migVendorHint() {
+  const sel = document.getElementById('mig-vendor');
+  const el = document.getElementById('mig-vendor-hint');
+  if (sel && el) el.textContent = MIG_VENDOR_HINTS[sel.value] || MIG_VENDOR_HINTS.auto;
 }
 
 async function runMigrationPreview() {
@@ -2090,7 +2109,7 @@ async function runMigrationPreview() {
     const data = await res.json();
     const s = data.summary || {};
     st.textContent =
-      `Format: ${data.source_format}\n` +
+      `Vendor: ${data.source_vendor || '?'} | Format: ${data.source_format}\n` +
       `SET commands: ${data.counts.set_commands}\n` +
       `Addresses: ${data.counts.addresses} | Rules: ${data.counts.security_rules} | NAT: ${data.counts.nat_rules} | VPN: ${data.counts.vpn_tunnels}\n` +
       `Report: auto=${s.auto||0} approximation=${s.approximation||0} manual=${s.manual_required||0} blocker=${s.blocker||0} unmapped=${s.unmapped_lines||0}`;
@@ -3093,13 +3112,27 @@ function copyCode(btn) {
 <!-- Upgrade modal -->
 <div id="migration-modal-backdrop" onclick="closeMigrationModal(event)">
   <div id="migration-modal" onclick="event.stopPropagation()">
-    <h3>Cisco → PAN-OS Migration</h3>
-    <p class="mig-sub">Local conversion to a <strong>standalone NGFW</strong> (vsys policy/objects + device-level interfaces/VPN). Outputs SET commands for firewall import, merged XML under <code>vsys1</code>, and migration report. Not Panorama device-group format. Config never leaves your machine.</p>
+    <h3>Config Migration → PAN-OS</h3>
+    <p class="mig-sub">Local conversion to a <strong>standalone NGFW</strong> (vsys policy/objects + device-level interfaces/VPN). Cisco, Check Point, Fortinet, Juniper, or Palo-to-Palo. Outputs SET + merged XML under <code>vsys1</code> and migration report. Config never leaves your machine.</p>
+    <div style="margin-bottom:10px;font-size:12px;">
+      <label>Source vendor
+        <select id="mig-vendor" onchange="migVendorHint()" style="margin-left:6px;padding:4px 8px;border-radius:4px;border:1px solid var(--border);background:var(--surface2);color:var(--text);">
+          <option value="auto">Auto-detect</option>
+          <option value="cisco">Cisco ASA / FTD</option>
+          <option value="checkpoint">Check Point</option>
+          <option value="fortinet">Fortinet</option>
+          <option value="juniper">Juniper</option>
+          <option value="palo">Palo Alto (XML/SET)</option>
+          <option value="panorama">Panorama XML</option>
+        </select>
+      </label>
+      <div id="mig-vendor-hint" style="margin-top:6px;font-size:11px;color:var(--text-dim);"></div>
+    </div>
     <div class="mig-grid">
       <div class="mig-drop" id="mig-cisco-drop" onclick="document.getElementById('mig-cisco-input').click()">
-        <div>📄 Cisco config</div>
-        <div id="mig-cisco-label" style="margin-top:6px;font-size:11px;">Drop or click — .txt .cfg .conf .json</div>
-        <input type="file" id="mig-cisco-input" accept=".txt,.cfg,.conf,.json,.log" hidden>
+        <div>📄 Source config</div>
+        <div id="mig-cisco-label" style="margin-top:6px;font-size:11px;">Drop or click — .txt .cfg .conf .json .xml</div>
+        <input type="file" id="mig-cisco-input" accept=".txt,.cfg,.conf,.json,.log,.xml" hidden>
       </div>
       <div class="mig-drop" id="mig-xml-drop" onclick="document.getElementById('mig-xml-input').click()">
         <div>🌐 Base firewall XML (optional)</div>
@@ -3112,7 +3145,7 @@ function copyCode(btn) {
       <span style="font-size:11px;color:var(--text-dim);">Output is NGFW import format — load SET on the firewall or merge XML into vsys, not Panorama DG.</span>
       <input type="hidden" id="mig-mode" value="firewall">
     </div>
-    <div class="mig-status" id="mig-status">Upload Cisco config to begin.</div>
+    <div class="mig-status" id="mig-status">Upload source config to begin.</div>
     <div class="mig-actions">
       <button type="button" class="primary" id="mig-run-btn" onclick="runMigrationPreview()" disabled>Preview report</button>
       <button type="button" id="mig-zip-btn" onclick="downloadMigrationZip()" disabled>Download ZIP bundle</button>

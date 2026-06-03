@@ -1,0 +1,19 @@
+security {
+    address-book {
+        global {
+            address inside_net 192.168.10.0/24;
+        }
+    }
+    policies {
+        from-zone trust to-zone untrust {
+            policy allow-web {
+                match {
+                    source-address any;
+                    destination-address any;
+                    application junos-http;
+                }
+                then { permit; }
+            }
+        }
+    }
+}

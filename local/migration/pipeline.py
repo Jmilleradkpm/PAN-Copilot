@@ -1,27 +1,25 @@
-"""End-to-end migration orchestration."""
+"""End-to-end migration pipeline: detect → parse → IR → SET/XML + report."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
-from migration.detect import SourceFormat, detect_format
+from migration.coverage import coverage_snapshot
 from migration.emit.set_emitter import emit_set_commands
 from migration.emit.xml_merger import merge_into_base_xml
 from migration.models.ir import MigrationIR
-from migration.parsers.asa.parser import parse_asa_config
-from migration.parsers.ftd_json.parser import parse_ftd_json
+from migration.parse_to_ir import parse_to_ir
 from migration.report import MigrationReport, Severity
-from migration.resolve.build_ir import build_ir_from_asa
 from migration.validate.panos_checks import validate_ir
 
 
 @dataclass
 class MigrationOptions:
     vsys: str = "vsys1"
-    mode: str = "firewall"  # firewall | panorama
+    mode: str = "firewall"  # firewall | panorama (legacy; migration targets standalone NGFW)
     device_group: str | None = None
-    target_panos_version: str = "10.2"
-    dry_run: bool = False
+    source_vendor: str = "auto"  # auto|cisco|checkpoint|fortinet|juniper|palo|panorama
 
 
 @dataclass
@@ -29,87 +27,85 @@ class MigrationResult:
     ir: MigrationIR
     report: MigrationReport
     set_commands: list[str]
-    merged_xml: str
     set_text: str
+    merged_xml: str
+    validation: dict[str, Any]
+    summary: dict[str, Any]
 
 
 def run_migration(
-    cisco_config: str,
+    source_config: str,
     base_xml: str | None = None,
+    *,
     options: MigrationOptions | None = None,
 ) -> MigrationResult:
     opts = options or MigrationOptions()
+    text = source_config
     report = MigrationReport()
-    fmt, normalized = detect_format(cisco_config)
-    report.source_format = fmt.value
+    ir = parse_to_ir(
+        text,
+        report,
+        vsys=opts.vsys,
+        source_vendor=opts.source_vendor,
+    )
 
-    if fmt == SourceFormat.UNKNOWN:
-        report.add(
-            Severity.BLOCKER,
-            "format",
-            "Could not detect Cisco config format",
-            pan_hint="Provide ASA running-config, FMC ASA-syntax export, or FTD JSON",
-        )
-        ir = MigrationIR(vsys=opts.vsys)
-    elif fmt == SourceFormat.FTD_JSON:
-        ir = parse_ftd_json(normalized, report, vsys=opts.vsys)
-    else:
-        if fmt == SourceFormat.FMC_ASA_SYNTAX:
-            report.add(Severity.AUTO, "format", "FMC ASA-syntax export detected; parsing ASA body")
-        parsed = parse_asa_config(normalized)
-        ir = build_ir_from_asa(parsed, report, vsys=opts.vsys)
-
-    validate_ir(ir, report)
-
-    # Default output: standalone NGFW (vsys-scoped policy/objects), not Panorama DG
-    output_mode = opts.mode if opts.mode == "panorama" else "firewall"
-    if output_mode == "firewall":
-        report.add(
-            Severity.AUTO,
-            "output",
-            f"SET and XML target standalone firewall vsys '{ir.vsys}' (not Panorama device-group).",
-        )
-    else:
+    if opts.mode == "panorama" and opts.device_group:
         report.add(
             Severity.APPROXIMATION,
-            "output",
-            "Panorama device-group XML merge requested; verify import path on your Panorama.",
+            "target",
+            "Panorama device-group mode ignored; output targets standalone firewall vsys",
+            pan_hint=f"Use merged XML on firewall; DG '{opts.device_group}' not applied",
         )
 
-    set_commands = emit_set_commands(ir, target=output_mode)
+    set_commands = emit_set_commands(ir)
+    set_text = "\n".join(set_commands) + ("\n" if set_commands else "")
     merged_xml = merge_into_base_xml(
         base_xml,
         ir,
-        mode=output_mode,
+        mode=opts.mode,
         device_group=opts.device_group,
         report=report,
     )
+    validation_ok = validate_ir(ir, report)
 
-    report.add(
-        Severity.AUTO,
-        "summary",
-        f"Generated {len(set_commands)} SET commands, {len(ir.security_rules)} security rules, "
-        f"{len(ir.nat_rules)} NAT rules, {len(ir.addresses)} addresses",
-    )
+    summary = {
+        "hostname": ir.hostname,
+        "vsys": ir.vsys,
+        "source_vendor": ir.source_vendor,
+        "source_format": report.source_format,
+        "zones": len(ir.zones),
+        "addresses": len(ir.addresses),
+        "address_groups": len(ir.address_groups),
+        "services": len(ir.services),
+        "service_groups": len(ir.service_groups),
+        "interfaces": len(ir.interfaces),
+        "routes": len(ir.routes),
+        "security_rules": len(ir.security_rules),
+        "nat_rules": len(ir.nat_rules),
+        "vpn_tunnels": len(ir.vpn_tunnels),
+        "set_command_count": len(set_commands),
+        "report": report.summary(),
+        "validation_ok": validation_ok,
+        "coverage": coverage_snapshot(),
+    }
 
     return MigrationResult(
         ir=ir,
         report=report,
         set_commands=set_commands,
+        set_text=set_text,
         merged_xml=merged_xml,
-        set_text="\n".join(set_commands) + "\n",
+        validation={"ok": validation_ok},
+        summary=summary,
     )
 
 
 def build_zip_bundle(result: MigrationResult) -> dict[str, str]:
-    unmapped = "\n".join(result.report.unmapped_lines)
-    if unmapped:
-        unmapped += "\n"
     import json
 
     return {
-        "set_commands.txt": result.set_text,
-        "config_merged.xml": result.merged_xml,
+        "migrated_config.set": result.set_text,
+        "merged_config.xml": result.merged_xml,
         "migration_report.json": json.dumps(result.report.to_dict(), indent=2),
-        "unmapped_lines.txt": unmapped or "# No unmapped lines\n",
+        "migration_summary.json": json.dumps(result.summary, indent=2),
     }

@@ -1,0 +1,4 @@
+add host name "Server1" ip-address 10.1.1.10
+add network name "Internal" subnet 192.168.0.0 mask 255.255.255.0
+add service-tcp name "http" port 80
+add access-rule name "Allow_HTTP" source "Internal" destination "Any" service "http" action "Accept"
