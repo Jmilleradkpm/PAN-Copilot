@@ -1512,6 +1512,64 @@
 
     <div class="rs-divider"></div>
 
+    <!-- Live firewall connection + tools (read-only) -->
+    <div id="firewall-section" class="rs-section" style="padding-bottom:6px;">
+      <div id="firewall-toggle" onclick="toggleFirewallPanel()" style="cursor:pointer;display:flex;align-items:center;gap:6px;">
+        <span class="rs-label" style="margin-bottom:0;">Firewall (read-only)</span>
+        <span id="firewall-mode-label" style="font-size:11px;color:var(--text-dim);"></span>
+        <span id="firewall-chevron" style="margin-left:auto;">›</span>
+      </div>
+      <div id="firewall-panel" style="display:none;">
+        <div id="firewall-disconnected">
+          <label class="provider-field"><span>Host / IP</span>
+            <input id="fw-host" type="text" placeholder="192.0.2.1 or fw01.corp.example.com" spellcheck="false"></label>
+          <label class="provider-field"><span>Username</span>
+            <input id="fw-user" type="text" autocomplete="off" spellcheck="false"></label>
+          <label class="provider-field"><span>Password</span>
+            <input id="fw-pass" type="password" autocomplete="off"></label>
+          <label class="provider-check"><input type="checkbox" id="fw-verify-tls"> Verify TLS certificate (uncheck for self-signed)</label>
+          <div style="font-size:10px;color:var(--text-dim);margin:-2px 0 4px;line-height:1.4;">Credentials fetch an API key once, then are discarded. The key is stored encrypted (DPAPI) on this machine. Read-only: only show/test commands and config reads are possible — never a commit.</div>
+          <button id="fw-connect-btn" type="button" onclick="connectFirewall()">Connect</button>
+          <div id="fw-connect-status" style="font-size:11px;margin-top:4px;color:var(--text-sub);"></div>
+        </div>
+        <div id="firewall-connected" style="display:none;">
+          <div id="fw-info" style="font-size:11px;color:var(--text-sub);line-height:1.5;margin-bottom:6px;"></div>
+          <button type="button" onclick="disconnectFirewall()" class="provider-mini-btn">Disconnect</button>
+
+          <div class="rs-divider" style="margin:10px 0;"></div>
+          <span class="rs-label">Policy / routing test</span>
+          <label class="provider-field"><span>Test type</span>
+            <select id="fw-test-kind" onchange="onFwTestKind()">
+              <option value="security-policy-match">Security policy match</option>
+              <option value="nat-policy-match">NAT policy match</option>
+              <option value="routing-fib-lookup">Routing FIB lookup</option>
+            </select></label>
+          <div id="fw-test-fields"></div>
+          <button type="button" onclick="runFirewallTest()">Run test</button>
+          <pre id="fw-test-result" class="fw-output"></pre>
+
+          <div class="rs-divider" style="margin:10px 0;"></div>
+          <span class="rs-label">Commit preview</span>
+          <div style="font-size:10px;color:var(--text-dim);margin-bottom:4px;">Diff candidate vs running config — what a commit would change. Read-only.</div>
+          <button type="button" onclick="previewCommit()">Preview pending changes</button>
+          <pre id="fw-commit-result" class="fw-output"></pre>
+        </div>
+      </div>
+    </div>
+
+    <div class="rs-divider"></div>
+
+    <!-- Config hygiene / best-practice checks -->
+    <div id="checks-section" class="rs-section" style="padding-bottom:6px;">
+      <span class="rs-label">Config hygiene check</span>
+      <div style="font-size:10px;color:var(--text-dim);margin-bottom:4px;">Best-practice scan of your security rulebase (any-any rules, missing profiles/logging, shadowed rules). Runs locally.</div>
+      <button type="button" onclick="runHygiene('paste')">Check pasted config</button>
+      <button type="button" id="fw-hygiene-live" onclick="runHygiene('firewall')" style="display:none;">Check live firewall</button>
+      <div id="checks-result" style="margin-top:6px;"></div>
+    </div>
+
+    <div class="rs-divider"></div>
+
     <!-- File / Config paste area -->
     <div id="config-section" class="rs-section" style="padding:8px 12px 6px;flex-shrink:0;">
       <span class="rs-label">Paste Config / CLI Output</span>
@@ -2007,6 +2065,7 @@ async function loadAdvisories(force) {
     if (!res.ok) return;
     const data = await res.json();
     _advisoryCache = Array.isArray(data.advisories) ? data.advisories : [];
+    window.__deviceVersion = data.device_version || '';
     renderAdvisoryBanner();
   } catch (e) { /* silent — banner just stays in its previous state */ }
 }
@@ -2032,18 +2091,26 @@ function renderAdvisoryBanner() {
   if (nCritical) parts.push(`${nCritical} Critical`);
   if (nHigh)     parts.push(`${nHigh} High`);
   const noun = items.length === 1 ? 'advisory' : 'advisories';
-  summary.textContent = `${parts.join(' · ')} Palo Alto security ${noun} — click to view`;
+  const devVer = window.__deviceVersion || '';
+  const devTag = devVer ? ` · your device: PAN-OS ${devVer}` : '';
+  summary.textContent = `${parts.join(' · ')} Palo Alto security ${noun}${devTag} — click to view`;
 
   list.innerHTML = items.map(it => {
     const sev   = (it.severity || '').toUpperCase();
     const date  = (it.pub_date || '').slice(0, 10);  // YYYY-MM-DD
     const href  = it.link || '';
     const title = it.title || it.cve_id || '';
+    // When a firewall is connected we know its PAN-OS version, so offer a
+    // one-click "am I affected?" that asks the AI with the device version.
+    const affectedBtn = devVer
+      ? `<button class="advisory-dismiss" style="color:var(--accent,#58a6ff);font-weight:600;" onclick="askAffected('${escAttr(it.cve_id)}', '${escAttr(title)}', event)" title="Am I affected?">?</button>`
+      : '';
     return (
       `<div class="advisory-row">` +
         `<span class="advisory-sev ${sev}">${sev}</span>` +
         `<a class="advisory-title" href="${escAttr(href)}" target="_blank" rel="noopener noreferrer" title="${escAttr(title)}">${escHtml(title)}</a>` +
         `<span class="advisory-date">${escHtml(date)}</span>` +
+        affectedBtn +
         `<button class="advisory-dismiss" onclick="dismissAdvisory('${escAttr(it.cve_id)}', event)" title="Dismiss">✕</button>` +
       `</div>`
     );
@@ -3397,6 +3464,190 @@ function copyCode(btn) {
 </div>
 
 
+<style>
+  .fw-output {
+    display: none;
+    white-space: pre-wrap;
+    word-break: break-all;
+    max-height: 220px;
+    overflow: auto;
+    font-size: 10px;
+    line-height: 1.45;
+    background: var(--code-bg, #0d1117);
+    color: var(--text-sub, #adbac7);
+    padding: 6px 8px;
+    border-radius: 4px;
+    margin-top: 6px;
+  }
+</style>
+<script>
+  // ── Firewall (read-only) tools ─────────────────────────────────────────
+  function toggleFirewallPanel() {
+    const p = document.getElementById('firewall-panel');
+    const c = document.getElementById('firewall-chevron');
+    const open = p.style.display === 'none';
+    p.style.display = open ? 'block' : 'none';
+    if (c) c.style.transform = open ? 'rotate(90deg)' : '';
+    if (open) refreshFirewallStatus();
+  }
+
+  async function refreshFirewallStatus() {
+    try {
+      const r = await fetch(`${API}/api/firewall/status`);
+      if (r.ok) applyFirewallStatus(await r.json());
+    } catch (e) { /* app unreachable — leave UI as is */ }
+  }
+
+  function applyFirewallStatus(s) {
+    const connected = !!(s && s.connected);
+    const disc = document.getElementById('firewall-disconnected');
+    const conn = document.getElementById('firewall-connected');
+    if (disc) disc.style.display = connected ? 'none' : 'block';
+    if (conn) conn.style.display = connected ? 'block' : 'none';
+    const label = document.getElementById('firewall-mode-label');
+    if (label) label.textContent = connected ? (s.hostname || s.host || 'connected') : 'not connected';
+    const liveBtn = document.getElementById('fw-hygiene-live');
+    if (liveBtn) liveBtn.style.display = connected ? 'inline-block' : 'none';
+    if (connected) {
+      document.getElementById('fw-info').innerHTML =
+        `<strong>${escHtml(s.hostname || s.host || '')}</strong><br>` +
+        `${escHtml(s.model || '')} · PAN-OS ${escHtml(s.sw_version || '?')}<br>` +
+        `<span style="color:var(--text-dim)">${escHtml(s.host || '')}</span>`;
+      onFwTestKind();
+    }
+  }
+
+  async function connectFirewall() {
+    const host = document.getElementById('fw-host').value.trim();
+    const user = document.getElementById('fw-user').value.trim();
+    const password = document.getElementById('fw-pass').value;
+    const verify_tls = document.getElementById('fw-verify-tls').checked;
+    const st = document.getElementById('fw-connect-status');
+    if (!host || !user || !password) { st.textContent = 'Host, username and password are required.'; return; }
+    const btn = document.getElementById('fw-connect-btn');
+    btn.disabled = true; st.textContent = 'Connecting…';
+    try {
+      const r = await fetch(`${API}/api/firewall/connect`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ host, user, password, verify_tls }),
+      });
+      const d = await r.json();
+      if (!r.ok) { st.textContent = d.detail || 'Connection failed.'; btn.disabled = false; return; }
+      document.getElementById('fw-pass').value = '';   // never keep the password around
+      st.textContent = '';
+      applyFirewallStatus({ connected: true, host: d.host, hostname: d.hostname, model: d.model, sw_version: d.sw_version });
+      loadAdvisories(false);   // refresh the device-version badge
+    } catch (e) { st.textContent = 'Could not reach the app.'; }
+    btn.disabled = false;
+  }
+
+  async function disconnectFirewall() {
+    try { await fetch(`${API}/api/firewall/disconnect`, { method: 'POST' }); } catch (e) {}
+    applyFirewallStatus({ connected: false });
+    loadAdvisories(false);
+  }
+
+  const FW_TEST_FIELDS = {
+    'security-policy-match': [['source','Source IP','10.0.0.5'],['destination','Destination IP','8.8.8.8'],['protocol','Protocol (6=TCP, 17=UDP)','6'],['destination_port','Destination port','443'],['application','Application (optional)','ssl']],
+    'nat-policy-match': [['source','Source IP','10.0.0.5'],['destination','Destination IP','8.8.8.8'],['protocol','Protocol','6'],['destination_port','Destination port','443'],['source_zone','From zone (optional)','trust']],
+    'routing-fib-lookup': [['ip','Destination IP','8.8.8.8'],['virtual_router','Virtual router','default']],
+  };
+
+  function onFwTestKind() {
+    const kind = document.getElementById('fw-test-kind').value;
+    const wrap = document.getElementById('fw-test-fields');
+    wrap.innerHTML = (FW_TEST_FIELDS[kind] || []).map(([k, label, ph]) =>
+      `<label class="provider-field"><span>${escHtml(label)}</span>` +
+      `<input data-fw-param="${escAttr(k)}" type="text" placeholder="${escAttr(ph)}" spellcheck="false"></label>`
+    ).join('');
+  }
+
+  async function runFirewallTest() {
+    const kind = document.getElementById('fw-test-kind').value;
+    const params = {};
+    document.querySelectorAll('#fw-test-fields [data-fw-param]').forEach(inp => {
+      const v = inp.value.trim();
+      if (v) params[inp.getAttribute('data-fw-param')] = v;
+    });
+    const out = document.getElementById('fw-test-result');
+    out.style.display = 'block'; out.textContent = 'Running…';
+    try {
+      const r = await fetch(`${API}/api/firewall/test`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ kind, params }),
+      });
+      const d = await r.json();
+      if (!r.ok) { out.textContent = d.detail || 'Test failed.'; return; }
+      out.textContent = d.ran ? (d.result || '(no output)') : `Not connected — run this in the CLI:\n${d.cli}`;
+    } catch (e) { out.textContent = 'Request failed.'; }
+  }
+
+  async function previewCommit() {
+    const out = document.getElementById('fw-commit-result');
+    out.style.display = 'block'; out.textContent = 'Fetching candidate vs running config…';
+    try {
+      const r = await fetch(`${API}/api/firewall/commit-preview`, { method: 'POST' });
+      const d = await r.json();
+      if (!r.ok) { out.textContent = d.detail || 'Preview failed.'; return; }
+      if (!d.has_changes) { out.textContent = 'No pending changes (candidate matches running).'; return; }
+      out.textContent = `+${d.added} / -${d.removed} lines\n\n${d.diff}`;
+      prefillInput(`Explain what this PAN-OS commit will change and flag anything risky:\n\n${(d.diff || '').slice(0, 4000)}`);
+    } catch (e) { out.textContent = 'Request failed.'; }
+  }
+
+  // ── Config hygiene ──────────────────────────────────────────────────────
+  async function runHygiene(source) {
+    const out = document.getElementById('checks-result');
+    const body = { source };
+    if (source === 'paste') {
+      body.config_text = document.getElementById('config-paste').value.trim();
+      if (!body.config_text) { out.innerHTML = '<div style="font-size:11px;color:var(--yellow)">Paste a config first.</div>'; return; }
+    }
+    out.innerHTML = '<div style="font-size:11px;color:var(--text-dim)">Scanning…</div>';
+    try {
+      const r = await fetch(`${API}/api/checks/run`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const d = await r.json();
+      if (!r.ok) { out.innerHTML = `<div style="font-size:11px;color:#f85149">${escHtml(d.detail || 'Check failed.')}</div>`; return; }
+      renderHygiene(d);
+    } catch (e) { out.innerHTML = '<div style="font-size:11px;color:#f85149">Request failed.</div>'; }
+  }
+
+  function renderHygiene(d) {
+    const out = document.getElementById('checks-result');
+    if (!d.rule_count) { out.innerHTML = '<div style="font-size:11px;color:var(--yellow)">No security rules found in that config.</div>'; return; }
+    if (!d.findings.length) { out.innerHTML = `<div style="font-size:11px;color:var(--green)">✓ ${d.rule_count} rules scanned — no issues found.</div>`; return; }
+    const sevColor = { high: '#f85149', medium: '#d29922', low: '#58a6ff', info: '#8b949e' };
+    const rows = d.findings.map(f => {
+      const col = sevColor[f.severity] || '#888';
+      return `<div style="border-left:3px solid ${col};padding:4px 8px;margin:4px 0;background:var(--code-bg,#0d1117);border-radius:3px;">` +
+        `<div style="font-size:10px;text-transform:uppercase;color:${col}">${escHtml(f.severity)} · ${escHtml(f.category)}</div>` +
+        `<div style="font-size:11px;"><strong>${escHtml(f.rule)}</strong> — ${escHtml(f.message)}</div>` +
+        `<div style="font-size:10px;color:var(--text-dim)">${escHtml(f.remediation)}</div></div>`;
+    }).join('');
+    out.innerHTML = `<div style="font-size:11px;margin:6px 0 2px;">${d.rule_count} rules · ${d.findings.length} findings</div>${rows}` +
+      `<button type="button" onclick="askHygieneInChat()" class="provider-mini-btn" style="margin-top:6px;">Ask AI to prioritize these</button>`;
+    window.__lastHygiene = d;
+  }
+
+  function askHygieneInChat() {
+    const d = window.__lastHygiene; if (!d) return;
+    const lines = d.findings.map(f => `- [${f.severity}] ${f.rule}: ${f.message}`).join('\n');
+    prefillInput(`My PAN-OS config hygiene scan found these issues. Prioritize them and give me the exact set-commands to fix the top 3:\n\n${lines}`);
+  }
+
+  // ── Advisory "Am I affected?" (uses the connected device's PAN-OS version) ─
+  function askAffected(cve, title, evt) {
+    if (evt) evt.stopPropagation();
+    const v = window.__deviceVersion || 'unknown';
+    prefillInput(`My firewall is running PAN-OS ${v}. Am I affected by ${cve} (${title})? If so, what is the fix or workaround?`);
+  }
+
+  // Reflect firewall state on load (sets the hygiene "live" button visibility).
+  document.addEventListener('DOMContentLoaded', refreshFirewallStatus);
+</script>
 <script>
   window.addEventListener('beforeunload', function () {
     const token = window.__SHUTDOWN_TOKEN__ || '';

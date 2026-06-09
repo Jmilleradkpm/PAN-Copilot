@@ -14,6 +14,7 @@ Nothing about your firewall configs ever touches ADK Cyber's servers.
 
 import asyncio
 import base64
+import difflib
 import hashlib
 import hmac
 import json
@@ -216,7 +217,18 @@ _DEFAULT_SETTINGS = {
     "local_max_tokens": 8192,                         # max completion tokens sent to local server
     "local_temperature": 0.2,                         # generation temperature (OpenAI-compatible)
     "local_supports_vision": False,                   # enable only if the loaded model supports images
+    # Live read-only firewall connection (PAN-OS / Panorama XML API)
+    "fw_host":        "",                             # IP or hostname; empty = not connected
+    "fw_api_key":     "",                             # DPAPI-wrapped on disk (never plaintext)
+    "fw_verify_tls":  True,                           # firewalls often use self-signed certs
+    "fw_hostname":    "",                             # cached from `show system info`
+    "fw_model":       "",
+    "fw_sw_version":  "",                             # used for version-aware advisory matching
 }
+
+# Firewall settings the client may read back. fw_api_key is deliberately NOT here
+# so it is never returned to the frontend.
+_FW_PUBLIC_FIELDS = ("fw_host", "fw_verify_tls", "fw_hostname", "fw_model", "fw_sw_version")
 
 
 def _normalize_settings(data: dict) -> dict:
@@ -231,6 +243,10 @@ def _normalize_settings(data: dict) -> dict:
     cleaned["local_temperature"] = round(max(0.0, min(temp, 2.0)), 2)
     cleaned["local_truncate_config"] = bool(cleaned.get("local_truncate_config", True))
     cleaned["local_supports_vision"] = bool(cleaned.get("local_supports_vision", False))
+    cleaned["fw_host"] = str(cleaned.get("fw_host") or "").strip()
+    cleaned["fw_verify_tls"] = bool(cleaned.get("fw_verify_tls", True))
+    for f in ("fw_hostname", "fw_model", "fw_sw_version", "fw_api_key"):
+        cleaned[f] = str(cleaned.get(f) or "")
     return cleaned
 
 
@@ -248,12 +264,18 @@ def load_settings() -> dict:
             pass
     if out.get("chat_provider") not in _VALID_PROVIDERS:
         out["chat_provider"] = "cloud"
+    # The firewall API key is stored DPAPI-wrapped on disk — unwrap for runtime use.
+    if out.get("fw_api_key"):
+        out["fw_api_key"] = _unprotect_token(out["fw_api_key"])
     return _normalize_settings(out)
 
 
 def save_settings(data: dict):
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     cleaned = _normalize_settings(data)
+    # Never persist the firewall API key in plaintext — wrap with Windows DPAPI.
+    if cleaned.get("fw_api_key"):
+        cleaned["fw_api_key"] = _protect_token(cleaned["fw_api_key"])
     SETTINGS_FILE.write_text(json.dumps(cleaned, indent=2), encoding="utf-8")
     try:
         import stat
@@ -3096,12 +3118,20 @@ def _effective_provider(settings: dict, tier: Optional[str]) -> str:
     return "cloud" if pref not in _VALID_PROVIDERS else pref
 
 
+def _public_settings(settings: dict) -> dict:
+    """Settings safe to return to the frontend — never the firewall API key."""
+    out = dict(settings)
+    out.pop("fw_api_key", None)
+    out["fw_connected"] = bool(settings.get("fw_host") and settings.get("fw_api_key"))
+    return out
+
+
 @app.get("/api/settings")
 def get_settings():
     settings = load_settings()
     tier = _session_cache.get("tier")
     return {
-        "settings": settings,
+        "settings": _public_settings(settings),
         "tier": tier,
         "effective_provider": _effective_provider(settings, tier),
         # Tier-aware availability so the UI can grey out the cloud option for
@@ -3158,7 +3188,7 @@ def update_settings(req: SettingsPayload):
     save_settings(updated)
     return {
         "ok": True,
-        "settings": updated,
+        "settings": _public_settings(updated),
         "effective_provider": _effective_provider(updated, tier),
     }
 
@@ -3894,6 +3924,211 @@ def chat_stream(req: ChatRequest):
     )
 
 # ---------------------------------------------------------------------------
+# Live read-only firewall connection (PAN-OS / Panorama XML API)
+# ---------------------------------------------------------------------------
+# Everything here is read-only: keygen, operational show/test commands, and
+# config reads. The credentials used for keygen are never stored — only the
+# resulting API key, DPAPI-wrapped in settings.json. No commit/config-write
+# surface is exposed, by design.
+
+class FirewallConnectRequest(BaseModel):
+    host:       str
+    user:       str
+    password:   str
+    verify_tls: bool = True
+
+
+class FirewallOpRequest(BaseModel):
+    op_xml: str
+
+
+class FirewallTestRequest(BaseModel):
+    kind:   str            # security-policy-match | nat-policy-match | routing-fib-lookup
+    params: dict
+
+
+def _fw_client():
+    """Build a FirewallClient from saved settings, or raise 400 if not connected."""
+    from panos_api import FirewallClient
+    s = load_settings()
+    host, key = s.get("fw_host"), s.get("fw_api_key")
+    if not host or not key:
+        raise HTTPException(status_code=400, detail="Not connected to a firewall. Connect in Settings first.")
+    return FirewallClient(host, key, verify=bool(s.get("fw_verify_tls", True)))
+
+
+def _result_to_text(root) -> str:
+    """Serialize the <result> payload of a PAN-OS response to a readable string."""
+    res = root.find(".//result")
+    if res is None:
+        return ""
+    inner = (res.text or "").strip()
+    children = list(res)
+    if children:
+        inner += "".join(ET.tostring(c, encoding="unicode") for c in children)
+    return inner.strip()
+
+
+@app.post("/api/firewall/connect")
+def firewall_connect(req: FirewallConnectRequest):
+    from panos_api import FirewallClient, PanosError, generate_api_key, valid_host
+    if not valid_host(req.host):
+        raise HTTPException(status_code=400, detail="Invalid host. Use an IP or hostname (no scheme/path).")
+    try:
+        key = generate_api_key(req.host, req.user, req.password, verify=req.verify_tls)
+    except PanosError as e:
+        raise HTTPException(status_code=401, detail=f"Firewall rejected the credentials: {e}")
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Could not reach the firewall: {e}")
+
+    info = {}
+    try:
+        info = FirewallClient(req.host, key, verify=req.verify_tls).system_info()
+    except Exception as e:
+        logger.warning("Connected but system_info failed: %s", e)
+
+    s = load_settings()
+    s.update({
+        "fw_host": req.host.strip(),
+        "fw_api_key": key,
+        "fw_verify_tls": bool(req.verify_tls),
+        "fw_hostname": info.get("hostname", ""),
+        "fw_model": info.get("model", ""),
+        "fw_sw_version": info.get("sw-version", ""),
+    })
+    save_settings(s)
+    return {"ok": True, "connected": True,
+            "hostname": info.get("hostname", ""), "model": info.get("model", ""),
+            "sw_version": info.get("sw-version", ""), "host": req.host.strip()}
+
+
+@app.get("/api/firewall/status")
+def firewall_status():
+    s = load_settings()
+    return {
+        "connected": bool(s.get("fw_host") and s.get("fw_api_key")),
+        "host": s.get("fw_host", ""),
+        "hostname": s.get("fw_hostname", ""),
+        "model": s.get("fw_model", ""),
+        "sw_version": s.get("fw_sw_version", ""),
+        "verify_tls": bool(s.get("fw_verify_tls", True)),
+    }
+
+
+@app.post("/api/firewall/disconnect")
+def firewall_disconnect():
+    s = load_settings()
+    for f in ("fw_host", "fw_api_key", "fw_hostname", "fw_model", "fw_sw_version"):
+        s[f] = ""
+    save_settings(s)
+    return {"ok": True, "connected": False}
+
+
+@app.post("/api/firewall/op")
+def firewall_op(req: FirewallOpRequest):
+    """Run a read-only operational command. Whitelisted to <show>/<test> only."""
+    cmd = (req.op_xml or "").strip()
+    if not (cmd.startswith("<show") or cmd.startswith("<test")):
+        raise HTTPException(status_code=400, detail="Only <show> and <test> operational commands are allowed.")
+    from panos_api import PanosError
+    fw = _fw_client()
+    try:
+        root = fw.op(cmd)
+    except PanosError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Firewall request failed: {e}")
+    return {"ok": True, "result": _result_to_text(root)}
+
+
+@app.post("/api/firewall/test")
+def firewall_test(req: FirewallTestRequest):
+    """Build a PAN-OS `test` command; run it live if a firewall is connected."""
+    from panos_api import PanosError
+    from panos_api import testcmd
+    try:
+        built = testcmd.build(req.kind, req.params or {})
+    except (ValueError, TypeError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    s = load_settings()
+    if not (s.get("fw_host") and s.get("fw_api_key")):
+        return {"ok": True, "ran": False, "cli": built["cli"], "op_xml": built["op_xml"]}
+
+    fw = _fw_client()
+    try:
+        root = fw.op(built["op_xml"])
+    except PanosError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Firewall request failed: {e}")
+    return {"ok": True, "ran": True, "cli": built["cli"], "result": _result_to_text(root)}
+
+
+@app.post("/api/firewall/commit-preview")
+def firewall_commit_preview():
+    """Read-only diff of candidate vs running config — 'what will this commit change?'
+
+    Fetches both configs and returns a unified diff. Does NOT commit anything.
+    """
+    from panos_api import PanosError
+    fw = _fw_client()
+    try:
+        candidate = _result_to_text(fw.get_config("/config", source="candidate"))
+        running   = _result_to_text(fw.get_config("/config", source="running"))
+    except PanosError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Firewall request failed: {e}")
+
+    diff = list(difflib.unified_diff(
+        running.splitlines(), candidate.splitlines(),
+        fromfile="running-config", tofile="candidate-config", lineterm="",
+    ))
+    added   = sum(1 for d in diff if d.startswith("+") and not d.startswith("+++"))
+    removed = sum(1 for d in diff if d.startswith("-") and not d.startswith("---"))
+    return {
+        "ok": True,
+        "has_changes": bool(diff),
+        "added": added,
+        "removed": removed,
+        "diff": "\n".join(diff[:4000]),  # cap payload size
+    }
+
+
+# ---------------------------------------------------------------------------
+# Config hygiene / best-practice checks (read-only, runs locally)
+# ---------------------------------------------------------------------------
+
+class ChecksRequest(BaseModel):
+    config_text: Optional[str] = None
+    source:      str = "paste"   # "paste" | "firewall"
+
+
+@app.post("/api/checks/run")
+def checks_run(req: ChecksRequest):
+    """Run PAN-OS security-policy hygiene checks on a pasted config or, when a
+    firewall is connected, on its live running config."""
+    from checks import run_checks
+
+    if req.source == "firewall":
+        from panos_api import PanosError
+        fw = _fw_client()
+        try:
+            text = _result_to_text(fw.get_config("/config", source="running"))
+        except PanosError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"Firewall request failed: {e}")
+    else:
+        text = req.config_text or ""
+        if not text.strip():
+            raise HTTPException(status_code=400, detail="No config provided. Paste a config or connect a firewall.")
+
+    return run_checks(text).to_dict()
+
+
+# ---------------------------------------------------------------------------
 # Auto-update
 # ---------------------------------------------------------------------------
 
@@ -4198,7 +4433,14 @@ async def get_advisories(force: int = 0):
             "ORDER BY pub_date DESC, seen_at DESC LIMIT ?",
             (_ADVISORY_DISPLAY_LIMIT,),
         ).fetchall()
-    return {"advisories": [dict(r) for r in rows]}
+    # Surface the connected device's PAN-OS version so the UI can show a
+    # "your device: vX.Y.Z" badge and offer an "Am I affected?" assessment.
+    s = load_settings()
+    return {
+        "advisories": [dict(r) for r in rows],
+        "device_version": s.get("fw_sw_version", ""),
+        "device_hostname": s.get("fw_hostname", ""),
+    }
 
 
 @app.post("/api/advisories/dismiss")

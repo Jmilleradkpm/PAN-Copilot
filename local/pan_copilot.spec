@@ -69,6 +69,14 @@ hidden_imports = [
     "httpcore",
     "httpx",
     "h11",
+    # Local feature packages imported lazily inside endpoint bodies — list them
+    # explicitly so PyInstaller bundles them even if static analysis misses the
+    # in-function imports.
+    "panos_api",
+    "panos_api.client",
+    "panos_api.testcmd",
+    "checks",
+    "checks.engine",
 ]
 
 a = Analysis(
