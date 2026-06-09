@@ -647,9 +647,7 @@ _KB_TRIGGER_MAP: dict = {
             "tls decryption",
             "ssl/tls decryption",
             "ssl forward proxy",
-            "forward proxy",
             "ssl inbound inspection",
-            "inbound inspection",
             "ssh proxy",
             # Policy/profile terminology
             "decryption profile",
@@ -666,8 +664,6 @@ _KB_TRIGGER_MAP: dict = {
             "forward trust ca",
             "forward untrust",
             "incomplete chain",
-            "certificate chain",
-            "cert chain",
             # Failure modes
             "decryption failure",
             "decryption log",
@@ -691,15 +687,13 @@ _KB_TRIGGER_MAP: dict = {
             "quic bypass",
             "quic decrypt",
             "quic http",
-            "http/3",
-            "http3",
             # OCSP/CRL
             "ocsp firewall",
             "ocsp decryption",
             "crl firewall",
             "unknown certificate status",
-            # ECH / Encrypted ClientHello (v2.0)
-            "ech",
+            # ECH / Encrypted ClientHello (v2.0). Bare "ech" removed — matches
+            # "echo", "speech", "reach", "search", "fetch" as a substring.
             "encrypted clienthello",
             "encrypted client hello",
             "esni",
@@ -728,12 +722,10 @@ _KB_TRIGGER_MAP: dict = {
             "tls alert code",
             "packet capture decrypt",
             # HAR file diagnostics (v2.0)
-            "har file",
-            "har export",
-            "devtools network",
+            "har file decryption",
+            "har export decryption",
             # Escalation / TAC (v2.0)
             "tac case decryption",
-            "escalation checklist",
             "decryption escalation",
             # Baseline posture / what not to do (v2.0)
             "decryption best practice",
@@ -878,13 +870,10 @@ _KB_TRIGGER_MAP: dict = {
             "app-id unknown",
             "appid unknown",
             "app id unknown",
-            # App-ID general
-            "app-id",
-            "appid",
-            "app id classification",
-            "app-id classification",
-            "app-id engine",
-            "appid engine",
+            # App-ID general. Bare "app-id" / "appid" removed — this KB is
+            # specifically about unknown-tcp/unknown-udp and the custom App-ID
+            # lifecycle, not general App-ID introductions. Compound triggers
+            # below cover troubleshooting cases.
             "app-id lifecycle",
             "app-id not matching",
             "app-id mismatch",
@@ -988,10 +977,12 @@ _KB_TRIGGER_MAP: dict = {
         "kb_id": "KB-PAN-HA-001",
         "title": "HA Failover, Stuck-in-Initial-State, and HA Link Design on PAN-OS NGFW",
         "triggers": [
-            # HA general
-            "high availability",
-            "high-availability",
-            "failover",
+            # HA general. Bare "high availability" / "failover" removed —
+            # too broad (matches database/k8s/cloud HA discussions). Specific
+            # PAN/HA compound triggers below cover legitimate uses.
+            "pan high availability",
+            "panos high availability",
+            "firewall high availability",
             "firewall failover",
             "pan failover",
             "ha failover",
@@ -1401,16 +1392,17 @@ _KB_TRIGGER_MAP: dict = {
             "phase 2 selector",
             "proxy id 0.0.0.0",
             "0.0.0.0 proxy",
-            # IKE general
-            "ike",
+            # IKE general. Bare "ike" removed — substring matches "like",
+            # "bike", "spike", "alike", "unlike". Bare "phase 1"/"phase 2"
+            # removed — match project-management phase discussions.
             "ikev1",
             "ikev2",
             "ike phase 1",
             "ike phase 2",
             "ike sa",
             "ipsec sa",
-            "phase 1",
-            "phase 2",
+            "ipsec phase 1",
+            "ipsec phase 2",
             "ike negotiation",
             "ike mismatch",
             "ike version mismatch",
@@ -1540,8 +1532,10 @@ _KB_TRIGGER_MAP: dict = {
         "kb_id": "KB-PAN-MGMT-001",
         "title": "Panorama — Commit, Push & Management Plane Design",
         "triggers": [
-            # Core Panorama terms
-            "panorama",
+            # Core Panorama terms. Bare "panorama" removed — fires on
+            # standalone-firewall questions that mention Panorama only in
+            # passing or in negation ("not Panorama"). Compound triggers
+            # below cover real Panorama troubleshooting.
             "panorama commit",
             "panorama push",
             "panorama commit fail",
@@ -1566,10 +1560,6 @@ _KB_TRIGGER_MAP: dict = {
             "panorama in sync",
             "panorama not syncing",
             # Two-stage commit model
-            "two stage commit",
-            "two-stage commit",
-            "commit push",
-            "commit then push",
             "panorama push vs commit",
             "panorama commit vs push",
             "candidate config panorama",
@@ -1689,18 +1679,13 @@ _KB_TRIGGER_MAP: dict = {
             "panorama vm",
             "panorama virtual",
             "panorama ova",
-            # Commit locks
-            "commit lock",
-            "commit locks",
-            "configuration lock",
-            "config lock",
+            # Commit locks (Panorama-specific only — standalone firewall lock
+            # questions fall through to the model)
             "panorama lock",
             "panorama commit lock",
-            "locked commit",
             "panorama locked",
-            "who has commit lock",
-            "release commit lock",
-            "clear commit lock",
+            "panorama commit-lock",
+            "panorama config-lock",
             # Management plane / connectivity
             "panorama connectivity",
             "device not connected panorama",
@@ -1935,9 +1920,9 @@ _KB_TRIGGER_MAP: dict = {
             "wrong dataset name",
             "xdr dataset discovery",
             "xql autocomplete",
-            # Cloud Identity Engine
+            # Cloud Identity Engine. Bare "cie" removed — substring matches
+            # "specie", "ancient", "society", "agencies", "efficient".
             "cloud identity engine",
-            "cie",
             "cie activation",
             "cloud identity engine activation",
             "cie activate",
@@ -2537,9 +2522,11 @@ def _parse_kb_sections(content: str) -> list:
     return sections
 
 
-def _kb_relevant_sections(kb_entry: dict, message: str) -> str:
+def _kb_relevant_sections(kb_entry: dict, message: str) -> Optional[str]:
     """
-    Return only the sections of a KB article that are relevant to the question.
+    Return only the sections of a KB article that are relevant to the question,
+    or None when there is not enough signal to justify serving the article at all
+    (caller should fall through to the model instead of dumping the full KB).
 
     Algorithm:
       1. Tokenise the question into meaningful 3-char+ words (minus stopwords).
@@ -2547,23 +2534,23 @@ def _kb_relevant_sections(kb_entry: dict, message: str) -> str:
          in it (case-insensitive substring match — so "cert" matches "certificate").
       3. Threshold = max(2, 30% of the top section's score).
       4. Return all sections at or above the threshold.
-      5. Fall back to the full article when:
-         - No sections are parsed (shouldn't happen with current KB files)
+      5. Return None (fall through to model) when:
+         - No sections are parsed
          - No question words could be extracted (very short / single-word query)
-         - max_score ≤ 1 (single keyword hit — not enough signal to filter)
-         - No sections score above the threshold (no signal → return all)
-         - ≥ 70% of sections qualify (question is broad → return all)
+         - max_score ≤ 1 (only one keyword hit — likely a false-positive trigger)
+      6. Return the full article only when the question is clearly broad
+         (≥ 70% of sections qualify after threshold).
     """
     # Exclude preamble entries from scoring; keep only ## / ### content sections
     sections = [s for s in kb_entry.get("sections", []) if s["heading"] != "__preamble__"]
     if not sections:
-        return kb_entry["content"]
+        return None
 
     # Tokenise: lowercase alpha-numeric words ≥ 3 chars, not in stopwords
     raw_words = re.findall(r"[a-z][a-z0-9/.-]{2,}", message.lower())
     question_words = frozenset(w for w in raw_words if w not in _STOPWORDS)
     if not question_words:
-        return kb_entry["content"]
+        return None
 
     # Score: count unique question words found anywhere in the section text
     def _score(sec: dict) -> int:
@@ -2573,13 +2560,10 @@ def _kb_relevant_sections(kb_entry: dict, message: str) -> str:
     scored = [(sec, _score(sec)) for sec in sections]
     max_score = max(s for _, s in scored)
 
-    if max_score == 0:
-        return kb_entry["content"]
-
-    # A max score of 1 means only one keyword appeared once across all sections —
-    # not enough signal to meaningfully filter. Return the full article.
+    # Trigger fired but the question shares little vocabulary with the article —
+    # treat as a false-positive trigger match and let the model answer instead.
     if max_score <= 1:
-        return kb_entry["content"]
+        return None
 
     threshold = max(2, int(max_score * 0.30))
     relevant = [sec for sec, s in scored if s >= threshold]
@@ -2589,9 +2573,7 @@ def _kb_relevant_sections(kb_entry: dict, message: str) -> str:
         return kb_entry["content"]
 
     if not relevant:
-        # No sections cleared the threshold — not enough signal to pick sections.
-        # Return the full article rather than an arbitrary single section.
-        return kb_entry["content"]
+        return None
 
     return "\n\n---\n\n".join(sec["body"] for sec in relevant)
 
@@ -3676,15 +3658,17 @@ def chat_stream(req: ChatRequest):
         )
 
     # ── KB short-circuit ────────────────────────────────────────────────────
-    # If the user's question matches a local KB article, serve it directly.
-    # No Anthropic API call, no quota consumed, no latency. Skip when the user
-    # pasted screenshots — the question can't be answered from a text KB alone.
-    kb_entry = None if req.images else _kb_match(req.message)
-    if kb_entry:
+    # If the user's question matches a local KB article AND shares meaningful
+    # vocabulary with it, serve it directly — no Anthropic call, no quota, no
+    # latency. When a trigger fires but the article is a poor match for the
+    # actual question (false-positive trigger), fall through to the model
+    # instead of dumping an unrelated article into the response.
+    # Skip entirely when the user pasted screenshots — text KB can't answer.
+    kb_entry        = None if req.images else _kb_match(req.message)
+    relevant_content = _kb_relevant_sections(kb_entry, req.message) if kb_entry else None
+    if kb_entry and relevant_content:
         conv_id = get_or_create_conversation(req.conversation_id)
 
-        # Extract only the sections relevant to this specific question
-        relevant_content = _kb_relevant_sections(kb_entry, req.message)
         kb_response = (
             f"📚 *{kb_entry['kb_id']} · Local knowledge base · 0 tokens used*\n\n"
             "---\n\n"
