@@ -46,10 +46,21 @@ logger = logging.getLogger("pan_copilot_license")
 # ---------------------------------------------------------------------------
 # Config from environment variables
 # ---------------------------------------------------------------------------
-ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
-SECRET_PEPPER     = os.environ.get("SECRET_PEPPER", "change-me-in-production")
-ADMIN_TOKEN       = os.environ.get("ADMIN_TOKEN", "")
-LS_WEBHOOK_SECRET = os.environ.get("LS_WEBHOOK_SECRET", "")
+ANTHROPIC_API_KEY     = os.environ.get("ANTHROPIC_API_KEY", "")
+ANTHROPIC_KEY_VERSION = os.environ.get("ANTHROPIC_KEY_VERSION", "1")
+SECRET_PEPPER         = os.environ.get("SECRET_PEPPER", "change-me-in-production")
+ADMIN_TOKEN           = os.environ.get("ADMIN_TOKEN", "")
+LS_WEBHOOK_SECRET     = os.environ.get("LS_WEBHOOK_SECRET", "")
+
+# Number of trusted reverse-proxy hops in front of this app. On Render there is
+# exactly one (the platform LB), so the real client IP is the value the trusted
+# proxy appended, counted from the RIGHT of X-Forwarded-For. The leftmost XFF
+# entry is client-controlled and must never be trusted for rate limiting.
+TRUSTED_PROXY_HOPS = int(os.environ.get("TRUSTED_PROXY_HOPS", "1"))
+
+# If a single account pulls the shared Anthropic key from more distinct IPs than
+# this within a period, log a CRITICAL anomaly (possible key extraction/sharing).
+KEY_DELIVERY_IP_THRESHOLD = int(os.environ.get("KEY_DELIVERY_IP_THRESHOLD", "5"))
 
 # Startup warnings for unset critical secrets
 if SECRET_PEPPER == "change-me-in-production":
@@ -112,9 +123,18 @@ def encrypt_api_key(api_key: str, session_token: str) -> Optional[str]:
 # Rate limiter
 # ---------------------------------------------------------------------------
 def _real_ip(request: Request) -> str:
+    """Best-effort real client IP for rate limiting.
+
+    Picks the IP `TRUSTED_PROXY_HOPS` from the right of X-Forwarded-For — i.e.
+    the address our trusted proxy actually observed — rather than the spoofable
+    leftmost entry. Falls back to the socket peer when no header is present.
+    """
     forwarded = request.headers.get("X-Forwarded-For")
     if forwarded:
-        return forwarded.split(",")[0].strip()
+        parts = [p.strip() for p in forwarded.split(",") if p.strip()]
+        if parts:
+            idx = max(0, len(parts) - TRUSTED_PROXY_HOPS)
+            return parts[idx]
     return request.client.host if request.client else "unknown"
 
 limiter = Limiter(key_func=_real_ip)
@@ -151,11 +171,21 @@ TIER_LIMITS = {
 # ---------------------------------------------------------------------------
 # Database
 # ---------------------------------------------------------------------------
-DB_PATH = Path(os.environ.get("DB_PATH", "/tmp/license_server.db"))
+_DB_PATH_RAW = os.environ.get("DB_PATH", "data/license_server.db")
+DB_PATH = Path(_DB_PATH_RAW)
 
-if str(DB_PATH).startswith("/tmp"):
+# A /tmp database is wiped on every Render restart, taking all accounts with it.
+# Fail loud in production rather than silently losing user data. Check the raw
+# string (Path mangles "/tmp" → "\tmp" on Windows dev machines).
+if _DB_PATH_RAW.startswith("/tmp"):
+    if os.environ.get("RENDER") and os.environ.get("ALLOW_EPHEMERAL_DB") != "1":
+        raise RuntimeError(
+            "DB_PATH points at /tmp on Render — accounts would be lost on every "
+            "restart. Mount a persistent disk and set DB_PATH to a path on it "
+            "(or set ALLOW_EPHEMERAL_DB=1 to override for throwaway environments)."
+        )
     logger.warning(
-        "DB_PATH is /tmp — data will be lost on every Render restart. "
+        "DB_PATH is /tmp — data will be lost on every restart. "
         "Set DB_PATH to a persistent volume path in production."
     )
 
@@ -190,8 +220,14 @@ def init_db():
                 count      INTEGER NOT NULL DEFAULT 0,
                 PRIMARY KEY (user_id, period_key)
             );
+            CREATE TABLE IF NOT EXISTS key_deliveries (
+                user_id      TEXT NOT NULL,
+                ip           TEXT NOT NULL,
+                delivered_at TEXT NOT NULL
+            );
             CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
             CREATE INDEX IF NOT EXISTS idx_qc_user      ON query_counts(user_id);
+            CREATE INDEX IF NOT EXISTS idx_kd_user      ON key_deliveries(user_id);
         """)
         db.commit()
 
@@ -223,6 +259,36 @@ def get_user_by_token(token: str) -> Optional[sqlite3.Row]:
             JOIN users u ON s.user_id = u.id
             WHERE s.token = ? AND s.expires_at > ?
         """, (token, now_iso())).fetchone()
+
+def record_key_delivery(user_id: str, ip: str) -> None:
+    """Audit every delivery of the shared Anthropic key and flag anomalies.
+
+    The key is shared across paid clients and is extractable from any client
+    that holds its own session token, so we can't cryptographically stop a user
+    from using it directly. What we CAN do is detect abnormal fan-out: if one
+    account pulls the key from many distinct IPs in a period, log a CRITICAL so
+    an operator can investigate / rotate (set a new ANTHROPIC_API_KEY and bump
+    ANTHROPIC_KEY_VERSION). The per-user quota counter remains the hard cap.
+    """
+    pk = month_start()
+    with get_db() as db:
+        db.execute(
+            "INSERT INTO key_deliveries (user_id, ip, delivered_at) VALUES (?,?,?)",
+            (user_id, ip, now_iso()),
+        )
+        db.commit()
+        distinct_ips = db.execute(
+            "SELECT COUNT(DISTINCT ip) AS n FROM key_deliveries "
+            "WHERE user_id = ? AND delivered_at >= ?",
+            (user_id, pk),
+        ).fetchone()["n"]
+    if distinct_ips > KEY_DELIVERY_IP_THRESHOLD:
+        logger.critical(
+            "Key-delivery anomaly: user %s pulled the API key from %d distinct "
+            "IPs this month (threshold %d). Latest IP: %s. Consider rotating.",
+            user_id, distinct_ips, KEY_DELIVERY_IP_THRESHOLD, ip,
+        )
+
 
 def get_query_count(user_id: str, tier: str) -> int:
     pk = period_key(tier)
@@ -279,7 +345,6 @@ app.add_middleware(
     allow_origins=[
         "http://127.0.0.1",
         "http://localhost",
-        "null",
     ],
     allow_origin_regex=r"http://(127\.0\.0\.1|localhost)(:\d+)?",
     allow_methods=["POST", "GET"],
@@ -341,6 +406,8 @@ def register(request: Request, req: AuthRequest):
     new_user = {"id": user_id, "email": email, "tier": "free", "seats_allowed": 1}
     payload = usage_response(new_user, queries_used=0, session_token=token)
     payload["token"] = token
+    if payload.get("anthropic_key"):
+        record_key_delivery(user_id, _real_ip(request))
     return payload
 
 
@@ -379,6 +446,8 @@ def login(request: Request, req: AuthRequest):
 
     payload = usage_response(user, session_token=token)
     payload["token"] = token
+    if payload.get("anthropic_key"):
+        record_key_delivery(user["id"], _real_ip(request))
     return payload
 
 
@@ -390,6 +459,8 @@ def validate_token(request: Request, req: TokenRequest):
         raise HTTPException(status_code=401, detail="Session expired or invalid. Please log in again.")
     payload = usage_response(user, session_token=req.token)
     payload["valid"] = True
+    if payload.get("anthropic_key"):
+        record_key_delivery(user["id"], _real_ip(request))
     return payload
 
 # ---------------------------------------------------------------------------
@@ -571,6 +642,7 @@ def health():
     return {
         "status": "ok",
         "version": "2.1.0",
+        "key_version": ANTHROPIC_KEY_VERSION,
         "limits": {
             "free_weekly": FREE_WEEKLY_LIMIT,
             "pro_monthly": PRO_MONTHLY_LIMIT,

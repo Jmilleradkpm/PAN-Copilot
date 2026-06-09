@@ -11,8 +11,13 @@ local/build_working/
 local/dist_working/
 local/PAN_Copilot_working.zip
 .venv/
+.venv-test/
 venv/
 env/
+
+# License server local DB dir (DB_PATH default)
+license_server/data/
+data/
 
 # Secrets — NEVER commit these
 PAN_Copilot_Master_System_Prompt.md

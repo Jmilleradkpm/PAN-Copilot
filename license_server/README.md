@@ -1,53 +1,82 @@
 # PAN Copilot — License Server
 
-Lightweight Railway service that handles user accounts, session tokens, and
-weekly query counting for the free tier.
+Lightweight FastAPI auth + quota service deployed to **Render** (`render.yaml`).
+Handles user accounts, session tokens, query counting against tier limits, and
+delivery of the (encrypted) shared Anthropic key to authenticated clients.
 
-## Environment variables (set in Railway dashboard)
+> Firewall configs, PAN-OS output, and chat content **never** pass through here —
+> only email + session token. That privacy boundary is intentional.
 
-| Variable | Description |
-|---|---|
-| `ANTHROPIC_API_KEY` | ADK Cyber's Anthropic key — returned to authenticated users |
-| `SECRET_PEPPER` | Random secret used when hashing passwords (generate once, never change) |
-| `ADMIN_TOKEN` | Secret token for the `/admin/*` endpoints |
-| `DB_PATH` | Path to SQLite file (default: `/data/license_server.db`) — use Railway volume |
+## Environment variables
 
-## Deploy steps
+| Variable | Required | Default | Purpose |
+|---|---|---|---|
+| `ANTHROPIC_API_KEY` | yes | — | Shared key delivered (encrypted) to paid clients. |
+| `SECRET_PEPPER` | yes | `change-me-in-production` | Pepper for legacy SHA-256 hashes; set a real value. |
+| `LS_WEBHOOK_SECRET` | yes | — | HMAC secret for the Lemon Squeezy webhook. If unset, the webhook rejects everything. |
+| `ADMIN_TOKEN` | recommended | — | Bearer token for `/admin/*`. If unset, admin endpoints are disabled. |
+| `DB_PATH` | **prod** | `data/license_server.db` | SQLite path. **Must not be under `/tmp`** in production (data is wiped on restart). Point at a mounted persistent disk. |
+| `TRUSTED_PROXY_HOPS` | no | `1` | Reverse-proxy hops in front of the app. The client IP used for rate limiting is taken this many entries from the right of `X-Forwarded-For` — never the spoofable leftmost. Render = `1`. |
+| `KEY_DELIVERY_IP_THRESHOLD` | no | `5` | If one account pulls the API key from more distinct IPs than this per month, a `CRITICAL` anomaly is logged. |
+| `ANTHROPIC_KEY_VERSION` | no | `1` | Reported by `/health`; bump it whenever you rotate the key. |
+| `ALLOW_EPHEMERAL_DB` | no | — | Set to `1` to allow a `/tmp` DB on Render (throwaway envs only). |
 
-1. Push this directory to a GitHub repo (or a subfolder with Railway monorepo)
-2. Create a new Railway project → Deploy from GitHub
-3. Add a Railway Volume mounted at `/data`
-4. Set the four environment variables above
-5. Railway auto-detects `Procfile` and starts the server
+## Persisting the database (Render)
+
+By default the SQLite file is ephemeral and lost on every restart/redeploy. To
+keep accounts, mount a disk and point `DB_PATH` at it: in `render.yaml`, uncomment
+the `disk:` block (requires a paid plan) and set `DB_PATH=/var/data/license_server.db`.
+On Render free tier there is no persistent disk — treat the DB as disposable.
+
+## Rotating the shared Anthropic key
+
+The key is shared across paid clients and is extractable by any client that holds
+its own session token, so rotation + monitoring (not encryption) is the real
+control:
+
+1. Issue a new Anthropic key; revoke the old once traffic has cut over.
+2. Update `ANTHROPIC_API_KEY` and bump `ANTHROPIC_KEY_VERSION`.
+3. Watch logs for `Key-delivery anomaly` lines (driven by `KEY_DELIVERY_IP_THRESHOLD`)
+   to spot one account fanning the key out across many IPs. The per-user quota
+   counter remains the hard spend cap.
 
 ## Tier management
 
-After a user pays (via Lemon Squeezy webhook or manually), upgrade their tier:
+`/admin/*` authenticates with an `Authorization: Bearer <ADMIN_TOKEN>` header:
 
 ```bash
-curl -X POST https://your-license-server.railway.app/admin/set-tier \
+curl -X POST https://pan-copilot.onrender.com/admin/set-tier \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"admin_token":"YOUR_ADMIN_TOKEN","email":"user@example.com","tier":"pro","seats_allowed":1}'
+  -d '{"email":"user@example.com","tier":"pro","seats_allowed":1}'
 ```
 
-Tiers: `free` | `pro` | `team`
-
-For team accounts, set `seats_allowed` to the number of seats purchased (e.g. 5).
+Tiers: `free` | `local` | `pro` | `max` | `owner`. For multi-seat accounts set
+`seats_allowed` accordingly.
 
 ## Endpoints
 
 | Method | Path | Description |
 |---|---|---|
-| POST | `/auth/register` | Create account → returns session token + Anthropic key |
-| POST | `/auth/login` | Login → returns session token + Anthropic key |
-| POST | `/auth/validate` | Validate session token, returns current tier + query count |
-| POST | `/query/check` | Check weekly limit (free) or validate (paid) before each query |
-| POST | `/admin/set-tier` | Upgrade/downgrade a user's tier |
-| GET | `/admin/users` | List all users (admin only) |
-| GET | `/health` | Health check |
+| POST | `/auth/register` | Create account → session token + encrypted key |
+| POST | `/auth/login` | Login → session token + encrypted key |
+| POST | `/auth/validate` | Validate token, return tier + query count |
+| POST | `/query/check` | Atomic check-and-count before each query |
+| POST | `/admin/set-tier` | Upgrade/downgrade a user's tier (admin) |
+| GET | `/admin/users` | List all users (admin) |
+| POST | `/webhook/lemonsqueezy` | Subscription lifecycle → tier changes (HMAC-verified) |
+| GET | `/health` | Health check (reports `key_version`) |
 
-## Lemon Squeezy webhook (future)
+## Local development
 
-When a subscription is created/renewed, Lemon Squeezy can POST to a webhook
-endpoint you add here. That endpoint calls `set-tier` automatically.
-For now, tier upgrades are done manually via `/admin/set-tier` after confirming payment.
+```bash
+cd license_server
+pip install -r requirements.txt
+DB_PATH=./dev.db SECRET_PEPPER=dev LS_WEBHOOK_SECRET=dev uvicorn app:app --reload --port 8001
+```
+
+## Tests
+
+```bash
+cd license_server && pytest
+```

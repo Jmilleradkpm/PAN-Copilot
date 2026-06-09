@@ -15,3 +15,25 @@ services:
         sync: false
       - key: LS_WEBHOOK_SECRET
         sync: false
+      # Persistence: with no disk the SQLite DB lives on the ephemeral filesystem
+      # and is wiped on every restart/redeploy. To persist accounts, uncomment the
+      # `disk:` block below and set DB_PATH to a path on the mounted disk
+      # (e.g. /var/data/license_server.db). DB_PATH must NOT be under /tmp.
+      - key: DB_PATH
+        sync: false
+      # One reverse-proxy hop in front of the app on Render (used for rate-limit
+      # client-IP detection). Override only if you add more proxies.
+      - key: TRUSTED_PROXY_HOPS
+        value: "1"
+      # Bumped on each Anthropic key rotation so /health reports the active version.
+      - key: ANTHROPIC_KEY_VERSION
+        value: "1"
+      # Distinct-IP fan-out per account/month above which a CRITICAL anomaly logs.
+      - key: KEY_DELIVERY_IP_THRESHOLD
+        value: "5"
+    # Uncomment to make the account database survive restarts (requires a paid
+    # Render plan that supports disks), then set DB_PATH to /var/data/...:
+    # disk:
+    #   name: license-data
+    #   mountPath: /var/data
+    #   sizeGB: 1

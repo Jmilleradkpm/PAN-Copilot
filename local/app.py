@@ -14,6 +14,7 @@ Nothing about your firewall configs ever touches ADK Cyber's servers.
 
 import asyncio
 import base64
+import hashlib
 import hmac
 import json
 import logging
@@ -106,7 +107,9 @@ except ImportError:
 
 def _decrypt_api_key(encrypted: str, session_token: str) -> Optional[str]:
     if not _CRYPTO_OK or not encrypted or not session_token:
-        return encrypted  # fallback: treat as plaintext
+        # Fail closed: never hand back ciphertext as if it were a usable key.
+        # `cryptography` is a hard dependency, so this only guards a broken env.
+        return None
     try:
         hkdf = _HKDF(
             algorithm=_crypto_hashes.SHA256(),
@@ -395,15 +398,17 @@ app = FastAPI(title="ADK Cyber AI", version="4.0.0")
 
 app.add_middleware(
     CORSMiddleware,
+    # Loopback only — the UI is served same-origin from 127.0.0.1:<port>.
+    # No "null" origin, no credentials (token auth rides in the request body,
+    # not cookies), and only the verbs/headers this app actually uses.
     allow_origins=[
         "http://localhost",
         "http://127.0.0.1",
-        "null",
     ],
     allow_origin_regex=r"http://(localhost|127\.0\.0\.1)(:\d+)?",
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "DELETE"],
+    allow_headers=["Content-Type", "Authorization"],
 )
 
 # ---------------------------------------------------------------------------
@@ -2890,18 +2895,25 @@ _SENSITIVE_XML_TAGS = (
     "phash", "password", "password-hash", "secret", "shared-secret",
     "pre-shared-key", "auth-key", "authentication-key", "api-key",
     "private-key", "passphrase", "bind-password", "community", "key",
+    # IPSec/IKE manual session keys + SNMPv3 auth/priv credentials
+    "esp-auth-key", "ah-auth-key", "auth-password", "priv-password",
+    "authpwd", "privpwd",
 )
 
 _CLI_SET_KEYWORDS = (
     "password", "secret", "pre-shared-key", "shared-secret",
     "auth-key", "authentication-key", "api-key", "passphrase",
     "bind-password", "community",
+    "esp-auth-key", "ah-auth-key", "auth-password", "priv-password",
+    "authpwd", "privpwd",
 )
 
 _CLI_DISPLAY_KEYWORDS = (
     "password", "secret", "shared-secret", "pre-shared-key",
     "auth-key", "authentication-key", "api-key", "passphrase",
     "bind-password", "community", "phash",
+    "esp-auth-key", "ah-auth-key", "auth-password", "priv-password",
+    "authpwd", "privpwd",
 )
 
 
@@ -3914,6 +3926,7 @@ def _fetch_update_info(force: bool = False) -> dict:
             "latest_version": latest,
             "update_available": _parse_version(latest) > _parse_version(APP_VERSION),
             "installer_url": installer_url,
+            "installer_sha256": (data.get("installer_sha256") or "").lower(),
         }
         _update_cache_ts = now
     except Exception:
@@ -3922,6 +3935,7 @@ def _fetch_update_info(force: bool = False) -> dict:
             "latest_version": APP_VERSION,
             "update_available": False,
             "installer_url": "",
+            "installer_sha256": "",
         }
         _update_cache_ts = now
     return _update_cache
@@ -3930,6 +3944,49 @@ def _fetch_update_info(force: bool = False) -> dict:
 @app.get("/api/version")
 def get_version(force: int = 0):
     return _fetch_update_info(force=bool(force))
+
+
+# Authenticode signer subject must contain this substring — the Azure Trusted
+# Signing cert is issued to ADK Cyber, so a swapped or unsigned binary fails.
+# Override via env if the verified cert subject differs (confirm the exact value
+# with: (Get-AuthenticodeSignature <signed.exe>).SignerCertificate.Subject).
+_EXPECTED_SIGNER_SUBSTR = os.environ.get("PAN_COPILOT_EXPECTED_SIGNER", "ADK Cyber")
+
+
+def _verify_installer(path: Path, expected_sha256: str) -> None:
+    """Fail-closed integrity check on a downloaded installer.
+
+    Raises ValueError if the file's SHA-256 doesn't match the (signed) manifest
+    value, or if its Authenticode signature isn't Valid and issued to ADK Cyber.
+    A compromised R2 manifest can't point clients at arbitrary code because the
+    signature check is independent of the manifest.
+    """
+    # 1. SHA-256 against the manifest (defense in depth; manifest is over TLS).
+    if expected_sha256:
+        actual = hashlib.sha256(path.read_bytes()).hexdigest().lower()
+        if not hmac.compare_digest(actual, expected_sha256):
+            raise ValueError(
+                f"installer SHA-256 mismatch (expected {expected_sha256[:12]}…, "
+                f"got {actual[:12]}…)"
+            )
+
+    # 2. Authenticode signature must be Valid AND issued to ADK Cyber.
+    ps = (
+        "$ErrorActionPreference='Stop';"
+        f"$s=Get-AuthenticodeSignature -LiteralPath '{path}';"
+        "if($s.Status -ne 'Valid'){Write-Output ('STATUS:'+$s.Status);exit 1};"
+        "Write-Output ('SUBJECT:'+$s.SignerCertificate.Subject)"
+    )
+    proc = subprocess.run(
+        ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
+        capture_output=True, text=True, timeout=60,
+    )
+    out = (proc.stdout or "").strip()
+    if proc.returncode != 0 or "SUBJECT:" not in out:
+        raise ValueError(f"Authenticode verification failed: {out or proc.stderr.strip()}")
+    subject = out.split("SUBJECT:", 1)[1]
+    if _EXPECTED_SIGNER_SUBSTR.lower() not in subject.lower():
+        raise ValueError(f"unexpected installer signer: {subject}")
 
 
 @app.post("/api/update")
@@ -3942,12 +3999,25 @@ def install_update():
         raise HTTPException(status_code=400, detail="Invalid installer source.")
 
     def _download_and_run():
+        tmp = None
         try:
             r = httpx.get(installer_url, timeout=180.0, follow_redirects=True)
             r.raise_for_status()
             version = info.get("latest_version", "update")
             tmp = Path(tempfile.gettempdir()) / f"PAN_Copilot_Setup_{version}.exe"
             tmp.write_bytes(r.content)
+
+            # Verify integrity BEFORE executing. Fail closed: a bad hash or an
+            # invalid/foreign signature means we delete the file and never run it.
+            try:
+                _verify_installer(tmp, info.get("installer_sha256", ""))
+            except Exception as verr:
+                logger.error("Refusing to run installer — verification failed: %s", verr)
+                try:
+                    tmp.unlink()
+                except OSError:
+                    pass
+                return
 
             # Launch installer first, then shut down this process so the installer
             # can overwrite all bundled files without hitting locked-file errors.

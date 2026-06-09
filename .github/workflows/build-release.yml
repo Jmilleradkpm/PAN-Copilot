@@ -210,13 +210,18 @@ jobs:
         run: |
           $version = "${{ inputs.version || github.ref_name }}"
           $ts      = (Get-Date -Format "yyyy-MM-ddTHH:mm:ssZ")
+          # Hash the SIGNED installer so the client can verify integrity before
+          # executing it (defense in depth alongside the Authenticode check).
+          $installer = "Output\PAN_Copilot_Setup_${version}.exe"
+          $sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $installer).Hash.ToLower()
           $json = [ordered]@{
-            version       = $version
-            released_at   = $ts
-            download_url  = "https://downloads.adkcyber.com/releases/${version}/PAN_Copilot_${version}.zip"
-            versioned_url = "https://downloads.adkcyber.com/releases/${version}/PAN_Copilot_${version}.zip"
-            installer_url = "https://downloads.adkcyber.com/releases/${version}/PAN_Copilot_Setup_${version}.exe"
-            min_app_version = "1.0.0"
+            version          = $version
+            released_at      = $ts
+            download_url     = "https://downloads.adkcyber.com/releases/${version}/PAN_Copilot_${version}.zip"
+            versioned_url    = "https://downloads.adkcyber.com/releases/${version}/PAN_Copilot_${version}.zip"
+            installer_url    = "https://downloads.adkcyber.com/releases/${version}/PAN_Copilot_Setup_${version}.exe"
+            installer_sha256 = $sha256
+            min_app_version  = "1.0.0"
           } | ConvertTo-Json -Depth 3
           Set-Content -Path "version.json" -Value $json -Encoding UTF8
           Write-Host $json
