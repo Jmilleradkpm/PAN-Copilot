@@ -49,7 +49,7 @@ import zipfile
 
 from fastapi import FastAPI, HTTPException, UploadFile, File, Request, Form
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, HTMLResponse, Response
+from fastapi.responses import StreamingResponse, HTMLResponse, Response, FileResponse, JSONResponse
 from pydantic import BaseModel, field_validator
 
 logger = logging.getLogger("pan_copilot")
@@ -4197,6 +4197,59 @@ def serve_frontend():
     inject = f'<script>window.__SHUTDOWN_TOKEN__="{SHUTDOWN_TOKEN}";</script>'
     html = html.replace("</head>", inject + "\n</head>", 1)
     return HTMLResponse(content=html, headers={"Content-Security-Policy": _CSP})
+
+
+# ---------------------------------------------------------------------------
+# Favicon + web manifest — needed for Edge --app mode to register a per-app
+# AUMID and show the real PAN Copilot icon in the Windows taskbar rather than
+# falling back to the generic msedge.exe icon.
+# ---------------------------------------------------------------------------
+_ICON_ICO     = _base() / "pan_copilot.ico"
+_ICON_PNG_256 = _base() / "pan_copilot_256.png"
+_ICON_PNG_192 = _base() / "pan_copilot_192.png"
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon_ico():
+    if _ICON_ICO.exists():
+        return FileResponse(_ICON_ICO, media_type="image/x-icon")
+    return Response(status_code=404)
+
+
+@app.get("/favicon-256.png", include_in_schema=False)
+def favicon_png_256():
+    if _ICON_PNG_256.exists():
+        return FileResponse(_ICON_PNG_256, media_type="image/png")
+    return Response(status_code=404)
+
+
+@app.get("/favicon-192.png", include_in_schema=False)
+def favicon_png_192():
+    if _ICON_PNG_192.exists():
+        return FileResponse(_ICON_PNG_192, media_type="image/png")
+    return Response(status_code=404)
+
+
+@app.get("/manifest.webmanifest", include_in_schema=False)
+def web_manifest():
+    return JSONResponse(
+        {
+            "name":             "ADK Cyber AI",
+            "short_name":       "ADK Cyber AI",
+            "start_url":        "/",
+            "scope":            "/",
+            "display":          "standalone",
+            "background_color": "#0d1117",
+            "theme_color":      "#00D4E4",
+            "icons": [
+                {"src": "/favicon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
+                {"src": "/favicon-256.png", "sizes": "256x256", "type": "image/png", "purpose": "any"},
+                {"src": "/favicon.ico",     "sizes": "16x16 24x24 32x32 48x48 64x64 128x128 256x256",
+                 "type": "image/x-icon"},
+            ],
+        },
+        media_type="application/manifest+json",
+    )
 
 
 # ---------------------------------------------------------------------------

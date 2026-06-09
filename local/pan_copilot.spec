@@ -22,6 +22,8 @@ datas = [
     # (source_path, dest_folder_inside_bundle)
     ("pan_copilot_desktop.html",                            "."),
     ("pan_copilot.ico",                                     "."),
+    ("pan_copilot_192.png",                                 "."),
+    ("pan_copilot_256.png",                                 "."),
     ("kb",                                                  "kb"),  # KB articles directory
 ]
 
