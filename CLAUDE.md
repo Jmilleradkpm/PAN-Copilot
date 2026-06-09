@@ -1,5 +1,7 @@
 # PAN Copilot — Project Intelligence
 
+> **Global engineering principles** in `~/.claude/CLAUDE.md` apply to all work in this repo — Karpathy's 4 core rules (ask don't assume · simplest first · surgical changes · flag uncertainty), plus ask-first / confirm-before-coding workflow. The project-specific guidance below layers on top.
+
 ## What This Project Is
 
 PAN Copilot is an AI assistant for Palo Alto Networks (PAN-OS) engineers built by Jack Miller (CISO, ADK Cyber). It runs as a native-looking Windows desktop app — a PyInstaller `.exe` that spins up a local FastAPI server and opens Microsoft Edge in `--app` mode (no URL bar, no tabs — indistinguishable from a native window). All firewall config data stays on the user's machine; only chat queries go to Anthropic.
