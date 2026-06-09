@@ -208,6 +208,26 @@ def main():
         except Exception:
             pass
 
+        # Rebrand the Edge --app window's taskbar identity. Without this,
+        # Windows groups the window under msedge.exe and shows the Edge
+        # icon. Setting AppUserModelID + RelaunchIconResource on the
+        # window's IPropertyStore makes Windows use our icon instead.
+        if sys.platform == "win32":
+            try:
+                from _taskbar_identity import apply_taskbar_identity
+                _exe_path = (
+                    sys.executable
+                    if getattr(sys, "frozen", False)
+                    else os.path.abspath(sys.argv[0])
+                )
+                threading.Thread(
+                    target=apply_taskbar_identity,
+                    args=(proc.pid, "ADKCyber.PANCopilot.1", _exe_path),
+                    daemon=True,
+                ).start()
+            except Exception:
+                pass
+
         proc.wait()
         _browser_lifetime = time.time() - _launch_time
 

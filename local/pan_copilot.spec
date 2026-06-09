@@ -46,6 +46,7 @@ for _name in [
 # Hidden imports that uvicorn/anyio need but PyInstaller misses
 hidden_imports = [
     "_prompt_key",  # AES key module written by CI; loaded via importlib at runtime
+    "_taskbar_identity",  # Windows AUMID rebrand for the Edge --app window
     "uvicorn.logging",
     "uvicorn.loops",
     "uvicorn.loops.auto",
