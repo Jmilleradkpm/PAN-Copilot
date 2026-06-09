@@ -237,7 +237,11 @@ def _normalize_settings(data: dict) -> dict:
     if cleaned["chat_provider"] not in _VALID_PROVIDERS:
         cleaned["chat_provider"] = "cloud"
     cleaned["local_history_turns"] = max(2, min(int(cleaned.get("local_history_turns") or 40), 400))
-    cleaned["local_context_tokens"] = max(4096, min(int(cleaned.get("local_context_tokens") or 32768), 200000))
+    # Upper bound matches the largest local-LLM windows commonly available
+    # today (Qwen2.5-1M, Llama-4-Scout-style 10M, etc). Setting this above
+    # what your server actually supports lets the server silently truncate
+    # — match it to your model's real num_ctx / context length.
+    cleaned["local_context_tokens"] = max(4096, min(int(cleaned.get("local_context_tokens") or 32768), 1_000_000))
     cleaned["local_max_tokens"] = max(256, min(int(cleaned.get("local_max_tokens") or 8192), 131072))
     temp = float(cleaned.get("local_temperature") if cleaned.get("local_temperature") is not None else 0.2)
     cleaned["local_temperature"] = round(max(0.0, min(temp, 2.0)), 2)
@@ -4181,11 +4185,14 @@ def get_version(force: int = 0):
     return _fetch_update_info(force=bool(force))
 
 
-# Authenticode signer subject must contain this substring — the Azure Trusted
-# Signing cert is issued to ADK Cyber, so a swapped or unsigned binary fails.
-# Override via env if the verified cert subject differs (confirm the exact value
-# with: (Get-AuthenticodeSignature <signed.exe>).SignerCertificate.Subject).
-_EXPECTED_SIGNER_SUBSTR = os.environ.get("PAN_COPILOT_EXPECTED_SIGNER", "ADK Cyber")
+# Authenticode signer subject must contain this substring. Verified against the
+# v2.0 R2 release: CN=Adirondack CyberSecurity, O=Adirondack CyberSecurity, ...
+# Match on "Adirondack CyberSecurity" (the legal entity on the Azure Trusted
+# Signing cert) rather than the marketing name "ADK Cyber". Override via env if
+# the cert is ever reissued under a different subject.
+_EXPECTED_SIGNER_SUBSTR = os.environ.get(
+    "PAN_COPILOT_EXPECTED_SIGNER", "Adirondack CyberSecurity"
+)
 
 
 def _verify_installer(path: Path, expected_sha256: str) -> None:
