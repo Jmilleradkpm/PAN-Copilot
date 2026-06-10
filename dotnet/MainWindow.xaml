@@ -1,0 +1,10 @@
+<Window x:Class="PanCopilot.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:wv2="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"
+        Title="ADK Cyber AI" Height="780" Width="1100"
+        Background="#0d1117">
+    <Grid>
+        <wv2:WebView2 x:Name="WebView" />
+    </Grid>
+</Window>

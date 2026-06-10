@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <RootNamespace>PanCopilot</RootNamespace>
+    <AssemblyName>PAN Copilot</AssemblyName>
+    <ApplicationIcon>pan_copilot.ico</ApplicationIcon>
+    <Version>3.0.0</Version>
+    <Company>Adirondack CyberSecurity</Company>
+    <Product>ADK Cyber AI</Product>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.3967.48" />
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="10.0.9" />
+  </ItemGroup>
+
+  <!-- The test project lives in a subfolder; keep its sources out of the app. -->
+  <ItemGroup>
+    <Compile Remove="PanCopilot.Tests\**" />
+    <Content Remove="PanCopilot.Tests\**" />
+    <None Remove="PanCopilot.Tests\**" />
+    <EmbeddedResource Remove="PanCopilot.Tests\**" />
+  </ItemGroup>
+
+  <!-- Copy the HTML/JS/CSS frontend next to the .exe so WebView2 can load it. -->
+  <ItemGroup>
+    <Content Include="Frontend\**\*.*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+</Project>
