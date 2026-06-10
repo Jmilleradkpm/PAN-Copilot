@@ -32,10 +32,9 @@ public partial class MainWindow : Window
             options: null);
         await WebView.EnsureCoreWebView2Async(env);
 
-        // System prompt: bundled next to the exe when present (CI injects it).
-        string? systemPrompt = null;
-        var promptPath = Path.Combine(AppContext.BaseDirectory, "PAN_Copilot_Master_System_Prompt.md");
-        if (File.Exists(promptPath)) systemPrompt = File.ReadAllText(promptPath);
+        // System prompt: AES-GCM-encrypted embedded resource decrypted in
+        // memory in release builds; plaintext file fallback in local dev.
+        var systemPrompt = SystemPromptLoader.Load();
 
         var session = new SessionState();
         var settings = new SettingsStore();

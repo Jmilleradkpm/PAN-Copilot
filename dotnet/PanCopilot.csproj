@@ -34,4 +34,11 @@
     </Content>
   </ItemGroup>
 
+  <!-- AES-GCM-encrypted master system prompt. CI's "Encrypt system prompt"
+       step writes this file before build; locally absent, in which case
+       SystemPromptLoader falls back to a plaintext .md next to the exe. -->
+  <ItemGroup Condition="Exists('Services\system_prompt.bin')">
+    <EmbeddedResource Include="Services\system_prompt.bin" />
+  </ItemGroup>
+
 </Project>
