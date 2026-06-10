@@ -1809,6 +1809,10 @@ async function init() {
   // Re-poll advisories every 10 min so a new HIGH/CRITICAL surfaces within
   // ~10 min of the next hourly backend fetch.
   setInterval(loadAdvisories, 10 * 60 * 1000);
+  // Re-check for new app versions every 30 min so the banner appears even
+  // for users who leave the app open for days. Server-side response is
+  // hourly-cached so this is cheap.
+  setInterval(checkForUpdate, 30 * 60 * 1000);
 }
 
 function hideUpdateBanner() {
@@ -2319,11 +2323,19 @@ async function installUpdate() {
   btn.disabled = true;
   msg.textContent = 'Downloading update — do not close this window…';
   try {
-    await fetch(`${API}/api/update`, { method: 'POST' });
-    // Server acknowledged the download. Poll /health until the server shuts
-    // itself down (after launching the installer), then close this window so
-    // the installer can overwrite all bundled files without lock conflicts.
-    msg.textContent = 'Installer launching — this window will close automatically…';
+    const r = await fetch(`${API}/api/update`, { method: 'POST' });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      btn.textContent = 'Update Now';
+      btn.disabled = false;
+      msg.textContent = 'Update failed: ' + (err.detail || r.statusText);
+      return;
+    }
+    // Backend has verified the download, extracted to a staging dir, and
+    // launched the swap-and-relaunch helper. Poll /health until the app
+    // shuts itself down, then close this window so the helper can finish
+    // the file copy without lock conflicts.
+    msg.textContent = 'Installing update — this window will close automatically…';
     _pollForUpdateShutdown();
   } catch (e) {
     btn.textContent = 'Update Now';

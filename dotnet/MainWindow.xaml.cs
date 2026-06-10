@@ -45,8 +45,17 @@ public partial class MainWindow : Window
         var kb = new KbService();
         var chat = new ChatService(session, settings, license, conversations, localLlm, kb, systemPrompt);
         var updates = new UpdateService();
-        // Exit via Dispatcher so the installer (already launched) can replace files.
-        Action exitApp = () => Dispatcher.Invoke(() => Application.Current.Shutdown());
+        // Exit defers ~1.5s so the in-flight /api/update HTTP response can
+        // flush back to the frontend (which then polls /health to detect that
+        // we've actually exited and closes the WebView2 window). Direct
+        // Application.Current.Shutdown() tears the host bridge down before
+        // the response serializes, and the frontend reports "Download failed"
+        // even though the update succeeded.
+        Action exitApp = () => Task.Run(async () =>
+        {
+            await Task.Delay(1500);
+            Dispatcher.Invoke(() => Application.Current.Shutdown());
+        });
         var router = new ApiRouter(session, settings, license, conversations, advisories, localLlm,
             chat, updates, exitApp, systemPrompt);
 
