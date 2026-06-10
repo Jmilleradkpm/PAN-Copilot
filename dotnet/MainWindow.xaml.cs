@@ -32,6 +32,12 @@ public partial class MainWindow : Window
             options: null);
         await WebView.EnsureCoreWebView2Async(env);
 
+        // First-run convenience: drop a Desktop + Start Menu shortcut so the
+        // portable zip user gets the same one-click experience the Inno
+        // Setup installer used to provide. No-ops on every subsequent
+        // launch. Wrapped in a safety try in case some host blocks COM.
+        try { ShortcutService.EnsureFirstRunShortcuts(); } catch { }
+
         // System prompt: AES-GCM-encrypted embedded resource decrypted in
         // memory in release builds; plaintext file fallback in local dev.
         var systemPrompt = SystemPromptLoader.Load();
