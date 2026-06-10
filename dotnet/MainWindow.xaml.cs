@@ -1,5 +1,6 @@
 using System.IO;
 using System.Windows;
+using Microsoft.Web.WebView2.Core;
 using PanCopilot.Bridge;
 using PanCopilot.Services;
 
@@ -17,7 +18,19 @@ public partial class MainWindow : Window
 
     private async void OnLoaded(object sender, RoutedEventArgs e)
     {
-        await WebView.EnsureCoreWebView2Async();
+        // WebView2 defaults its user-data folder to next-to-the-exe. When the
+        // app is installed to %ProgramFiles%, standard users can't write there,
+        // and WebView2 crashes the process with E_ACCESSDENIED at startup
+        // (v3.0 bug — caught after first install). Pin it under %LOCALAPPDATA%.
+        var userDataFolder = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "ADK Cyber AI", "WebView2");
+        Directory.CreateDirectory(userDataFolder);
+        var env = await CoreWebView2Environment.CreateAsync(
+            browserExecutableFolder: null,
+            userDataFolder: userDataFolder,
+            options: null);
+        await WebView.EnsureCoreWebView2Async(env);
 
         // System prompt: bundled next to the exe when present (CI injects it).
         string? systemPrompt = null;
