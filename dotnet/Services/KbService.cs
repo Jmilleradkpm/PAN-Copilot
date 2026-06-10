@@ -144,11 +144,21 @@ public sealed class KbService
     /// </summary>
     public string? RelevantSections(Entry entry, string message)
     {
+        var lower = message.ToLowerInvariant();
+
+        // Direct KB-ID reference (e.g. "kb-sec-uid-001" → KB-SEC-UID-001) — the
+        // user is naming the article by ID, so serve the full content. Skip the
+        // vocabulary threshold; sections almost never contain the literal ID
+        // string, which would otherwise drop max_score to 0 and the matcher
+        // would treat the trigger as a false positive.
+        if (!string.IsNullOrEmpty(entry.KbId) && lower.Contains(entry.KbId.ToLowerInvariant()))
+            return entry.Content;
+
         var sections = entry.Sections.Where(s => s.Heading != "__preamble__").ToList();
         if (sections.Count == 0) return null;
 
         var questionWords = new HashSet<string>();
-        foreach (Match m in WordRe.Matches(message.ToLowerInvariant()))
+        foreach (Match m in WordRe.Matches(lower))
             if (!Stopwords.Contains(m.Value)) questionWords.Add(m.Value);
         if (questionWords.Count == 0) return null;
 
