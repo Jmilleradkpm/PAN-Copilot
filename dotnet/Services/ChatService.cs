@@ -36,16 +36,18 @@ public sealed class ChatService
     private readonly LicenseClient _license;
     private readonly ConversationStore _conversations;
     private readonly LocalLlmService _localLlm;
+    private readonly KbService _kb;
     private readonly string? _systemPrompt;
 
     public ChatService(SessionState session, SettingsStore settings, LicenseClient license,
-        ConversationStore conversations, LocalLlmService localLlm, string? systemPrompt)
+        ConversationStore conversations, LocalLlmService localLlm, KbService kb, string? systemPrompt)
     {
         _session = session;
         _settings = settings;
         _license = license;
         _conversations = conversations;
         _localLlm = localLlm;
+        _kb = kb;
         _systemPrompt = systemPrompt;
     }
 
@@ -98,6 +100,38 @@ public sealed class ChatService
         var tier = _session.Tier ?? "free";
         var provider = EffectiveProvider();
         var configLen = configText.Length;
+
+        // ── KB short-circuit ─────────────────────────────────────────────
+        // Skip when images are attached (text KB can't answer about screenshots).
+        if (images is null or { Count: 0 })
+        {
+            var kbEntry = _kb.Match(message);
+            var kbContent = kbEntry != null ? _kb.RelevantSections(kbEntry, message) : null;
+            if (kbEntry != null && kbContent != null)
+            {
+                var kbConvId = _conversations.GetOrCreate(convIdReq);
+                var response = $"\U0001F4DA *{kbEntry.KbId} · Local knowledge base · 0 tokens used*\n\n---\n\n{kbContent}";
+                // Single token so the markdown renderer never sees a mid-row slice.
+                await emit(new JsonObject { ["type"] = "token", ["text"] = response });
+                _conversations.SaveMessages(kbConvId, message, response);
+                _conversations.AutoTitle(kbConvId, message);
+                await emit(new JsonObject
+                {
+                    ["type"] = "done",
+                    ["model"] = "local-kb",
+                    ["input_tokens"] = 0,
+                    ["output_tokens"] = 0,
+                    ["conversation_id"] = kbConvId,
+                    ["queries_used"] = _session.QueriesUsed,
+                    ["queries_limit"] = _session.QueriesLimit,
+                    ["queries_remaining"] = _session.QueriesRemaining,
+                    ["period"] = _session.Period,
+                    ["tier"] = _session.Tier,
+                    ["redactions"] = 0,
+                });
+                return;
+            }
+        }
 
         // ── cloud preflight: key + weighted quota ────────────────────────
         string? apiKey = null;

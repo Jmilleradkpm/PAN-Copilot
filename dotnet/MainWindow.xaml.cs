@@ -43,7 +43,8 @@ public partial class MainWindow : Window
         var conversations = new ConversationStore();
         var advisories = new AdvisoryService();
         var localLlm = new LocalLlmService();
-        var chat = new ChatService(session, settings, license, conversations, localLlm, systemPrompt);
+        var kb = new KbService();
+        var chat = new ChatService(session, settings, license, conversations, localLlm, kb, systemPrompt);
         var updates = new UpdateService();
         // Exit via Dispatcher so the installer (already launched) can replace files.
         Action exitApp = () => Dispatcher.Invoke(() => Application.Current.Shutdown());
