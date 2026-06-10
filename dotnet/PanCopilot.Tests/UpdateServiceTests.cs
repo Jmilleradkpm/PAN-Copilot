@@ -54,6 +54,26 @@ public class UpdateServiceTests
         finally { File.Delete(tmp); }
     }
 
+    // ── version-info cache shape (regression for v3.5–v3.7 "Invalid update
+    //    source" bug: GetVersionInfoAsync forgot to copy download_url /
+    //    zip_sha256 from version.json, so InstallUpdateAsync's prefix check
+    //    saw an empty string and rejected every update click) ──
+    [Fact]
+    public async Task GetVersionInfo_CarriesDownloadUrlAndZipSha()
+    {
+        var info = await new UpdateService().GetVersionInfoAsync(force: true);
+        Assert.True(info.ContainsKey("download_url"),
+            "version-info cache must expose download_url so InstallUpdateAsync can read it.");
+        Assert.True(info.ContainsKey("zip_sha256"),
+            "version-info cache must expose zip_sha256 so InstallUpdateAsync can verify the download.");
+        // If R2 is reachable and reporting v3.X, download_url should be a real
+        // adkcyber.com URL; if R2 is unreachable, the catch path still returns
+        // empty strings for both fields (so the keys exist but are blank).
+        var url = info["download_url"]?.GetValue<string>() ?? "";
+        if (!string.IsNullOrEmpty(url))
+            Assert.StartsWith("https://downloads.adkcyber.com/", url);
+    }
+
     [Fact]
     public void VerifyInstaller_RejectsForeignSigner()
     {

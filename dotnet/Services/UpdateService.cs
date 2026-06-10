@@ -53,27 +53,42 @@ public sealed class UpdateService
             var raw = await _http.GetStringAsync(VersionJsonUrl);
             using var doc = JsonDocument.Parse(raw);
             var root = doc.RootElement;
-            var latest = root.TryGetProperty("version", out var v) ? v.GetString() ?? CurrentVersion : CurrentVersion;
-            var installerUrl = root.TryGetProperty("installer_url", out var iu) ? iu.GetString() ?? "" : "";
-            var sha = root.TryGetProperty("installer_sha256", out var sh) ? (sh.GetString() ?? "").ToLowerInvariant() : "";
+            string Read(string field) =>
+                root.TryGetProperty(field, out var p) ? p.GetString() ?? "" : "";
+            var latest       = Read("version");
+            if (string.IsNullOrEmpty(latest)) latest = CurrentVersion;
+            var downloadUrl  = Read("download_url");
+            var zipSha       = Read("zip_sha256").ToLowerInvariant();
+            var installerUrl = Read("installer_url");
+            var installerSha = Read("installer_sha256").ToLowerInvariant();
             _cache = new JsonObject
             {
-                ["current_version"] = CurrentVersion,
-                ["latest_version"] = latest,
-                ["update_available"] = CompareVersions(latest, CurrentVersion) > 0,
-                ["installer_url"] = installerUrl,
-                ["installer_sha256"] = sha,
+                ["current_version"]   = CurrentVersion,
+                ["latest_version"]    = latest,
+                ["update_available"]  = CompareVersions(latest, CurrentVersion) > 0,
+                // Portable zip flow (v3.5+ InstallUpdateAsync reads these — they
+                // were missing in v3.5 and v3.7 of GetVersionInfoAsync, which is
+                // why every Update Now click failed with "Invalid update source"
+                // even when version.json had a valid download_url).
+                ["download_url"]      = downloadUrl,
+                ["zip_sha256"]        = zipSha,
+                // Kept for any older client still reading them; the new client
+                // only references download_url + zip_sha256 going forward.
+                ["installer_url"]     = installerUrl,
+                ["installer_sha256"]  = installerSha,
             };
         }
         catch
         {
             _cache = new JsonObject
             {
-                ["current_version"] = CurrentVersion,
-                ["latest_version"] = CurrentVersion,
-                ["update_available"] = false,
-                ["installer_url"] = "",
-                ["installer_sha256"] = "",
+                ["current_version"]   = CurrentVersion,
+                ["latest_version"]    = CurrentVersion,
+                ["update_available"]  = false,
+                ["download_url"]      = "",
+                ["zip_sha256"]        = "",
+                ["installer_url"]     = "",
+                ["installer_sha256"]  = "",
             };
         }
         _cacheAt = DateTime.UtcNow;
