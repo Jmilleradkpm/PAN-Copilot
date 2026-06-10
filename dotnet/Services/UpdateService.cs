@@ -101,41 +101,101 @@ public sealed class UpdateService
     }
 
     /// <summary>
-    /// POST /api/update. Downloads, verifies, launches the installer /SILENT,
-    /// then exits the app so the installer can replace files. Throws with a
-    /// user-readable message on any verification failure.
+    /// POST /api/update. Portable zip update flow (v3.5+): download zip,
+    /// verify SHA-256 against the manifest, extract to a staging folder,
+    /// verify Authenticode on the extracted PAN Copilot.exe, then launch a
+    /// helper script that waits for this process to exit, copies the staged
+    /// files over the install dir, and relaunches. Fail-closed at every step.
     /// </summary>
     public async Task InstallUpdateAsync(Action exitApp)
     {
         var info = await GetVersionInfoAsync(force: false);
         if (info["update_available"]?.GetValue<bool>() != true)
             throw new InvalidOperationException("No update available.");
-        var url = info["installer_url"]?.GetValue<string>() ?? "";
-        if (!url.StartsWith(RequiredUrlPrefix, StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException("Invalid installer source.");
+
+        var zipUrl = info["download_url"]?.GetValue<string>() ?? "";
+        if (!zipUrl.StartsWith(RequiredUrlPrefix, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Invalid update source.");
+        var expectedZipSha = (info["zip_sha256"]?.GetValue<string>() ?? "").ToLowerInvariant();
+        if (string.IsNullOrEmpty(expectedZipSha))
+            throw new InvalidOperationException("Manifest is missing zip_sha256 — refusing to update from unverifiable artifact.");
 
         var version = info["latest_version"]?.GetValue<string>() ?? "update";
-        var tmp = Path.Combine(Path.GetTempPath(), $"ADK_Cyber_AI_Setup_{version}.exe");
-        var bytes = await _http.GetByteArrayAsync(url);
-        await File.WriteAllBytesAsync(tmp, bytes);
+        var temp = Path.GetTempPath();
+        var zipPath = Path.Combine(temp, $"ADK_Cyber_AI_{version}.zip");
+        var stagingDir = Path.Combine(temp, $"ADK_Cyber_AI_{version}_staging");
+
+        // 1. Download
+        var bytes = await _http.GetByteArrayAsync(zipUrl);
+        await File.WriteAllBytesAsync(zipPath, bytes);
 
         try
         {
-            VerifyInstaller(tmp, info["installer_sha256"]?.GetValue<string>() ?? "");
+            // 2. Hash check against the TLS-served manifest
+            using (var fs = File.OpenRead(zipPath))
+            {
+                var actual = Convert.ToHexString(SHA256.HashData(fs)).ToLowerInvariant();
+                if (!CryptographicOperations.FixedTimeEquals(
+                        Convert.FromHexString(actual), Convert.FromHexString(expectedZipSha)))
+                    throw new InvalidOperationException(
+                        $"Update zip SHA-256 mismatch (expected {expectedZipSha[..Math.Min(12, expectedZipSha.Length)]}…).");
+            }
+
+            // 3. Extract to staging dir
+            if (Directory.Exists(stagingDir)) Directory.Delete(stagingDir, recursive: true);
+            Directory.CreateDirectory(stagingDir);
+            System.IO.Compression.ZipFile.ExtractToDirectory(zipPath, stagingDir);
+
+            // 4. Authenticode on the extracted exe — must be "Adirondack
+            //    CyberSecurity". Reuses the same checker the installer flow
+            //    used; works on any signed file.
+            var stagedExe = Path.Combine(stagingDir, "PAN Copilot.exe");
+            if (!File.Exists(stagedExe))
+                throw new InvalidOperationException("Update zip is missing PAN Copilot.exe — refusing to install.");
+            VerifyInstaller(stagedExe, "");  // hash check skipped (already done on the zip); only Authenticode runs
         }
         catch
         {
-            try { File.Delete(tmp); } catch { }
+            try { File.Delete(zipPath); } catch { }
+            try { if (Directory.Exists(stagingDir)) Directory.Delete(stagingDir, recursive: true); } catch { }
             throw;
         }
 
+        // 5. Write the swap-and-relaunch helper. Runs as the same user (no
+        //    UAC needed for %LOCALAPPDATA%\Programs\... where portable installs
+        //    live). Waits for this process to exit before touching files.
+        var installDir = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar);
+        var helperPath = Path.Combine(temp, $"adk_update_{version}.ps1");
+        var helperLog = Path.Combine(temp, $"adk_update_{version}.log");
+        var pid = Environment.ProcessId;
+        var helperScript = string.Join("\n", new[]
+        {
+            "$ErrorActionPreference = 'Continue'",
+            $"$log = '{helperLog.Replace("'", "''")}'",
+            $"$src = '{stagingDir.Replace("'", "''")}'",
+            $"$dst = '{installDir.Replace("'", "''")}'",
+            $"$zip = '{zipPath.Replace("'", "''")}'",
+            "\"[$(Get-Date -Format HH:mm:ss)] waiting for old app to exit\" | Out-File $log -Encoding UTF8",
+            $"for ($i=0; $i -lt 60 -and (Get-Process -Id {pid} -ErrorAction SilentlyContinue); $i++) {{ Start-Sleep -Milliseconds 500 }}",
+            $"Get-Process -Id {pid} -ErrorAction SilentlyContinue | Stop-Process -Force",
+            "\"[$(Get-Date -Format HH:mm:ss)] copying staged files\" | Out-File $log -Append -Encoding UTF8",
+            "Copy-Item -Path (Join-Path $src '*') -Destination $dst -Recurse -Force",
+            "\"[$(Get-Date -Format HH:mm:ss)] cleaning up\" | Out-File $log -Append -Encoding UTF8",
+            "Remove-Item -Path $src -Recurse -Force -ErrorAction SilentlyContinue",
+            "Remove-Item -Path $zip -Force -ErrorAction SilentlyContinue",
+            "\"[$(Get-Date -Format HH:mm:ss)] relaunching\" | Out-File $log -Append -Encoding UTF8",
+            "Start-Process -FilePath (Join-Path $dst 'PAN Copilot.exe')",
+        });
+        await File.WriteAllTextAsync(helperPath, helperScript);
+
         Process.Start(new ProcessStartInfo
         {
-            FileName = tmp,
-            Arguments = "/SILENT /FORCECLOSEAPPLICATIONS",
-            UseShellExecute = true,
+            FileName = "powershell",
+            Arguments = $"-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"{helperPath}\"",
+            UseShellExecute = false,
+            CreateNoWindow = true,
         });
-        await Task.Delay(1200);
+        await Task.Delay(500);
         exitApp();
     }
 
