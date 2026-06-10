@@ -1873,7 +1873,47 @@ async function loadProviderSettings() {
     if (!res.ok) return;
     _providerState = await res.json();
     renderProviderUI();
+    // First-run auto-detect: most Windows users run LM Studio (port 1234) but
+    // the historical default is Ollama (port 11434). If the user has never
+    // configured a URL — or never touched the old Ollama default — probe both
+    // and silently fill in whichever responds. Fire-and-forget; if nothing
+    // answers, the existing fields stay empty and the user can set up later.
+    tryAutoDetectLocalLlm();
   } catch (e) { /* silent — defaults stay in place */ }
+}
+
+async function tryAutoDetectLocalLlm() {
+  const st = _providerState.settings || {};
+  const url   = (st.local_base_url || '').trim();
+  const model = (st.local_model    || '').trim();
+  const isUnconfigured = !url
+    || (url === 'http://localhost:11434/v1' && !model);  // shipped default + never picked a model
+  if (!isUnconfigured) return;
+  try {
+    const res = await fetch(`${API}/api/local_llm/detect`);
+    if (!res.ok) return;
+    const d = await res.json();
+    if (!d.detected) return;
+    // Fill the UI fields, then silently POST settings so subsequent launches
+    // don't re-probe. Don't go through saveProvider() — that one flashes a
+    // "Saving…" status the user shouldn't see for a fire-and-forget detect.
+    document.getElementById('local-base-url').value = d.base_url;
+    document.getElementById('local-model').value    = d.model || '';
+    const merged = { ...(_providerState.settings || {}), local_base_url: d.base_url, local_model: d.model || '' };
+    try {
+      const saveRes = await fetch(`${API}/api/settings`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify(merged),
+      });
+      if (saveRes.ok) {
+        const saved = await saveRes.json();
+        _providerState.settings = saved.settings;
+      }
+    } catch (e) { /* silent */ }
+    // Populate the dropdown so the user sees every available model on opening Settings.
+    refreshLocalModels();
+  } catch (e) { /* silent */ }
 }
 
 function renderProviderUI() {

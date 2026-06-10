@@ -91,6 +91,7 @@ public sealed class ApiRouter
                     body["api_key"]?.GetValue<string>())),
                 ("GET", "/api/local_llm/models") => Wrap(await _localLlm.ListModelsAsync(
                     query["base_url"] ?? "", query["api_key"])),
+                ("GET", "/api/local_llm/detect") => Json(200, await _localLlm.DetectAsync()),
                 ("POST", "/api/local_llm/context_estimate") => ContextEstimate(body),
 
                 // ── conversations ─────────────────────────────────────────

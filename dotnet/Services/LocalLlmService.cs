@@ -189,6 +189,89 @@ public sealed class LocalLlmService
         return chars / 4;
     }
 
+    // ─── Auto-detect a local OpenAI-compatible server on first launch ──────
+    // Probes the two ports almost every Windows local-LLM user has open:
+    //   1234  → LM Studio's "Local Server" tab (default — most common on Windows)
+    //   11434 → Ollama (default — most common on Linux/Mac, also Windows Ollama)
+    // Both are tried in parallel with a tight 2-second timeout. First one that
+    // returns a non-empty model list wins; LM Studio is checked first so it's
+    // the tiebreaker if both happen to be running.
+
+    private static readonly string[] _detectionCandidates =
+    {
+        "http://localhost:1234/v1",
+        "http://localhost:11434/v1",
+    };
+
+    /// <summary>
+    /// GET /api/local_llm/detect — try to find a running local LLM server.
+    /// Returns {detected, base_url, model, all_models} on success or
+    /// {detected:false} when nothing answers. Never throws.
+    /// </summary>
+    public async Task<JsonObject> DetectAsync()
+    {
+        var tasks = _detectionCandidates.Select(ProbeOneAsync).ToArray();
+        var results = await Task.WhenAll(tasks);
+        var hit = results.FirstOrDefault(r => r.models is { Count: > 0 });
+        if (hit.models is null)
+            return new JsonObject { ["detected"] = false };
+
+        var pick = PickDefaultModel(hit.models);
+        var arr = new JsonArray();
+        foreach (var m in hit.models) arr.Add(m);
+        return new JsonObject
+        {
+            ["detected"] = true,
+            ["base_url"] = hit.url,
+            ["model"] = pick,
+            ["all_models"] = arr,
+        };
+    }
+
+    private async Task<(string url, List<string>? models)> ProbeOneAsync(string baseUrl)
+    {
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+            using var req = new HttpRequestMessage(HttpMethod.Get, baseUrl + "/models");
+            using var resp = await _http.SendAsync(req, cts.Token);
+            if (!resp.IsSuccessStatusCode) return (baseUrl, null);
+            var text = await resp.Content.ReadAsStringAsync(cts.Token);
+            using var doc = JsonDocument.Parse(text);
+            var models = new List<string>();
+            if (doc.RootElement.TryGetProperty("data", out var data) && data.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var item in data.EnumerateArray())
+                {
+                    var id = item.ValueKind == JsonValueKind.Object
+                        ? (item.TryGetProperty("id", out var i) ? i.GetString()
+                           : item.TryGetProperty("name", out var n) ? n.GetString() : null)
+                        : item.ValueKind == JsonValueKind.String ? item.GetString() : null;
+                    if (!string.IsNullOrEmpty(id)) models.Add(id!);
+                }
+            }
+            return (baseUrl, models.Count > 0 ? models : null);
+        }
+        catch { return (baseUrl, null); }
+    }
+
+    /// <summary>
+    /// Pick the best default model for first-time auto-config: filter out
+    /// embedding-only models (they can't chat) and pick alphabetically.
+    /// Falls back to the first raw entry if every model looks like an embedder
+    /// (so the user still sees *something* in the dropdown).
+    /// </summary>
+    public static string PickDefaultModel(IEnumerable<string> models)
+    {
+        var list = models.Where(m => !string.IsNullOrEmpty(m)).ToList();
+        if (list.Count == 0) return "";
+        var chat = list
+            .Where(m => m.IndexOf("embed", StringComparison.OrdinalIgnoreCase) < 0)
+            .OrderBy(m => m, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        return chat.Count > 0 ? chat[0] : list[0];
+    }
+
     private static HttpRequestMessage NewReq(HttpMethod method, string url, string? apiKey)
     {
         var req = new HttpRequestMessage(method, url);
