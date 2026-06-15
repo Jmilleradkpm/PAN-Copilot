@@ -122,7 +122,24 @@ public sealed class UpdateService
     /// helper script that waits for this process to exit, copies the staged
     /// files over the install dir, and relaunches. Fail-closed at every step.
     /// </summary>
+    private static readonly SemaphoreSlim _updateGate = new(1, 1);
+
+    /// <summary>
+    /// Public entry point. Serializes update attempts: a second trigger
+    /// (double-clicked "Update Now", or a click overlapping the 30-min
+    /// auto-poll) is rejected rather than colliding with an in-flight download
+    /// on the shared temp path — that collision surfaced to the user as
+    /// "Access to the path ...zip is denied".
+    /// </summary>
     public async Task InstallUpdateAsync(Action exitApp)
+    {
+        if (!await _updateGate.WaitAsync(0))
+            throw new InvalidOperationException("An update is already in progress.");
+        try { await InstallUpdateCoreAsync(exitApp); }
+        finally { _updateGate.Release(); }
+    }
+
+    private async Task InstallUpdateCoreAsync(Action exitApp)
     {
         var info = await GetVersionInfoAsync(force: false);
         if (info["update_available"]?.GetValue<bool>() != true)
@@ -140,7 +157,12 @@ public sealed class UpdateService
         var zipPath = Path.Combine(temp, $"ADK_Cyber_AI_{version}.zip");
         var stagingDir = Path.Combine(temp, $"ADK_Cyber_AI_{version}_staging");
 
-        // 1. Download
+        // 1. Download. Clear any leftover artifacts from a prior interrupted
+        //    run first (a stale file on the shared path could otherwise read as
+        //    "access denied"), and sweep the old version zips Temp accumulates.
+        TryDeleteFile(zipPath);
+        if (Directory.Exists(stagingDir)) { try { Directory.Delete(stagingDir, recursive: true); } catch { } }
+        CleanupOldArtifacts(temp, zipPath);
         var bytes = await _http.GetByteArrayAsync(zipUrl);
         await File.WriteAllBytesAsync(zipPath, bytes);
 
@@ -212,6 +234,24 @@ public sealed class UpdateService
         });
         await Task.Delay(500);
         exitApp();
+    }
+
+    private static void TryDeleteFile(string path)
+    {
+        try { if (File.Exists(path)) File.Delete(path); } catch { }
+    }
+
+    /// <summary>Best-effort sweep of stale ADK_Cyber_AI_*.zip artifacts that past
+    /// updates left in Temp (~64 MB each). Never deletes the current download.</summary>
+    private static void CleanupOldArtifacts(string temp, string keepPath)
+    {
+        try
+        {
+            foreach (var f in Directory.EnumerateFiles(temp, "ADK_Cyber_AI_*.zip"))
+                if (!string.Equals(f, keepPath, StringComparison.OrdinalIgnoreCase))
+                    try { File.Delete(f); } catch { }
+        }
+        catch { }
     }
 
     /// <summary>Fail-closed integrity check: manifest SHA-256 + Authenticode signer.</summary>
