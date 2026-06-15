@@ -1,4 +1,5 @@
 using System.IO;
+using System.Reflection;
 using System.Security.Cryptography;
 using PanCopilot.Services;
 using Xunit;
@@ -92,5 +93,25 @@ public class UpdateServiceTests
             () => UpdateService.VerifyInstaller(signed, ""));
         Assert.True(ex.Message.Contains("Unexpected installer signer")
                     || ex.Message.Contains("Authenticode"));
+    }
+
+    // ── re-entrancy guard (regression for the "Access to the path ...zip is
+    //    denied" failure: two overlapping InstallUpdateAsync calls collided on
+    //    the shared temp download path). A second attempt while one is in
+    //    flight must fail fast, before any download. ──
+    [Fact]
+    public async Task InstallUpdate_RejectsConcurrentAttempt()
+    {
+        var gate = (System.Threading.SemaphoreSlim)typeof(UpdateService)
+            .GetField("_updateGate", BindingFlags.NonPublic | BindingFlags.Static)!
+            .GetValue(null)!;
+        await gate.WaitAsync();  // simulate an in-flight update holding the gate
+        try
+        {
+            var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+                () => new UpdateService().InstallUpdateAsync(() => { }));
+            Assert.Contains("already in progress", ex.Message);
+        }
+        finally { gate.Release(); }
     }
 }
