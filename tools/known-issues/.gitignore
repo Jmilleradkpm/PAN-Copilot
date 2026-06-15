@@ -1,0 +1,18 @@
+# Runtime artifacts and secrets — never commit these.
+# The pipeline generates these when run in place; only source belongs in git.
+.env
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+
+# Built data + state
+known_issues.db
+*.sqlite3
+knowledge_store.json
+ingest_state.json
+updater.log
+
+# Staged output and backups
+pending/
+backups/
