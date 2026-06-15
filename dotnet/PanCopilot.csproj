@@ -41,4 +41,12 @@
     <EmbeddedResource Include="Services\system_prompt.bin" />
   </ItemGroup>
 
+  <!-- Version-aware known-issues corpus, fetched in CI from R2 /data/ and
+       bundled next to the exe. Absent in dev/source -> lookup is inert. -->
+  <ItemGroup Condition="Exists('known_issues.json')">
+    <Content Include="known_issues.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
 </Project>
