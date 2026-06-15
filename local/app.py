@@ -77,6 +77,11 @@ SYSTEM_PROMPT_LOCAL_MD  = _base() / "PAN_Copilot_Master_System_Prompt_Local.md"
 SYSTEM_PROMPT_LOCAL_ENC = _base() / "PAN_Copilot_Master_System_Prompt_Local.md.enc"
 KB_DIR             = _base() / "kb"
 
+from known_issues import known_issues_context
+# Bundled runtime corpus for version-aware known-issues lookup (cloud path).
+# Built by tools/known-issues/; absent in dev -> lookup silently inactive.
+KNOWN_ISSUES_DB_PATH = Path(os.getenv("KNOWN_ISSUES_DB") or (_base() / "known_issues.db"))
+
 # ---------------------------------------------------------------------------
 # License server URL
 # ---------------------------------------------------------------------------
@@ -3818,6 +3823,12 @@ def chat_stream(req: ChatRequest):
         else:
             resolved_model = req.model
         system_prompt = SYSTEM_PROMPT
+        # Augment (cloud only) with version-aware known issues when the user
+        # names a running PAN-OS version + symptom. Fail-safe: returns "" when
+        # nothing applies, so the chat path is unaffected.
+        _ki_context = known_issues_context(req.message, KNOWN_ISSUES_DB_PATH)
+        if _ki_context:
+            system_prompt = SYSTEM_PROMPT + _ki_context
         provider_iter = _stream_anthropic(
             api_key    = api_key,
             model      = resolved_model,
