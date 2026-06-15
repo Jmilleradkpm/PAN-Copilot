@@ -132,6 +132,22 @@ jobs:
           (Get-Content "local/app.py") -replace 'APP_VERSION = ".*"', "APP_VERSION = `"$version`"" | Set-Content "local/app.py" -Encoding UTF8
           Write-Host "Injected APP_VERSION = $version"
 
+      # ── 5b. Fetch known-issues corpus ──────────────────────
+      # Published by the refresh-known-issues workflow. The spec bundles it next
+      # to the exe when present. Best-effort: build still succeeds if it is
+      # unavailable, and the known-issues lookup is inert (fail-safe by design).
+      - name: Fetch known-issues corpus
+        working-directory: local
+        shell: pwsh
+        run: |
+          try {
+            Invoke-WebRequest -Uri "https://downloads.adkcyber.com/data/known_issues.db" `
+              -OutFile "known_issues.db" -UseBasicParsing -TimeoutSec 60
+            Write-Host "Fetched known_issues.db ($('{0:N0}' -f ((Get-Item known_issues.db).Length / 1KB)) KB)"
+          } catch {
+            Write-Warning "known_issues.db unavailable ($($_.Exception.Message)) -- known-issues lookup will be inert in this build."
+          }
+
       # ── 6. Build ───────────────────────────────────────────
       - name: Build with PyInstaller
         working-directory: local

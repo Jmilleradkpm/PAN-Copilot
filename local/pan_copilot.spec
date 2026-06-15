@@ -43,6 +43,13 @@ for _name in [
         datas.append((str(_src), "."))
         print(f"[spec] bundling {_name}")
 
+# Version-aware known-issues corpus. CI fetches it into local/ before the build
+# (or drop it here for a dev build). app.py reads it from _base()/known_issues.db.
+# Absent -> the known-issues lookup is inert (fail-safe), build still works.
+if Path("known_issues.db").exists():
+    datas.append(("known_issues.db", "."))
+    print("[spec] bundling known_issues.db")
+
 # Hidden imports that uvicorn/anyio need but PyInstaller misses
 hidden_imports = [
     "_prompt_key",  # AES key module written by CI; loaded via importlib at runtime
