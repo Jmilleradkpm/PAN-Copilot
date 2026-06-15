@@ -49,7 +49,8 @@ public partial class MainWindow : Window
         var advisories = new AdvisoryService();
         var localLlm = new LocalLlmService();
         var kb = new KbService();
-        var chat = new ChatService(session, settings, license, conversations, localLlm, kb, systemPrompt);
+        var knownIssues = new KnownIssuesService();
+        var chat = new ChatService(session, settings, license, conversations, localLlm, kb, systemPrompt, knownIssues);
         var updates = new UpdateService();
         // Exit defers ~1.5s so the in-flight /api/update HTTP response can
         // flush back to the frontend (which then polls /health to detect that

@@ -38,9 +38,11 @@ public sealed class ChatService
     private readonly LocalLlmService _localLlm;
     private readonly KbService _kb;
     private readonly string? _systemPrompt;
+    private readonly KnownIssuesService? _knownIssues;
 
     public ChatService(SessionState session, SettingsStore settings, LicenseClient license,
-        ConversationStore conversations, LocalLlmService localLlm, KbService kb, string? systemPrompt)
+        ConversationStore conversations, LocalLlmService localLlm, KbService kb, string? systemPrompt,
+        KnownIssuesService? knownIssues = null)
     {
         _session = session;
         _settings = settings;
@@ -49,6 +51,7 @@ public sealed class ChatService
         _localLlm = localLlm;
         _kb = kb;
         _systemPrompt = systemPrompt;
+        _knownIssues = knownIssues;
     }
 
     public static string SelectModel(string message, string configText, string tier)
@@ -247,8 +250,14 @@ public sealed class ChatService
                 resolvedModel = model == "auto" ? SelectModel(msgClean, cfgClean, tier) : model;
                 if (nImages > 0 && resolvedModel == "claude-haiku-4-5-20251001")
                     resolvedModel = "claude-sonnet-4-6";
+                // Augment (cloud only) with version-aware known issues when the user
+                // names a running PAN-OS version + symptom. Fail-safe: "" when nothing
+                // applies, so the prompt is unchanged.
+                var sysPrompt = _systemPrompt;
+                var ki = _knownIssues?.BuildContext(msgClean);
+                if (!string.IsNullOrEmpty(ki)) sysPrompt = (_systemPrompt ?? "") + ki;
                 var client = new AnthropicClient(apiKey!);
-                var usage = await client.StreamMessageAsync(messages, resolvedModel, maxTokens, _systemPrompt,
+                var usage = await client.StreamMessageAsync(messages, resolvedModel, maxTokens, sysPrompt,
                     async text => { full.Append(text); await emit(new JsonObject { ["type"] = "token", ["text"] = text }); });
                 inputTokens = usage.InputTokens;
                 outputTokens = usage.OutputTokens;

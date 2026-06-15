@@ -105,6 +105,20 @@ jobs:
           $v = "${{ inputs.version }}".TrimStart('v')
           (Get-Content PanCopilot.csproj) -replace '<Version>.*?</Version>', "<Version>$v.0</Version>" | Set-Content PanCopilot.csproj
 
+      # Version-aware known-issues corpus, published by the refresh-known-issues
+      # workflow to R2 /data/. The csproj bundles it next to the exe when present.
+      # Best-effort: build still succeeds if unavailable; the lookup is then inert.
+      - name: Fetch known-issues corpus
+        shell: pwsh
+        run: |
+          try {
+            Invoke-WebRequest -Uri "https://downloads.adkcyber.com/data/known_issues.json" `
+              -OutFile "known_issues.json" -UseBasicParsing -TimeoutSec 60
+            Write-Host "Fetched known_issues.json ($('{0:N0}' -f ((Get-Item known_issues.json).Length / 1KB)) KB)"
+          } catch {
+            Write-Warning "known_issues.json unavailable ($($_.Exception.Message)) -- known-issues lookup will be inert in this build."
+          }
+
       - name: Publish (self-contained, single-file)
         shell: pwsh
         run: |
