@@ -1,0 +1,8 @@
+[
+  {
+    "name": "PAN PSIRT Advisories",
+    "type": "rss",
+    "url": "https://security.paloaltonetworks.com/rss.xml",
+    "category_hint": "security-advisory"
+  }
+]
