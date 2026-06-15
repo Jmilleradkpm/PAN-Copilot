@@ -8,6 +8,7 @@ __pycache__/
 
 # Built data + state
 known_issues.db
+known_issues.json
 *.sqlite3
 knowledge_store.json
 ingest_state.json

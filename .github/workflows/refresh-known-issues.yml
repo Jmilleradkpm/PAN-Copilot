@@ -1,0 +1,61 @@
+# ============================================================
+# Refresh the known-issues corpus and publish it to R2
+# ============================================================
+# Builds known_issues.db from PAN release-notes "Addressed Issues" pages
+# (base backfill — parser only, no API key), exports a flat known_issues.json
+# for the .NET app, and uploads BOTH to R2 under /data/. The desktop release
+# builds fetch these from https://downloads.adkcyber.com/data/ at build time.
+#
+# Runs weekly + on demand. Independent of the desktop release pipelines.
+#
+# Required GitHub Secrets (already present for the release workflow):
+#   CF_R2_ACCESS_KEY_ID / CF_R2_SECRET_ACCESS_KEY / CF_R2_ACCOUNT_ID / CF_R2_BUCKET
+# ============================================================
+name: Refresh known-issues corpus
+
+on:
+  schedule:
+    - cron: '17 6 * * 1'   # Mondays 06:17 UTC
+  workflow_dispatch: {}
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # Per ADKCyber policy, route package installs through Socket Firewall.
+      - name: Install Socket Firewall
+        run: npm install -g sfw
+
+      # Backfill is keyless and parser-only, so only the fetch+parse deps are
+      # needed (not anthropic/fastapi). Export uses the stdlib (sqlite3, json).
+      - name: Install pipeline deps (via Socket Firewall)
+        run: sfw pip install requests beautifulsoup4 python-dotenv
+
+      - name: Build known-issues DB (base backfill, no API key)
+        working-directory: tools/known-issues
+        run: python release_notes_ingest.py --backfill
+
+      - name: Export JSON for the .NET app
+        working-directory: tools/known-issues
+        run: python export_known_issues_json.py known_issues.json
+
+      - name: Upload corpus to Cloudflare R2
+        working-directory: tools/known-issues
+        env:
+          R2_ENDPOINT: "https://${{ secrets.CF_R2_ACCOUNT_ID }}.r2.cloudflarestorage.com"
+          BUCKET: ${{ secrets.CF_R2_BUCKET }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.CF_R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.CF_R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+        run: |
+          aws s3 cp known_issues.db "s3://$BUCKET/data/known_issues.db" \
+            --endpoint-url "$R2_ENDPOINT" --cache-control "no-cache"
+          aws s3 cp known_issues.json "s3://$BUCKET/data/known_issues.json" \
+            --endpoint-url "$R2_ENDPOINT" --content-type application/json --cache-control "no-cache"
+          echo "Published corpus to R2 /data/ (db + json)"
