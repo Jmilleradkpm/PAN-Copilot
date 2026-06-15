@@ -1,0 +1,143 @@
+!
+hostname ASA-Firewall
+domain-name example.com
+enable password encrypted_password
+username admin password encrypted_admin_pass privilege 15
+!
+interface GigabitEthernet0/0
+ nameif outside
+ security-level 0
+ ip address 203.0.113.1 255.255.255.0
+!
+interface GigabitEthernet0/1
+ nameif inside
+ security-level 100
+ ip address 192.168.1.1 255.255.255.0
+!
+interface GigabitEthernet0/2
+ nameif dmz
+ security-level 50
+ ip address 10.0.0.1 255.255.255.0
+!
+access-list outside_in extended permit tcp any host 203.0.113.10 eq 80
+access-list outside_in extended deny ip any any
+access-list inside_out extended permit ip any any
+!
+route outside 0.0.0.0 0.0.0.0 203.0.113.254
+route inside 192.168.2.0 255.255.255.0 192.168.1.254
+!
+nat (inside,outside) source static 192.168.1.10 203.0.113.10
+nat (inside,outside) source dynamic obj_inside interface
+!
+object network obj_inside
+ subnet 192.168.1.0 255.255.255.0
+!
+object network web_server
+ host 192.168.1.10
+!
+object service http_svc
+ service tcp destination eq 80
+!
+object-group network servers
+ network-object host 192.168.1.10
+ network-object host 192.168.1.11
+!
+object-group service web_services
+ service-object tcp destination eq 80
+ service-object tcp destination eq 443
+!
+crypto map mymap 1 set peer 198.51.100.1
+crypto map mymap 1 set ikev1 transform-set ESP-AES-128-SHA
+crypto map mymap interface outside
+!
+isakmp policy 1 authentication pre-share
+isakmp policy 1 encryption aes
+isakmp policy 1 hash sha
+isakmp policy 1 group 2
+isakmp policy 1 lifetime 86400
+!
+tunnel-group 198.51.100.1 type ipsec-l2l
+tunnel-group 198.51.100.1 ipsec-attributes
+ pre-shared-key mykey
+!
+access-group outside_in in interface outside
+access-group inside_out in interface inside
+!
+logging enable
+logging timestamp
+logging host inside 192.168.1.100
+!
+snmp-server host inside 192.168.1.100 community public
+snmp-server location "Data Center"
+!
+ntp server 192.168.1.200
+clock timezone EST -5
+!
+dhcpd address 192.168.1.100-192.168.1.200 inside
+dhcpd dns 8.8.8.8 8.8.4.4
+dhcpd enable inside
+!
+dns server-group DefaultDNS
+ name-server 8.8.8.8
+ name-server 8.8.4.4
+!
+banner motd "Welcome to ASA"
+!
+http server enable
+http 192.168.1.0 255.255.255.0 inside
+!
+ssh 192.168.1.0 255.255.255.0 inside
+ssh timeout 60
+!
+telnet 192.168.1.0 255.255.255.0 inside
+telnet timeout 10
+!
+icmp permit any inside
+icmp permit any dmz
+!
+mtu outside 1500
+mtu inside 1500
+mtu dmz 1500
+!
+class-map inspection_default
+ match default-inspection-traffic
+!
+policy-map type inspect dns preset_dns_map
+ parameters
+  message-length maximum 512
+policy-map global_policy
+ class inspection_default
+  inspect dns preset_dns_map
+  inspect ftp
+  inspect h323 h225
+  inspect h323 ras
+  inspect rsh
+  inspect rtsp
+  inspect esmtp
+  inspect sqlnet
+  inspect skinny
+  inspect sunrpc
+  inspect xdmcp
+  inspect sip
+  inspect netbios
+  inspect tftp
+  inspect ip-options
+!
+service-policy global_policy global
+!
+threat-detection basic-threat
+threat-detection statistics access-list
+!
+crypto ca trustpoint myca
+ enrollment terminal
+ subject-name CN=ASA
+!
+webvpn
+ enable outside
+!
+group-policy mypolicy internal
+group-policy mypolicy attributes
+ vpn-tunnel-protocol ikev1
+!
+dynamic-access-policy-record DfltAccessPolicy
+!

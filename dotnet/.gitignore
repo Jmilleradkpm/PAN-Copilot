@@ -1,0 +1,12 @@
+bin/
+obj/
+publish/
+*.user
+.vs/
+.idea/
+*.suo
+
+# Secrets — never commit
+PAN_Copilot_Master_System_Prompt.md
+Services/system_prompt.bin
+*.env

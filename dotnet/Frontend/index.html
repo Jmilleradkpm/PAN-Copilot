@@ -1,0 +1,3840 @@
+﻿<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>ADK Cyber AI — Local Desktop</title>
+  <script>
+  /* ── .NET bridge shim ────────────────────────────────────────────────
+     The Python build served this page from a localhost FastAPI server.
+     In the .NET build there is no HTTP server: this shim intercepts every
+     app fetch() and routes it to the WebView2 host bridge, synthesizing
+     Response objects (and an SSE stream for /chat/stream) so the rest of
+     this file runs unmodified. */
+  (function () {
+    window.__SHUTDOWN_TOKEN__ = window.__SHUTDOWN_TOKEN__ || '';
+    const hostObj = () => (window.chrome && chrome.webview && chrome.webview.hostObjects)
+        ? chrome.webview.hostObjects.host : null;
+
+    const streams = new Map();   // streamId → ReadableStream controller
+    if (window.chrome && chrome.webview) {
+      chrome.webview.addEventListener('message', (ev) => {
+        let d; try { d = typeof ev.data === 'string' ? JSON.parse(ev.data) : ev.data; } catch { return; }
+        if (!d || !d.streamId) return;
+        const ctl = streams.get(d.streamId);
+        if (!ctl) return;
+        if (d.eos) { try { ctl.close(); } catch (e) {} streams.delete(d.streamId); return; }
+        if (d.event) {
+          try { ctl.enqueue(new TextEncoder().encode('data: ' + JSON.stringify(d.event) + '\n\n')); } catch (e) {}
+        }
+      });
+    }
+
+    const API_PREFIXES = ['/api/', '/chat/', '/conversations', '/upload', '/health'];
+    const isAppPath = (p) => API_PREFIXES.some(x => p === x.replace(/\/$/, '') || p.startsWith(x));
+
+    const jsonResp = (status, obj) =>
+      new Response(JSON.stringify(obj), { status, headers: { 'Content-Type': 'application/json' } });
+
+    const realFetch = window.fetch.bind(window);
+    window.fetch = async function (input, init) {
+      const urlStr = typeof input === 'string' ? input : (input && input.url) || '';
+      let u;
+      try { u = new URL(urlStr, 'http://localhost/'); } catch (e) { return realFetch(input, init); }
+      const path = u.pathname;
+      if (!isAppPath(path)) return realFetch(input, init);
+
+      const method = ((init && init.method) || (typeof input !== 'string' && input.method) || 'GET').toUpperCase();
+      const host = hostObj();
+      if (!host) return jsonResp(503, { detail: 'Host bridge unavailable.' });
+
+      // chat stream → SSE synthesized from host postMessage events
+      if (path === '/chat/stream') {
+        const body = String((init && init.body) || '');
+        const streamId = 's' + Date.now() + '-' + Math.random().toString(36).slice(2);
+        const stream = new ReadableStream({
+          start(controller) {
+            streams.set(streamId, controller);
+            host.StreamChat(body, streamId).catch(err => {
+              try {
+                controller.enqueue(new TextEncoder().encode(
+                  'data: ' + JSON.stringify({ type: 'error', detail: String(err) }) + '\n\n'));
+                controller.close();
+              } catch (e) {}
+              streams.delete(streamId);
+            });
+          },
+          cancel() { streams.delete(streamId); },
+        });
+        return new Response(stream, { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+      }
+
+      // file upload → handled entirely client-side
+      if (path === '/upload' && method === 'POST') {
+        try {
+          const fd = init && init.body;
+          const file = fd && fd.get && fd.get('file');
+          if (!file) return jsonResp(400, { detail: 'No file provided.' });
+          const allowed = ['.txt', '.xml', '.log', '.cfg', '.conf'];
+          const dot = file.name.lastIndexOf('.');
+          const ext = dot >= 0 ? file.name.slice(dot).toLowerCase() : '';
+          if (!allowed.includes(ext))
+            return jsonResp(400, { detail: `Unsupported file type '${ext}'. Allowed: ${allowed.join(', ')}` });
+          if (file.size > 500000) return jsonResp(413, { detail: 'File too large. Max 500 KB.' });
+          const text = await file.text();
+          return jsonResp(200, { filename: file.name, size: file.size, text });
+        } catch (e) { return jsonResp(400, { detail: String(e) }); }
+      }
+
+      // migration: multipart FormData → JSON bridge (files read as text here)
+      if (path === '/api/migrate' || path === '/api/migrate/preview') {
+        try {
+          const fd = init && init.body;
+          if (!fd || !fd.get) return jsonResp(400, { detail: 'No config provided.' });
+          const cfg = fd.get('cisco_config');
+          if (!cfg) return jsonResp(400, { detail: 'No source config file.' });
+          const baseXmlFile = fd.get('base_xml');
+          const payload = {
+            config_text: await cfg.text(),
+            base_xml: baseXmlFile ? await baseXmlFile.text() : '',
+            vsys: fd.get('vsys') || 'vsys1',
+            mode: fd.get('mode') || 'firewall',
+            device_group: fd.get('device_group') || '',
+            source_vendor: fd.get('source_vendor') || 'auto',
+          };
+          const raw = await host.Api('POST', path, JSON.stringify(payload));
+          const wrapped = JSON.parse(raw);
+          if (path === '/api/migrate/preview' || wrapped.status !== 200)
+            return new Response(wrapped.body, { status: wrapped.status, headers: { 'Content-Type': 'application/json' } });
+          // download: server returned {zip_base64} → rebuild a ZIP Blob
+          const b64 = JSON.parse(wrapped.body).zip_base64 || '';
+          const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+          return new Response(new Blob([bytes], { type: 'application/zip' }), { status: 200 });
+        } catch (e) { return jsonResp(500, { detail: String(e) }); }
+      }
+
+      // everything else → virtual REST through the bridge
+      let bodyText = null;
+      if (init && init.body != null)
+        bodyText = typeof init.body === 'string' ? init.body : String(init.body);
+      const raw = await host.Api(method, path + (u.search || ''), bodyText);
+      const wrapped = JSON.parse(raw);
+      return new Response(wrapped.body, { status: wrapped.status, headers: { 'Content-Type': 'application/json' } });
+    };
+
+    // No server to notify on close — the window owns the process.
+    const realBeacon = navigator.sendBeacon ? navigator.sendBeacon.bind(navigator) : null;
+    navigator.sendBeacon = function (url, data) {
+      try { const u = new URL(url, 'http://localhost/'); if (isAppPath(u.pathname)) return true; } catch (e) {}
+      return realBeacon ? realBeacon(url, data) : false;
+    };
+  })();
+  </script>
+  <link rel="icon" type="image/x-icon" href="/favicon.ico">
+  <link rel="icon" type="image/png" sizes="192x192" href="/favicon-192.png">
+  <link rel="icon" type="image/png" sizes="256x256" href="/favicon-256.png">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <meta name="application-name" content="ADK Cyber AI">
+  <meta name="apple-mobile-web-app-title" content="ADK Cyber AI">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:          #0d1117;
+      --surface:     #161b22;
+      --surface2:    #1c2128;
+      --border:      #30363d;
+      --border-dim:  #21262d;
+      --accent:      #00D4E4;
+      --accent-hover:#00B4C2;
+      --accent-dim:  rgba(0,212,228,0.12);
+      --text:        #e6edf3;
+      --text-sub:    #8b949e;
+      --text-dim:    #484f58;
+      --user-bg:     #132337;
+      --user-border: #1f3a57;
+      --ai-bg:       #161b22;
+      --ai-border:   #30363d;
+      --code-bg:     #0d1117;
+      --code-border: #30363d;
+      --green:       #3fb950;
+      --yellow:      #d29922;
+      --nav-w:       220px;
+      --right-w:     280px;
+      --header-h:    52px;
+      --radius:      8px;
+    }
+
+    [data-theme="light"] {
+      --bg:          #f6f8fa;
+      --surface:     #ffffff;
+      --surface2:    #f0f2f5;
+      --border:      #d0d7de;
+      --border-dim:  #e4e8ec;
+      --accent:      #00B4C2;
+      --accent-hover:#009AA8;
+      --accent-dim:  rgba(0,212,228,0.10);
+      --text:        #1f2328;
+      --text-sub:    #57606a;
+      --text-dim:    #a8b1ba;
+      --user-bg:     #dbeafe;
+      --user-border: #93c5fd;
+      --ai-bg:       #ffffff;
+      --ai-border:   #d0d7de;
+      --code-bg:     #f6f8fa;
+      --code-border: #d0d7de;
+      --green:       #1a7f37;
+      --yellow:      #9a6700;
+    }
+    [data-theme="light"] .msg-content code { color: #0550ae; }
+    [data-theme="light"] .code-block pre   { color: #1f2328; }
+    [data-theme="light"] .nav-group-label  { color: #57606a; }
+
+    html, body {
+      height: 100%; background: var(--bg); color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      font-size: 14px; line-height: 1.6; overflow: hidden;
+    }
+
+    ::-webkit-scrollbar { width: 5px; height: 5px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+    /* ── Header ──────────────────────────────────────────────────── */
+    #header {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 200;
+      height: var(--header-h);
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; padding: 0 16px; gap: 10px;
+    }
+    .h-logo {
+      width: 28px; height: 28px; border-radius: 7px;
+      background: var(--accent);
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0;
+    }
+    .h-text-stack { display: flex; flex-direction: column; gap: 5px; }
+    .h-eyebrow { font-size: 9px; font-weight: 700; color: var(--accent); text-transform: uppercase; letter-spacing: 0.14em; line-height: 1; display: flex; align-items: center; gap: 5px; }
+    .h-beta { font-size: 8px; font-weight: 700; letter-spacing: 0.06em; background: rgba(0,212,228,0.12); color: var(--accent); border: 1px solid rgba(0,212,228,0.30); padding: 1px 5px; border-radius: 8px; text-transform: uppercase; }
+    .h-sub   { font-size: 12.5px; font-weight: 500; color: var(--text-sub); line-height: 1; }
+    .h-spacer { flex: 1; }
+
+    /* Local indicator */
+    #local-badge {
+      display: flex; align-items: center; gap: 5px;
+      font-size: 11px; color: var(--green);
+      padding: 4px 9px; border-radius: 20px;
+      background: rgba(63,185,80,0.08);
+      border: 1px solid rgba(63,185,80,0.2);
+    }
+    #local-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--green); }
+
+    /* Tier badge */
+    #tier-badge {
+      display: none; align-items: center; gap: 5px;
+      font-size: 11px; font-weight: 600;
+      padding: 4px 9px; border-radius: 20px;
+    }
+    #tier-badge.free {
+      color: var(--text-sub); background: var(--surface2); border: 1px solid var(--border);
+    }
+    #tier-badge.pro {
+      color: #c9a227; background: rgba(201,162,39,0.08); border: 1px solid rgba(201,162,39,0.3);
+    }
+    #tier-badge.max {
+      color: #5b9bd5; background: rgba(91,155,213,0.08); border: 1px solid rgba(91,155,213,0.3);
+    }
+
+    #theme-toggle {
+      background: var(--surface2); border: 1px solid var(--border-dim);
+      border-radius: 20px; color: var(--text-sub); cursor: pointer;
+      font-size: 12px; padding: 4px 10px;
+      display: flex; align-items: center; gap: 5px; transition: all 0.15s;
+    }
+    #theme-toggle:hover { border-color: var(--accent); color: var(--text); }
+
+    #settings-btn {
+      background: var(--surface2); border: 1px solid var(--border-dim);
+      border-radius: 20px; color: var(--text-sub); cursor: pointer;
+      font-size: 12px; padding: 4px 10px;
+      display: flex; align-items: center; gap: 5px; transition: all 0.15s;
+    }
+    #settings-btn:hover { border-color: var(--accent); color: var(--text); }
+
+    /* ── History dropdown ─────────────────────────────────────────── */
+    #history-wrap { position: relative; }
+    #history-btn {
+      background: var(--surface2); border: 1px solid var(--border-dim);
+      border-radius: 20px; color: var(--text-sub); cursor: pointer;
+      font-size: 12px; padding: 4px 10px;
+      display: flex; align-items: center; gap: 5px; transition: all 0.15s;
+    }
+    #history-btn:hover, #history-btn.open { border-color: var(--accent); color: var(--text); }
+    #history-drop {
+      position: absolute; top: calc(100% + 8px); right: 0;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      box-shadow: 0 8px 30px rgba(0,0,0,0.28);
+      width: 290px; max-height: 380px;
+      display: none; flex-direction: column;
+      z-index: 300; overflow: hidden;
+    }
+    #history-drop.open { display: flex; }
+    #history-drop-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 10px 12px 8px;
+      border-bottom: 1px solid var(--border-dim);
+      font-size: 11px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.08em; color: var(--text-dim);
+      flex-shrink: 0;
+    }
+    #history-drop-new {
+      background: var(--accent); color: #0a1520; border: none;
+      border-radius: 6px; padding: 3px 9px; font-size: 11px; font-weight: 600;
+      cursor: pointer; transition: background 0.15s;
+    }
+    #history-drop-new:hover { background: var(--accent-hover); }
+    #history-drop-list { overflow-y: auto; flex: 1; padding: 5px; }
+    .hdrop-item {
+      display: flex; align-items: center; gap: 6px;
+      padding: 7px 8px; border-radius: 6px; cursor: pointer;
+      transition: background 0.12s;
+    }
+    .hdrop-item:hover { background: var(--surface2); }
+    .hdrop-item.active { background: var(--accent-dim); }
+    .hdrop-title {
+      flex: 1; font-size: 12.5px; color: var(--text);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .hdrop-del {
+      background: none; border: none; color: var(--text-dim);
+      cursor: pointer; font-size: 12px; padding: 2px 5px;
+      border-radius: 4px; opacity: 0; transition: opacity 0.1s, color 0.1s;
+      flex-shrink: 0;
+    }
+    .hdrop-item:hover .hdrop-del { opacity: 1; }
+    .hdrop-del:hover { color: #f85149; }
+    #history-drop-empty {
+      color: var(--text-dim); font-size: 12px;
+      padding: 20px 12px; text-align: center;
+    }
+
+    /* ── 3-col layout ──────────────────────────────────────────── */
+    #app {
+      display: flex;
+      margin-top: var(--header-h);
+      height: calc(100vh - var(--header-h));
+    }
+
+    /* ── LEFT NAV ──────────────────────────────────────────────── */
+    #left-nav {
+      width: var(--nav-w); flex-shrink: 0;
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+      overflow-y: auto; overflow-x: hidden;
+      display: flex; flex-direction: column;
+    }
+    .nav-section { padding: 10px 8px 4px; }
+    .nav-group-label {
+      font-size: 10px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.08em; color: var(--text-dim);
+      padding: 6px 8px 4px; display: block;
+    }
+    .nav-item {
+      display: flex; align-items: center; gap: 8px;
+      padding: 7px 10px; border-radius: 6px; cursor: pointer;
+      font-size: 12.5px; color: var(--text-sub);
+      transition: all 0.12s; border: none; background: none;
+      width: 100%; text-align: left;
+    }
+    .nav-item:hover { background: var(--surface2); color: var(--text); }
+    .nav-item.active { background: var(--accent-dim); color: var(--accent); font-weight: 600; }
+    [data-theme="light"] .nav-item.active { background: rgba(0,212,228,0.10); }
+    .nav-icon { font-size: 14px; flex-shrink: 0; width: 18px; text-align: center; }
+    .nav-divider { height: 1px; background: var(--border-dim); margin: 6px 8px; }
+
+    /* ── KB header dropdown ─────────────────────────────────────────── */
+    .kb-hdr-sep {
+      color: var(--text-sub); font-size: 11px; opacity: 0.4;
+      margin: 0 6px; user-select: none; flex-shrink: 0;
+    }
+    #kb-dropdown-wrap { position: relative; display: inline-flex; align-items: center; flex-shrink: 0; }
+    @keyframes kb-glow-pulse {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(0,212,228,0.0); }
+      50%       { box-shadow: 0 0 0 3px rgba(0,212,228,0.18); }
+    }
+    #kb-dropdown-btn {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 5px 12px 5px 10px;
+      border: 1px solid var(--accent);
+      border-radius: 6px;
+      background: var(--accent-dim);
+      color: var(--accent);
+      font-size: 12px; font-weight: 600;
+      cursor: pointer; white-space: nowrap; font-family: inherit;
+      transition: background 0.15s, box-shadow 0.15s, color 0.15s;
+      animation: kb-glow-pulse 2.8s ease-in-out 4;
+    }
+    #kb-dropdown-btn:hover, #kb-dropdown-btn.open {
+      background: rgba(0,212,228,0.22);
+      box-shadow: 0 0 10px rgba(0,212,228,0.25);
+      color: var(--text);
+      animation: none;
+    }
+    #kb-dropdown-caret { font-size: 9px; transition: transform 0.15s; line-height: 1; }
+    #kb-dropdown-btn.open #kb-dropdown-caret { transform: rotate(180deg); }
+    #kb-dropdown-menu {
+      display: none; position: absolute; top: calc(100% + 6px); left: 0;
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+      min-width: 240px; z-index: 300; overflow: hidden; padding: 4px 0;
+    }
+    #kb-dropdown-menu.open { display: block; }
+    .kb-dd-item {
+      display: flex; align-items: flex-start; gap: 10px;
+      padding: 9px 14px; border: none; background: none;
+      width: 100%; text-align: left; cursor: pointer;
+      transition: background 0.1s; font-family: inherit;
+    }
+    .kb-dd-item:hover { background: var(--surface2); }
+    .kb-dd-item:hover .kb-dd-title { color: var(--accent); }
+    .kb-dd-icon { font-size: 13px; flex-shrink: 0; padding-top: 1px; }
+    .kb-dd-text { display: flex; flex-direction: column; gap: 2px; }
+    .kb-dd-title { font-size: 12px; color: var(--text); font-weight: 500; line-height: 1.35; transition: color 0.12s; }
+    .kb-dd-id { font-size: 9px; font-family: 'Consolas','Cascadia Code','Courier New',monospace;
+                color: var(--accent); letter-spacing: 0.05em; opacity: 0.7; }
+
+    /* ── CENTER CHAT ───────────────────────────────────────────── */
+    #center {
+      flex: 1; display: flex; flex-direction: column; overflow: hidden;
+      background: var(--bg); min-width: 0;
+    }
+
+    #context-bar {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 10px 20px; flex-shrink: 0;
+    }
+    #context-product {
+      display: flex; align-items: center; gap: 8px; margin-bottom: 8px;
+    }
+    #context-icon { font-size: 18px; }
+    #context-name { font-size: 14px; font-weight: 700; }
+    #context-desc { font-size: 11px; color: var(--text-sub); margin-left: 2px; }
+    #context-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+    .ctx-chip {
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: 20px; padding: 4px 12px;
+      font-size: 11.5px; color: var(--text-sub); cursor: pointer;
+      transition: all 0.12s; white-space: nowrap;
+    }
+    .ctx-chip:hover { border-color: var(--accent); color: var(--text); }
+
+    #messages {
+      flex: 1; overflow-y: auto; padding: 20px 0;
+      display: flex; flex-direction: column; gap: 0;
+    }
+    #welcome {
+      display: flex; flex-direction: column; align-items: center;
+      justify-content: center; flex: 1; padding: 40px 24px;
+      text-align: center; gap: 10px;
+    }
+    #welcome .w-logo {
+      width: 52px; height: 52px; border-radius: 13px; background: var(--accent);
+      display: flex; align-items: center; justify-content: center;
+      margin-bottom: 4px;
+    }
+    #welcome h2 { font-size: 20px; font-weight: 700; }
+    #welcome p  { color: var(--text-sub); max-width: 380px; font-size: 13px; }
+    #welcome .info-card {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      overflow: hidden;
+      margin-top: 14px;
+      max-width: 520px;
+      width: 100%;
+      text-align: left;
+    }
+    #welcome .info-row {
+      display: flex; gap: 9px; align-items: flex-start; padding: 8px 13px;
+    }
+    #welcome .info-privacy {
+      font-size: 11.5px; color: var(--green);
+      background: rgba(63,185,80,0.06);
+      border-bottom: 1px solid rgba(63,185,80,0.14);
+      align-items: center;
+    }
+    #welcome .info-tip {
+      font-size: 11.5px; color: var(--text-sub);
+      background: rgba(210,153,34,0.05);
+      line-height: 1.6;
+    }
+    #welcome .info-tip strong { color: var(--yellow); }
+    #welcome .info-tip code {
+      font-family: monospace; font-size: 0.9em;
+      background: rgba(210,153,34,0.12); color: var(--yellow);
+      padding: 1px 5px; border-radius: 4px;
+    }
+
+    .msg-row { padding: 5px 20px; display: flex; animation: fadeUp 0.18s ease; }
+    @keyframes fadeUp { from { opacity:0; transform:translateY(4px) } to { opacity:1; transform:none } }
+    .msg-row.user { justify-content: flex-end; }
+    .msg-bubble {
+      max-width: min(680px, 100%); border-radius: var(--radius);
+      padding: 12px 15px; line-height: 1.65;
+    }
+    .msg-row.user .msg-bubble {
+      background: var(--user-bg); border: 1px solid var(--user-border);
+      font-size: 13.5px; min-width: 160px; padding: 12px 15px;
+    }
+    .msg-row.user .msg-text { white-space: pre-wrap; }
+    .msg-row.assistant .msg-bubble {
+      background: var(--ai-bg); border: 1px solid var(--ai-border); width: 100%;
+    }
+    .msg-label {
+      font-size: 10px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.1em; margin-bottom: 7px; line-height: 1.2;
+    }
+    .msg-row.user .msg-label      { color: #5b9bd5; }
+    .msg-row.assistant .msg-label { color: var(--accent); }
+    .msg-content { font-size: 13.5px; }
+    .msg-content p { margin: 0 0 9px; }
+    .msg-content p:last-child { margin-bottom: 0; }
+    .msg-content strong { color: var(--text); font-weight: 600; }
+    .msg-content em { color: var(--yellow); font-style: normal; }
+    .msg-content ul, .msg-content ol { margin: 6px 0 9px 18px; }
+    .msg-content li { margin: 3px 0; }
+    .msg-content h1 { font-size: 17px; font-weight: 700; color: var(--text); margin: 20px 0 10px; padding-bottom: 7px; border-bottom: 1px solid var(--border); }
+    .msg-content h2 { font-size: 14.5px; font-weight: 700; color: var(--text); margin: 18px 0 7px; padding-bottom: 5px; border-bottom: 1px solid var(--border-dim); }
+    .msg-content h3 { font-size: 13.5px; font-weight: 700; color: var(--text); margin: 14px 0 6px; }
+    .msg-content h4 { font-size: 11.5px; font-weight: 700; color: var(--accent); margin: 11px 0 4px; text-transform: uppercase; letter-spacing: 0.07em; }
+    .msg-content hr { border: none; border-top: 1px solid var(--border-dim); margin: 16px 0; }
+    .msg-content blockquote {
+      border-left: 3px solid var(--accent); padding: 9px 14px;
+      margin: 12px 0; background: var(--accent-dim); border-radius: 0 6px 6px 0;
+      color: var(--text-sub); font-size: 13px; line-height: 1.6;
+    }
+    .msg-content blockquote strong { color: var(--text); }
+    /* Tables */
+    .msg-content .md-table-wrap { overflow-x: auto; margin: 12px 0 16px; border-radius: var(--radius); border: 1px solid var(--border); }
+    .msg-content .md-table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+    .msg-content .md-table th {
+      background: var(--surface2); color: var(--text); font-weight: 600;
+      padding: 8px 12px; border-bottom: 1px solid var(--border);
+      border-right: 1px solid var(--border-dim); text-align: left;
+      white-space: nowrap; font-size: 12px;
+    }
+    .msg-content .md-table th:last-child { border-right: none; }
+    .msg-content .md-table td {
+      padding: 7px 12px; border-bottom: 1px solid var(--border-dim);
+      border-right: 1px solid var(--border-dim); color: var(--text);
+      vertical-align: top; line-height: 1.5; font-size: 12.5px;
+    }
+    .msg-content .md-table td:last-child { border-right: none; }
+    .msg-content .md-table tr:last-child td { border-bottom: none; }
+    .msg-content .md-table tr:nth-child(even) td { background: rgba(255,255,255,0.025); }
+    [data-theme="light"] .msg-content .md-table tr:nth-child(even) td { background: rgba(0,0,0,0.025); }
+    /* Checklist items */
+    .msg-content li.checklist-item { list-style: none; margin-left: -4px; display: flex; align-items: flex-start; gap: 8px; }
+    .msg-content .checkbox {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 13px; height: 13px; min-width: 13px;
+      border: 1px solid var(--border); border-radius: 2px;
+      font-size: 9px; font-weight: 900; margin-top: 4px; flex-shrink: 0;
+    }
+    .msg-content .checkbox.checked { background: var(--accent); border-color: var(--accent); color: #0a1520; }
+    .msg-content code {
+      background: var(--code-bg); border: 1px solid var(--code-border);
+      border-radius: 3px; padding: 1px 5px;
+      font-family: 'Consolas','Cascadia Code','Courier New',monospace;
+      font-size: 11.5px; color: #79c0ff;
+    }
+    .code-block { background: var(--code-bg); border: 1px solid var(--code-border); border-radius: var(--radius); margin: 10px 0; overflow: hidden; }
+    .code-block-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 6px 13px; border-bottom: 1px solid var(--code-border);
+      background: var(--surface2);
+    }
+    .code-lang { font-size: 10px; color: var(--text-dim); font-family: monospace; text-transform: uppercase; letter-spacing: 0.05em; }
+    .copy-btn {
+      background: none; border: 1px solid var(--border); border-radius: 4px;
+      color: var(--text-sub); cursor: pointer; font-size: 11px; padding: 2px 8px;
+      transition: all 0.12s;
+    }
+    .copy-btn:hover  { border-color: var(--text-sub); color: var(--text); }
+    .copy-btn.copied { border-color: var(--green); color: var(--green); }
+    .code-block pre {
+      padding: 12px 14px; overflow-x: auto; margin: 0;
+      font-family: 'Consolas','Cascadia Code','Courier New',monospace;
+      font-size: 11.5px; line-height: 1.6; color: var(--text); white-space: pre;
+    }
+    .token-meta {
+      font-size: 10px; color: var(--text-dim); margin-top: 9px;
+      padding-top: 7px; border-top: 1px solid var(--border-dim);
+      display: flex; gap: 10px;
+    }
+    .cursor { display: inline-block; width: 2px; height: 13px; background: var(--accent); vertical-align: middle; margin-left: 2px; animation: blink 0.7s infinite; }
+    @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
+    .thinking-row { padding: 5px 20px; }
+    .thinking-bubble {
+      background: var(--ai-bg); border: 1px solid var(--ai-border);
+      border-radius: var(--radius); padding: 12px 15px;
+      display: flex; align-items: center; gap: 8px;
+    }
+    .dots { display: flex; gap: 4px; }
+    .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); opacity: 0.4; animation: dp 1.4s infinite; }
+    .dot:nth-child(2) { animation-delay: 0.2s; }
+    .dot:nth-child(3) { animation-delay: 0.4s; }
+    @keyframes dp { 0%,80%,100%{opacity:0.3;transform:scale(0.8)} 40%{opacity:1;transform:scale(1)} }
+
+    #input-bar {
+      padding: 12px 20px;
+      background: var(--bg); border-top: 1px solid var(--border-dim);
+    }
+    #input-wrap {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 10px; display: flex; align-items: flex-end;
+      padding: 9px 10px 9px 14px; gap: 8px; transition: border-color 0.15s;
+    }
+    #input-wrap:focus-within { border-color: var(--accent); }
+    #user-input {
+      flex: 1; background: none; border: none; color: var(--text);
+      font-family: inherit; font-size: 13.5px; line-height: 1.55;
+      resize: none; max-height: 160px; min-height: 22px; overflow-y: auto; padding: 0;
+    }
+    #user-input:focus { outline: none; }
+    #user-input::placeholder { color: var(--text-dim); }
+    #send-btn {
+      background: var(--accent); border: none; border-radius: 7px; color: #fff;
+      cursor: pointer; width: 32px; height: 32px;
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0; transition: background 0.15s;
+    }
+    #send-btn:hover:not(:disabled) { background: var(--accent-hover); }
+    #send-btn:disabled { background: var(--accent-dim); cursor: not-allowed; }
+    #input-hint { font-size: 11px; color: var(--text-dim); margin-top: 5px; padding: 0 2px; display: flex; justify-content: space-between; }
+
+    /* Pasted-image attachment strip (above composer + above config paste). */
+    .attach-strip {
+      display: none; flex-wrap: wrap; gap: 6px;
+      margin: 0 0 6px 0; padding: 0;
+    }
+    .attach-strip.has-items { display: flex; }
+    .attach-chip {
+      position: relative;
+      width: 56px; height: 56px; border-radius: 6px;
+      border: 1px solid var(--border); overflow: hidden;
+      background: var(--code-bg); flex-shrink: 0;
+    }
+    .attach-chip img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .attach-chip .attach-x {
+      position: absolute; top: 2px; right: 2px;
+      width: 16px; height: 16px; line-height: 14px; text-align: center;
+      border-radius: 50%; background: rgba(0,0,0,0.7); color: #fff;
+      border: none; cursor: pointer; font-size: 11px; font-weight: 700;
+      padding: 0;
+    }
+    .attach-chip .attach-x:hover { background: #f85149; }
+    .attach-chip .attach-size {
+      position: absolute; bottom: 0; left: 0; right: 0;
+      background: rgba(0,0,0,0.55); color: #fff;
+      font-size: 9px; text-align: center; padding: 1px 2px;
+      font-family: monospace;
+    }
+    /* Image thumbnails rendered inside a user-message bubble. */
+    .msg-attach-row { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+    .msg-attach-row img {
+      max-height: 120px; max-width: 180px; border-radius: 6px;
+      border: 1px solid var(--border); display: block; cursor: zoom-in;
+    }
+
+    /* ── RIGHT SIDEBAR ─────────────────────────────────────────── */
+    #right-sidebar {
+      width: var(--right-w); flex-shrink: 0;
+      background: var(--surface);
+      border-left: 1px solid var(--border);
+      display: flex; flex-direction: column;
+      overflow-x: hidden;
+      overflow-y: auto;
+      min-height: 0;
+    }
+    .rs-section { padding: 12px 12px 0; }
+    .rs-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-dim); margin-bottom: 7px; display: block; }
+    #new-chat-btn {
+      width: 100%; padding: 8px 12px; margin-bottom: 12px;
+      background: var(--accent); border: none; border-radius: var(--radius);
+      color: #fff; font-size: 12.5px; font-weight: 700; cursor: pointer;
+      display: flex; align-items: center; justify-content: center; gap: 6px;
+      transition: background 0.15s;
+    }
+    #new-chat-btn:hover { background: var(--accent-hover); }
+    .rs-divider { height: 1px; background: var(--border-dim); margin: 8px 12px; }
+
+    #conv-section { display:flex; flex-direction:column; gap:0; flex-shrink:0; }
+    #conv-list { display:flex; flex-direction:column; gap:2px; max-height:220px; overflow-y:auto; }
+    .conv-item {
+      align-items:center; border-radius:6px; cursor:pointer; display:flex;
+      gap:6px; padding:7px 8px; transition:background 0.12s;
+    }
+    .conv-item:hover { background:var(--code-bg); }
+    .conv-item.active { background:var(--code-bg); border-left:2px solid var(--accent); padding-left:6px; }
+    .conv-item-title {
+      color:var(--text); flex:1; font-size:12px; overflow:hidden;
+      text-overflow:ellipsis; white-space:nowrap;
+    }
+    .conv-item-del {
+      background:none; border:none; color:var(--text-dim); cursor:pointer;
+      font-size:13px; flex-shrink:0; line-height:1; opacity:0;
+      padding:1px 3px; transition:opacity 0.1s;
+    }
+    .conv-item:hover .conv-item-del { opacity:1; }
+    .conv-item-del:hover { color:#f85149; }
+    #conv-empty { color:var(--text-dim); font-size:12px; padding:8px 4px; }
+
+    /* Config paste area — flex-shrink so provider panel can scroll above it */
+    #config-section {
+      flex: 1 1 auto; min-height: 140px;
+      display: flex; flex-direction: column;
+      padding: 0 12px 10px; overflow: hidden;
+    }
+    #provider-section { flex-shrink: 0; }
+    #config-hint { font-size: 11px; color: var(--text-sub); margin-bottom: 7px; line-height: 1.5; }
+    #config-paste {
+      flex: 1; background: var(--code-bg); border: 1px solid var(--border);
+      border-radius: var(--radius); color: var(--text);
+      font-family: 'Consolas','Cascadia Code','Courier New',monospace;
+      font-size: 11px; padding: 9px 11px; resize: none; line-height: 1.55; min-height: 100px;
+    }
+    #config-paste:focus { outline: none; border-color: var(--accent); }
+    #config-paste::placeholder { color: var(--text-dim); }
+    #config-status { font-size: 11px; color: var(--text-dim); margin-top: 5px; min-height: 15px; }
+    #config-status.has { color: var(--yellow); }
+    #large-cfg-warn {
+      display: none; margin-top: 6px; font-size: 11px;
+      color: #c9a227; background: rgba(201,162,39,0.08);
+      border: 1px solid rgba(201,162,39,0.25);
+      border-radius: 5px; padding: 5px 9px; line-height: 1.5;
+    }
+    #free-tier-info {
+      display: none; margin-top: 10px; font-size: 11px;
+      color: var(--text-dim); line-height: 1.65;
+      background: var(--surface2); border-radius: 6px;
+      padding: 9px 11px; border: 1px solid var(--border);
+    }
+    #free-tier-info a { color: var(--accent); text-decoration: none; }
+    #free-tier-info a:hover { text-decoration: underline; }
+    .rs-divider2 { height: 1px; background: var(--border-dim); margin: 6px 12px 10px; }
+    #quick-section { padding: 0 12px 12px; }
+    .qa-btn {
+      background: var(--surface2); border: 1px solid var(--border-dim);
+      border-radius: 6px; color: var(--text-sub); cursor: pointer;
+      font-size: 12px; padding: 7px 10px; text-align: left;
+      transition: all 0.12s; display: flex; align-items: flex-start;
+      gap: 7px; width: 100%; margin-bottom: 5px; line-height: 1.4;
+    }
+    .qa-btn:hover { border-color: var(--accent); color: var(--text); background: var(--surface); }
+    .qa-icon { font-size: 13px; flex-shrink: 0; margin-top: 1px; }
+
+    #upload-btn {
+      align-items:center; background:var(--code-bg); border:1px dashed var(--border);
+      border-radius:6px; color:var(--text-dim); cursor:pointer; display:flex;
+      font-size:12px; gap:7px; justify-content:center; padding:8px 10px;
+      transition:border-color 0.15s,color 0.15s; width:100%; box-sizing:border-box;
+    }
+    #upload-btn:hover { border-color:var(--accent); color:var(--text); }
+    #upload-file { display:none; }
+    #upload-status { font-size:11px; color:var(--text-dim); margin-top:5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    #upload-status.loaded { color:#4caf50; }
+    #upload-status.error  { color:#f85149; }
+
+    /* ── Auth overlay (login / register) ─────────────────────── */
+    #auth-overlay {
+      position: fixed; inset: 0; z-index: 1000;
+      background: rgba(0,0,0,0.88);
+      display: flex; align-items: center; justify-content: center;
+    }
+    #auth-card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 14px; padding: 32px 36px; width: 440px; max-width: 95vw;
+    }
+    .auth-logo {
+      width: 40px; height: 40px; border-radius: 10px; background: var(--accent);
+      display: flex; align-items: center; justify-content: center;
+      margin-bottom: 16px;
+    }
+    .auth-tabs {
+      display: flex; gap: 0; margin-bottom: 20px;
+      border-bottom: 1px solid var(--border);
+    }
+    .auth-tab {
+      background: none; border: none; border-bottom: 2px solid transparent;
+      color: var(--text-sub); cursor: pointer; font-size: 13px; font-weight: 600;
+      padding: 6px 16px 10px; transition: all 0.15s; margin-bottom: -1px;
+    }
+    .auth-tab.active { border-bottom-color: var(--accent); color: var(--text); }
+    .setup-input {
+      width: 100%; background: var(--code-bg); border: 1px solid var(--border);
+      border-radius: 6px; color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      font-size: 13px; padding: 10px 12px; margin-top: 8px;
+    }
+    .setup-input:focus { outline: none; border-color: var(--accent); }
+    #auth-error {
+      display: none; background: #3a1e1e; border: 1px solid #5f2e2e;
+      border-radius: 6px; color: #f85149; font-size: 12px;
+      margin-top: 12px; padding: 9px 12px;
+    }
+    #auth-submit {
+      margin-top: 18px; width: 100%; background: var(--accent);
+      border: none; border-radius: 8px; color: #fff; cursor: pointer;
+      font-size: 14px; font-weight: 600; padding: 11px;
+      transition: background 0.15s;
+    }
+    #auth-submit:hover:not(:disabled) { background: var(--accent-hover); }
+    #auth-submit:disabled { opacity: 0.6; cursor: not-allowed; }
+    .auth-note {
+      margin-top: 14px; font-size: 11px; color: var(--text-dim);
+      line-height: 1.6; border-top: 1px solid var(--border); padding-top: 12px;
+    }
+    .auth-note a { color: var(--text-sub); }
+
+    /* ── Account panel ────────────────────────────────────────── */
+    #settings-panel {
+      display: none;
+      position: fixed; inset: 0; z-index: 900;
+      background: rgba(0,0,0,0.7);
+      align-items: center; justify-content: center;
+    }
+    #settings-panel.open { display: flex; }
+    #settings-card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 14px; padding: 28px 32px; width: 400px; max-width: 95vw;
+    }
+    #settings-close {
+      float: right; background: none; border: none; color: var(--text-dim);
+      cursor: pointer; font-size: 18px; line-height: 1;
+    }
+    #settings-close:hover { color: var(--text); }
+    .acct-row {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 10px 0; border-bottom: 1px solid var(--border-dim);
+      font-size: 13px;
+    }
+    .acct-label { color: var(--text-dim); font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; }
+    .acct-value { color: var(--text); font-weight: 600; }
+    #upgrade-link {
+      display: inline-block; margin-top: 4px; font-size: 11px;
+      color: var(--accent); text-decoration: none; cursor: pointer;
+      background: none; border: none; padding: 0; font-family: inherit;
+    }
+    #upgrade-link:hover { text-decoration: underline; }
+
+    /* Upgrade modal */
+    #upgrade-modal-backdrop {
+      display: none; position: fixed; inset: 0; z-index: 1000;
+      background: rgba(0,0,0,0.7); align-items: center; justify-content: center;
+    }
+    #upgrade-modal-backdrop.open { display: flex; }
+    #upgrade-modal {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 12px; padding: 28px 24px; width: 340px; max-width: 94vw;
+    }
+    #upgrade-modal h3 { font-size: 15px; margin-bottom: 6px; color: var(--text); }
+    #upgrade-modal p  { font-size: 12px; color: var(--text-sub); margin-bottom: 20px; }
+    .upgrade-plan-card {
+      border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px;
+      margin-bottom: 12px; cursor: pointer; text-decoration: none;
+      display: block; transition: border-color 0.15s;
+    }
+    .upgrade-plan-card:hover { border-color: var(--accent); }
+    .upgrade-plan-card .plan-name { font-size: 13px; font-weight: 700; color: var(--text); }
+    .upgrade-plan-card .plan-price { font-size: 12px; color: var(--text-sub); margin-top: 2px; }
+    .upgrade-plan-card .plan-limit { font-size: 11px; color: var(--text-dim); margin-top: 4px; }
+    .upgrade-plan-card.pro  { border-left: 3px solid #c9a227; }
+    .upgrade-plan-card.max  { border-left: 3px solid #5b9bd5; }
+    #upgrade-modal-close {
+      width: 100%; margin-top: 4px; background: none; border: none;
+      color: var(--text-dim); font-size: 12px; cursor: pointer; padding: 6px;
+    }
+    #upgrade-modal-close:hover { color: var(--text-sub); }
+
+    /* Migration modal */
+    #migration-modal-backdrop {
+      display: none; position: fixed; inset: 0; z-index: 1000;
+      background: rgba(0,0,0,0.75); align-items: center; justify-content: center;
+      padding: 16px;
+    }
+    #migration-modal-backdrop.open { display: flex; }
+    #migration-modal {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 12px; padding: 24px; width: 720px; max-width: 96vw; max-height: 90vh;
+      overflow-y: auto;
+    }
+    #migration-modal h3 { font-size: 16px; margin-bottom: 4px; color: var(--text); }
+    #migration-modal .mig-sub { font-size: 12px; color: var(--text-sub); margin-bottom: 16px; }
+    .mig-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px; }
+    @media (max-width: 600px) { .mig-grid { grid-template-columns: 1fr; } }
+    .mig-drop {
+      border: 1px dashed var(--border); border-radius: 8px; padding: 20px 12px;
+      text-align: center; font-size: 12px; color: var(--text-sub); cursor: pointer;
+    }
+    .mig-drop:hover { border-color: var(--accent); color: var(--text); }
+    .mig-status {
+      background: var(--surface2); border-radius: 8px; padding: 12px;
+      font-family: var(--mono, monospace); font-size: 11px; color: var(--accent);
+      min-height: 80px; max-height: 200px; overflow-y: auto; margin-bottom: 12px;
+    }
+    .mig-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    .mig-actions button {
+      padding: 10px 16px; border-radius: 8px; border: 1px solid var(--border);
+      background: var(--surface2); color: var(--text); font-size: 12px; cursor: pointer;
+    }
+    .mig-actions button.primary {
+      background: var(--accent); color: #000; border-color: var(--accent); font-weight: 600;
+    }
+    .mig-actions button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    /* Data disclosure modal (one-time) */
+    #data-disclosure-backdrop {
+      display: none; position: fixed; inset: 0; z-index: 2000;
+      background: rgba(0,0,0,0.78); align-items: center; justify-content: center;
+    }
+    #data-disclosure-backdrop.open { display: flex; }
+    #data-disclosure-modal {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 12px; padding: 24px 22px; width: 400px; max-width: 94vw;
+    }
+    #data-disclosure-modal h3 { font-size: 14px; font-weight: 700; margin-bottom: 10px; color: var(--text); }
+    #data-disclosure-modal p  { font-size: 12px; color: var(--text-sub); margin-bottom: 10px; line-height: 1.6; }
+    .disclosure-list { font-size: 12px; color: var(--text-sub); margin: 6px 0 14px 14px; line-height: 1.9; }
+    .disclosure-list li { margin-bottom: 1px; }
+    #disclosure-ack-btn {
+      width: 100%; background: var(--accent); border: none; border-radius: 7px;
+      color: #fff; font-size: 13px; font-weight: 600; padding: 10px 0;
+      cursor: pointer; font-family: inherit; transition: background .15s; margin-top: 4px;
+    }
+    #disclosure-ack-btn:hover { background: var(--accent-hover); }
+
+    #logout-btn {
+      margin-top: 20px; width: 100%; background: none;
+      border: 1px solid var(--border); border-radius: 8px; color: var(--text-sub);
+      cursor: pointer; font-size: 13px; font-weight: 600; padding: 9px;
+      transition: all 0.15s;
+    }
+    #logout-btn:hover { border-color: #f85149; color: #f85149; }
+
+    /* ── Model picker ───────────────────────────────────────────── */
+    #model-picker { display: flex; gap: 5px; padding: 6px 0 2px; align-items: center; }
+    #model-picker-label { font-size: 10px; color: var(--text-dim); margin-right: 2px; }
+    .model-pill {
+      background: none; border: 1px solid var(--border); border-radius: 12px;
+      color: var(--text-sub); cursor: pointer; font-size: 11px; font-weight: 500;
+      padding: 3px 11px; transition: all 0.12s; line-height: 1.5;
+    }
+    .model-pill:hover { border-color: var(--accent); color: var(--text); }
+    .model-pill.active { background: var(--accent-dim); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+    .meta-model { color: var(--accent); font-weight: 600; }
+    .meta-redacted { color: var(--green); }
+
+    /* ── Welcome example grid ─────────────────────────────────── */
+    .example-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; max-width: 480px; margin-top: 12px; }
+    .example {
+      background: var(--surface); border: 1px solid var(--border-dim); border-radius: 8px;
+      padding: 9px 12px; font-size: 12px; color: var(--text-sub); cursor: pointer;
+      text-align: left; transition: all 0.12s; font-family: inherit;
+    }
+    .example:hover { border-color: var(--accent); color: var(--text); }
+    .example b { color: var(--text); font-weight: 600; display: block; margin-bottom: 2px; font-size: 11.5px; }
+
+    /* ── Left-nav new-chat button ──────────────────────────────── */
+    .nav-new-chat {
+      display: flex; align-items: center; gap: 6px;
+      width: calc(100% - 16px); margin: 10px 8px 6px;
+      background: var(--accent); border: none; border-radius: 8px; color: #fff;
+      font-size: 12.5px; font-weight: 700; padding: 9px 14px; cursor: pointer;
+      font-family: inherit; transition: background 0.15s;
+    }
+    .nav-new-chat:hover { background: var(--accent-hover); }
+
+    /* ── Recent docs (right sidebar) ───────────────────────────── */
+    .doc-link {
+      display: flex; flex-direction: column; gap: 2px; padding: 7px 10px;
+      border-radius: 6px; cursor: pointer; transition: all 0.12s;
+    }
+    .doc-link:hover { background: var(--surface2); }
+    .doc-title { font-size: 12px; color: var(--text); font-weight: 600; }
+    .doc-meta  { font-size: 10px; color: var(--text-dim); font-family: monospace; letter-spacing: 0.04em; }
+
+    /* ── Update banner ─────────────────────────────────────────── */
+    #update-banner {
+      display: none; align-items: center; gap: 10px;
+      background: #1a3a5c; border-bottom: 1px solid #2a5a8c;
+      padding: 7px 16px; font-size: 13px; color: #90caf9;
+      position: fixed; top: var(--header-h); left: 0; right: 0; z-index: 90;
+    }
+    #update-banner-msg { flex: 1; }
+    #update-install-btn {
+      background: #1976d2; color: #fff; border: none; border-radius: 5px;
+      padding: 4px 14px; font-size: 12px; font-weight: 600; cursor: pointer;
+    }
+    #update-install-btn:disabled { opacity: 0.6; cursor: default; }
+    #update-install-btn:hover:not(:disabled) { background: #1565c0; }
+    .update-dismiss {
+      background: none; border: none; color: #90caf9; cursor: pointer;
+      font-size: 14px; padding: 2px 6px; opacity: 0.7;
+    }
+    .update-dismiss:hover { opacity: 1; }
+
+    /* ── PAN Security Advisory banner ──────────────────────────── */
+    /* Red when ANY active advisory is CRITICAL, amber when all are HIGH.
+       Sits below the update banner (which gets first row) so both stack. */
+    #advisory-banner {
+      display: none; flex-direction: column;
+      position: fixed; left: 0; right: 0; z-index: 89;
+      top: calc(var(--header-h) + var(--update-banner-h, 0px));
+      background: #4a1414; border-bottom: 1px solid #6b1f1f;
+      color: #ffdada; font-size: 13px;
+    }
+    #advisory-banner.sev-high { background: #4a3614; border-bottom-color: #7a5a1f; color: #ffe7b0; }
+    #advisory-banner.show { display: flex; }
+    #advisory-header {
+      display: flex; align-items: center; gap: 10px;
+      padding: 7px 16px; cursor: pointer;
+    }
+    #advisory-header:hover { filter: brightness(1.15); }
+    #advisory-icon { font-size: 15px; flex-shrink: 0; }
+    #advisory-summary { flex: 1; font-weight: 600; }
+    #advisory-chevron {
+      font-family: monospace; font-size: 12px; opacity: 0.8;
+      transition: transform 0.15s;
+    }
+    #advisory-banner.expanded #advisory-chevron { transform: rotate(90deg); }
+    #advisory-list { display: none; padding: 2px 12px 8px; gap: 4px; flex-direction: column; }
+    #advisory-banner.expanded #advisory-list { display: flex; }
+    .advisory-row {
+      display: flex; align-items: center; gap: 9px;
+      padding: 5px 6px; border-radius: 5px; font-size: 12.5px;
+      background: rgba(0,0,0,0.18);
+    }
+    .advisory-row:hover { background: rgba(0,0,0,0.28); }
+    .advisory-sev {
+      flex-shrink: 0; font-size: 10px; font-weight: 700;
+      padding: 2px 7px; border-radius: 3px; letter-spacing: 0.04em;
+      font-family: monospace;
+    }
+    .advisory-sev.CRITICAL { background: #b71c1c; color: #fff; }
+    .advisory-sev.HIGH     { background: #b08416; color: #1a0f00; }
+    .advisory-title {
+      flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      color: inherit; text-decoration: none;
+    }
+    .advisory-title:hover { text-decoration: underline; }
+    .advisory-date { flex-shrink: 0; font-size: 10.5px; opacity: 0.7; font-family: monospace; }
+    .advisory-dismiss {
+      background: none; border: none; color: inherit; cursor: pointer;
+      font-size: 14px; padding: 0 4px; opacity: 0.6; flex-shrink: 0;
+    }
+    .advisory-dismiss:hover { opacity: 1; color: #fff; }
+    #advisory-close-all {
+      background: none; border: none; color: inherit; cursor: pointer;
+      font-size: 15px; padding: 2px 6px; opacity: 0.65; flex-shrink: 0;
+      margin-left: 4px;
+    }
+    #advisory-close-all:hover { opacity: 1; color: #fff; }
+
+    /* ── Chat provider settings (right sidebar) ─────────────── */
+    #provider-toggle {
+      display: flex; align-items: center; gap: 6px; cursor: pointer;
+      padding: 4px 0 6px; user-select: none;
+    }
+    #provider-toggle:hover { filter: brightness(1.2); }
+    #provider-mode-label {
+      flex: 1; font-size: 11px; color: var(--text-sub);
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    #provider-chevron {
+      font-family: monospace; font-size: 12px; color: var(--text-dim);
+      transition: transform 0.15s;
+    }
+    #provider-section.expanded #provider-chevron { transform: rotate(90deg); }
+    #provider-panel {
+      display: none; flex-direction: column; gap: 5px;
+      max-height: min(58vh, 540px);
+      overflow-x: hidden;
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
+      scrollbar-gutter: stable;
+      padding-right: 2px;
+      padding-bottom: 4px;
+    }
+    #provider-section.expanded #provider-panel { display: flex; }
+    #provider-panel::-webkit-scrollbar { width: 8px; }
+    #provider-panel::-webkit-scrollbar-thumb {
+      background: var(--border); border-radius: 4px;
+    }
+    #provider-panel::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }
+    .provider-radio {
+      display: flex; gap: 8px; align-items: flex-start; padding: 5px 4px;
+      border-radius: 6px; cursor: pointer; font-size: 12px;
+      transition: background 0.12s;
+    }
+    .provider-radio:hover { background: var(--code-bg); }
+    .provider-radio input { margin-top: 2px; flex-shrink: 0; }
+    .provider-radio strong { color: var(--text); font-weight: 600; font-size: 12px; display: block; }
+    .provider-radio-sub {
+      display: block; font-size: 10.5px; color: var(--text-dim);
+      margin-top: 2px; line-height: 1.4;
+    }
+    .provider-radio.disabled {
+      opacity: 0.45; cursor: not-allowed;
+    }
+    .provider-radio.disabled:hover { background: transparent; }
+    #local-llm-fields { display: none; flex-direction: column; gap: 6px; margin-top: 6px; }
+    #provider-section.show-local #local-llm-fields { display: flex; }
+    .provider-field {
+      display: flex; flex-direction: column; gap: 3px; font-size: 10.5px;
+      color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.04em;
+    }
+    .provider-field input {
+      background: var(--code-bg); border: 1px solid var(--border);
+      border-radius: 5px; color: var(--text); font-family: 'Consolas','Cascadia Code',monospace;
+      font-size: 11.5px; padding: 6px 8px; text-transform: none; letter-spacing: 0;
+    }
+    .provider-field input:focus { outline: none; border-color: var(--accent); }
+    .provider-field select {
+      background: var(--code-bg); border: 1px solid var(--border);
+      border-radius: 5px; color: var(--text); font-family: 'Consolas','Cascadia Code',monospace;
+      font-size: 11.5px; padding: 6px 8px; text-transform: none; letter-spacing: 0;
+    }
+    .provider-field-row { display: flex; gap: 6px; align-items: stretch; }
+    .provider-field-row input, .provider-field-row select { flex: 1; min-width: 0; }
+    .provider-mini-btn {
+      background: var(--code-bg); border: 1px solid var(--border);
+      border-radius: 5px; color: var(--text); cursor: pointer;
+      font-size: 10.5px; padding: 6px 8px; white-space: nowrap;
+    }
+    .provider-mini-btn:hover { border-color: var(--accent); }
+    .provider-check { display: flex; align-items: center; gap: 6px; font-size: 11px;
+      color: var(--text-sub); text-transform: none; letter-spacing: 0; cursor: pointer; }
+    .provider-check input { margin: 0; }
+    #local-context-warn {
+      display: none; margin-top: 6px; font-size: 11px; line-height: 1.45;
+      color: #c9a227; background: rgba(201,162,39,0.08);
+      border: 1px solid rgba(201,162,39,0.25); border-radius: 5px; padding: 6px 8px;
+    }
+    #local-context-warn.show { display: block; }
+    #local-context-warn.over { color: #f85149; border-color: rgba(248,81,73,0.35); background: rgba(248,81,73,0.08); }
+    #local-test-btn, #provider-save-btn {
+      background: var(--code-bg); border: 1px solid var(--border);
+      border-radius: 5px; color: var(--text); cursor: pointer;
+      font-size: 11.5px; padding: 6px 10px; transition: all 0.12s;
+    }
+    #local-test-btn:hover, #provider-save-btn:hover { border-color: var(--accent); }
+    #provider-save-btn { background: var(--accent); color: #fff; border-color: var(--accent); font-weight: 600; }
+    #provider-save-btn:hover { background: var(--accent-hover); }
+    #local-test-result { font-size: 11px; min-height: 14px; line-height: 1.4; }
+    #local-test-result.ok    { color: #4caf50; }
+    #local-test-result.error { color: #f85149; }
+    #provider-save-row { display: flex; align-items: center; gap: 9px; margin-top: 2px; }
+    #provider-save-status { font-size: 11px; color: var(--text-dim); }
+    #provider-tier-lock {
+      display: none; margin-top: 6px; font-size: 11px; line-height: 1.5;
+      color: #c9a227; background: rgba(201,162,39,0.08);
+      border: 1px solid rgba(201,162,39,0.25);
+      border-radius: 5px; padding: 6px 9px;
+    }
+    #provider-tier-lock.show { display: block; }
+    #provider-tier-lock a { color: var(--accent); text-decoration: none; }
+    #provider-tier-lock a:hover { text-decoration: underline; }
+    /* Mode pill next to the model picker. */
+    #provider-mode-pill {
+      display: none; padding: 2px 8px; border-radius: 4px;
+      font-size: 10px; font-weight: 600; letter-spacing: 0.04em;
+      text-transform: uppercase; font-family: monospace;
+      margin-left: auto;
+    }
+    #provider-mode-pill.cloud { background: rgba(56,139,253,0.18); color: #58a6ff; border: 1px solid rgba(56,139,253,0.4); display: inline-block; }
+    #provider-mode-pill.local { background: rgba(76,175,80,0.18); color: #4caf50; border: 1px solid rgba(76,175,80,0.4); display: inline-block; }
+  </style>
+</head>
+<body>
+
+<!-- ── Header ──────────────────────────────────────────────────── -->
+<header id="header">
+  <div class="h-logo"><svg viewBox="0 0 32 32" width="16" height="16" fill="none" stroke="white" stroke-width="2.8" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true"><path d="M4 26 L12 8 L20 22 L28 12"/><path d="M4 26 L28 26" opacity=".55"/></svg></div>
+  <div class="h-text-stack">
+    <div class="h-eyebrow">ADK CYBER AI <span class="h-beta">BETA</span></div>
+    <div class="h-sub" id="h-sub">ADK Cyber AI online. Ready to assist with your PAN-OS environment.</div>
+  </div>
+  <div class="h-spacer"></div>
+
+  <div id="history-wrap">
+    <button id="history-btn" onclick="toggleHistoryDrop()" title="Chat history">
+      🕐 History
+    </button>
+    <div id="history-drop">
+      <div id="history-drop-header">
+        <span>Chat History</span>
+        <button id="history-drop-new" onclick="newChat(); closeHistoryDrop()">+ New chat</button>
+      </div>
+      <div id="history-drop-list"></div>
+    </div>
+  </div>
+
+  <div id="local-badge" title="App runs locally · configs go directly to Anthropic's API, never to ADK Cyber">
+    <div id="local-dot"></div>
+    Local · Private
+  </div>
+
+  <div id="tier-badge" title="Your current plan"></div>
+
+  <button id="theme-toggle" onclick="toggleTheme()">
+    <span id="t-icon">☀️</span><span id="t-label">Light</span>
+  </button>
+  <button id="settings-btn" onclick="openSettings()" title="Account">
+    👤 Account
+  </button>
+</header>
+
+<!-- ── AUTH OVERLAY (login / register) ────────────────────────── -->
+<div id="auth-overlay" style="display:none;">
+  <div id="auth-card">
+    <div class="auth-logo"><svg viewBox="0 0 32 32" width="22" height="22" fill="none" stroke="white" stroke-width="2.6" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true"><path d="M4 26 L12 8 L20 22 L28 12"/><path d="M4 26 L28 26" opacity=".55"/></svg></div>
+    <div style="font-size:20px;font-weight:700;margin-bottom:4px">ADK Cyber AI <span style="font-size:10px;font-weight:600;background:rgba(0,212,228,0.12);color:var(--accent);border:1px solid rgba(0,212,228,0.30);padding:2px 6px;border-radius:10px;vertical-align:middle;">BETA</span></div>
+    <div style="font-size:13px;color:var(--text-sub);margin-bottom:18px">Sign in to access your PAN-OS AI assistant.</div>
+
+    <div class="auth-tabs">
+      <button class="auth-tab active" id="tab-login"    onclick="switchTab('login')">Sign In</button>
+      <button class="auth-tab"        id="tab-register" onclick="switchTab('register')">Create Account</button>
+    </div>
+
+    <label style="font-size:12px;color:var(--text-dim);">Email</label>
+    <input id="auth-email" type="email" class="setup-input" placeholder="you@company.com" autocomplete="email" spellcheck="false" />
+
+    <label style="font-size:12px;color:var(--text-dim);display:block;margin-top:12px;">Password</label>
+    <input id="auth-password" type="password" class="setup-input" placeholder="••••••••" autocomplete="current-password" />
+
+    <div id="auth-error"></div>
+
+    <button id="auth-submit" onclick="submitAuth()">Sign In</button>
+
+    <div class="auth-note">
+      🔒 Credentials in your configs are automatically redacted. Config data goes directly from your machine to Anthropic's API for AI inference — ADK Cyber's servers only ever see your email and session token.<br><br>
+      Free tier: <strong style="color:var(--text-sub);">10 queries / week</strong> · Upgrade at <a href="https://www.adkcyber.com/adk-cyber-ai.html" target="_blank">adkcyber.com/adk-cyber-ai.html</a>
+    </div>
+  </div>
+</div>
+
+<!-- ── ACCOUNT PANEL ───────────────────────────────────────────── -->
+<div id="settings-panel">
+  <div id="settings-card">
+    <button id="settings-close" onclick="closeSettings()">✕</button>
+    <div style="font-size:16px;font-weight:700;margin-bottom:20px;">👤 Account</div>
+
+    <div class="acct-row">
+      <span class="acct-label">Email</span>
+      <span class="acct-value" id="acct-email">—</span>
+    </div>
+    <div class="acct-row">
+      <span class="acct-label">Plan</span>
+      <span class="acct-value" id="acct-tier">Free</span>
+    </div>
+    <div class="acct-row" id="acct-usage-row">
+      <span class="acct-label">Queries this week</span>
+      <span class="acct-value" id="acct-usage">0 / 10</span>
+    </div>
+
+    <div id="free-tier-info">
+      <strong style="color:var(--text-sub);">Free tier limits</strong><br>
+      Model: <strong style="color:var(--text-sub);">Claude Haiku</strong> — fast &amp; efficient<br>
+      Config pastes &gt;8,000 chars count as <strong style="color:var(--text-sub);">3 queries</strong><br>
+      <a href="https://adkcyber.com/pan-copilot.html#pricing" target="_blank">Upgrade for Sonnet &amp; Opus →</a>
+    </div>
+
+    <button id="upgrade-link" onclick="openUpgradeModal()">
+      ↗ Upgrade plan
+    </button>
+
+    <div style="margin-top:20px;font-size:11px;color:var(--text-dim);line-height:1.7;border-top:1px solid var(--border);padding-top:16px;">
+      <strong style="color:var(--text-sub);">Data &amp; Privacy</strong><br>
+      Firewall configs go directly from your machine to Anthropic's API — they never touch ADK Cyber's servers. Conversations are stored locally at <code>~/.pan_copilot/conversations.db</code>.
+    </div>
+
+    <button id="logout-btn" onclick="logout()">Sign Out</button>
+  </div>
+</div>
+
+<!-- ── UPDATE BANNER ───────────────────────────────────────────── -->
+<div id="update-banner">
+  <span id="update-banner-msg">Update available</span>
+  <button id="update-install-btn" onclick="installUpdate()">Update Now</button>
+  <button class="update-dismiss" onclick="hideUpdateBanner()" title="Dismiss">✕</button>
+</div>
+
+<!-- ── PAN SECURITY ADVISORY BANNER ────────────────────────────── -->
+<!-- Fed by /api/advisories. Backend polls security.paloaltonetworks.com
+     hourly and only surfaces HIGH/CRITICAL items published after install. -->
+<div id="advisory-banner">
+  <div id="advisory-header" onclick="toggleAdvisoryBanner()">
+    <span id="advisory-icon">⚠️</span>
+    <span id="advisory-summary"></span>
+    <span id="advisory-chevron">›</span>
+    <button id="advisory-close-all" onclick="dismissAllAdvisories(event)" title="Close — will only reappear if a new High or Critical advisory is found">✕</button>
+  </div>
+  <div id="advisory-list"></div>
+</div>
+
+<div id="app">
+
+  <!-- ── LEFT NAV ──────────────────────────────────────────────── -->
+  <nav id="left-nav">
+
+    <button class="nav-new-chat" onclick="newChat()">
+      <span style="font-size:14px;">+</span> New Chat
+    </button>
+
+    <div class="nav-divider" style="margin-top:0;"></div>
+
+    <div class="nav-section">
+      <span class="nav-group-label">Network Security</span>
+      <button class="nav-item" onclick="selectProduct('pa-series')"    data-id="pa-series">    <span class="nav-icon">🔥</span> PA-Series NGFW</button>
+      <button class="nav-item" onclick="selectProduct('vm-series')"    data-id="vm-series">    <span class="nav-icon">☁️</span> VM-Series</button>
+      <button class="nav-item" onclick="selectProduct('cn-series')"    data-id="cn-series">    <span class="nav-icon">🐳</span> CN-Series</button>
+      <button class="nav-item" onclick="selectProduct('panorama')"     data-id="panorama">     <span class="nav-icon">🗂️</span> Panorama</button>
+      <button class="nav-item" onclick="openMigrationModal()" title="Cisco ASA / Firepower → PAN-OS">
+        <span class="nav-icon">🔄</span> Config Migration
+      </button>
+    </div>
+
+    <div class="nav-divider"></div>
+
+    <div class="nav-section">
+      <span class="nav-group-label">SASE / Network-as-a-Service</span>
+      <button class="nav-item" onclick="selectProduct('prisma-access')"  data-id="prisma-access"> <span class="nav-icon">🌐</span> Prisma Access</button>
+      <button class="nav-item" onclick="selectProduct('prisma-sdwan')"   data-id="prisma-sdwan">  <span class="nav-icon">🔀</span> Prisma SD-WAN</button>
+      <button class="nav-item" onclick="selectProduct('adem')"           data-id="adem">          <span class="nav-icon">📊</span> ADEM</button>
+    </div>
+
+    <div class="nav-divider"></div>
+
+    <div class="nav-section">
+      <span class="nav-group-label">Cloud Security (Prisma Cloud)</span>
+      <button class="nav-item" onclick="selectProduct('cspm')"   data-id="cspm">  <span class="nav-icon">🛡️</span> CSPM</button>
+      <button class="nav-item" onclick="selectProduct('cwp')"    data-id="cwp">   <span class="nav-icon">💻</span> CWP</button>
+      <button class="nav-item" onclick="selectProduct('ciem')"   data-id="ciem">  <span class="nav-icon">🔑</span> CIEM</button>
+      <button class="nav-item" onclick="selectProduct('appsec')" data-id="appsec"><span class="nav-icon">🧪</span> Application Security</button>
+    </div>
+
+    <div class="nav-divider"></div>
+
+    <div class="nav-section">
+      <span class="nav-group-label">Security Operations (Cortex)</span>
+      <button class="nav-item" onclick="selectProduct('xdr')"    data-id="xdr">   <span class="nav-icon">🔎</span> Cortex XDR</button>
+      <button class="nav-item" onclick="selectProduct('xsoar')"  data-id="xsoar"> <span class="nav-icon">⚙️</span> Cortex XSOAR</button>
+      <button class="nav-item" onclick="selectProduct('xsiam')"  data-id="xsiam"> <span class="nav-icon">🧠</span> Cortex XSIAM</button>
+      <button class="nav-item" onclick="selectProduct('xpanse')" data-id="xpanse"><span class="nav-icon">🌍</span> Cortex Xpanse</button>
+    </div>
+
+    <div class="nav-divider"></div>
+
+    <div class="nav-section">
+      <span class="nav-group-label">Threat Intelligence</span>
+      <button class="nav-item" onclick="selectProduct('wildfire')" data-id="wildfire"><span class="nav-icon">🔬</span> WildFire</button>
+      <button class="nav-item" onclick="selectProduct('atp')"      data-id="atp">     <span class="nav-icon">🚫</span> Adv. Threat Prevention</button>
+      <button class="nav-item" onclick="selectProduct('urlf')"     data-id="urlf">    <span class="nav-icon">🔗</span> Adv. URL Filtering</button>
+      <button class="nav-item" onclick="selectProduct('dns-sec')"  data-id="dns-sec"> <span class="nav-icon">🔍</span> DNS Security</button>
+      <button class="nav-item" onclick="selectProduct('unit42')"   data-id="unit42">  <span class="nav-icon">🕵️</span> Unit 42</button>
+    </div>
+
+    <div class="nav-divider"></div>
+
+    <div class="nav-section">
+      <span class="nav-group-label">Identity &amp; Access</span>
+      <button class="nav-item" onclick="selectProduct('globalprotect')" data-id="globalprotect"><span class="nav-icon">🔒</span> GlobalProtect</button>
+      <button class="nav-item" onclick="selectProduct('cie')"           data-id="cie">           <span class="nav-icon">🪪</span> Cloud Identity Engine</button>
+    </div>
+
+    <div class="nav-divider"></div>
+
+    <div class="nav-section" style="padding-bottom:12px;">
+      <span class="nav-group-label">AI / Emerging</span>
+      <button class="nav-item" onclick="selectProduct('ai-runtime')"   data-id="ai-runtime">  <span class="nav-icon">🤖</span> AI Runtime Security</button>
+      <button class="nav-item" onclick="selectProduct('strata-log')"   data-id="strata-log">  <span class="nav-icon">📋</span> Strata Logging Service</button>
+    </div>
+
+    <!-- conv-list kept in DOM (hidden) so JS renderConvList() doesn't throw -->
+    <div id="conv-list" style="display:none;">
+      <div id="conv-empty"></div>
+    </div>
+
+    <div class="nav-divider"></div>
+
+    <div class="nav-section" style="padding-bottom:10px;">
+      <button class="nav-item" onclick="openSettings()"><span class="nav-icon">⚙️</span>Settings</button>
+      <button class="nav-item" onclick="window.open('https://docs.paloaltonetworks.com','_blank')"><span class="nav-icon">📚</span>Knowledge base</button>
+    </div>
+
+  </nav>
+
+  <!-- ── CENTER ────────────────────────────────────────────────── -->
+  <main id="center">
+
+    <div id="context-bar">
+      <div id="context-product">
+        <span id="context-icon">🔥</span>
+        <span id="context-name">ADK Cyber AI</span>
+        <span id="context-desc">· Select a product from the left to focus the chat, or ask anything below.</span>
+        <span class="kb-hdr-sep">|</span>
+        <div id="kb-dropdown-wrap">
+          <button id="kb-dropdown-btn" onclick="toggleKbDropdown()">📚 Palo KB Articles <span id="kb-dropdown-caret">▾</span></button>
+          <div id="kb-dropdown-menu">
+            <button class="kb-dd-item" onclick="askKb('kb-gp-prelogon-001'); closeKbDropdown()">
+              <span class="kb-dd-icon">🔒</span>
+              <span class="kb-dd-text">
+                <span class="kb-dd-title">GlobalProtect Always Pre-Logon</span>
+                <span class="kb-dd-id">KB-GP-PRELOGON-001</span>
+              </span>
+            </button>
+            <button class="kb-dd-item" onclick="askKb('kb-pan-dec-001'); closeKbDropdown()">
+              <span class="kb-dd-icon">🔐</span>
+              <span class="kb-dd-text">
+                <span class="kb-dd-title">SSL/TLS Decryption Troubleshooting</span>
+                <span class="kb-dd-id">KB-PAN-DEC-001</span>
+              </span>
+            </button>
+            <button class="kb-dd-item" onclick="askKb('kb-pan-nat-001'); closeKbDropdown()">
+              <span class="kb-dd-icon">🔀</span>
+              <span class="kb-dd-text">
+                <span class="kb-dd-title">NAT — VPN, U-Turn &amp; Policy Zones</span>
+                <span class="kb-dd-id">KB-PAN-NAT-001</span>
+              </span>
+            </button>
+            <button class="kb-dd-item" onclick="askKb('kb-pan-appid-001'); closeKbDropdown()">
+              <span class="kb-dd-icon">🔍</span>
+              <span class="kb-dd-text">
+                <span class="kb-dd-title">App-ID: unknown-tcp &amp; unknown-udp</span>
+                <span class="kb-dd-id">KB-PAN-APPID-001</span>
+              </span>
+            </button>
+            <button class="kb-dd-item" onclick="askKb('kb-pan-ha-001'); closeKbDropdown()">
+              <span class="kb-dd-icon">🔄</span>
+              <span class="kb-dd-text">
+                <span class="kb-dd-title">HA Failover &amp; Stuck-in-Initial</span>
+                <span class="kb-dd-id">KB-PAN-HA-001</span>
+              </span>
+            </button>
+            <button class="kb-dd-item" onclick="askKb('kb-sec-uid-001'); closeKbDropdown()">
+              <span class="kb-dd-icon">👤</span>
+              <span class="kb-dd-text">
+                <span class="kb-dd-title">User-ID — Users Not in Traffic Logs</span>
+                <span class="kb-dd-id">KB-SEC-UID-001</span>
+              </span>
+            </button>
+            <button class="kb-dd-item" onclick="askKb('kb-pan-vpn-001'); closeKbDropdown()">
+              <span class="kb-dd-icon">🔗</span>
+              <span class="kb-dd-text">
+                <span class="kb-dd-title">IPsec VPN — Tunnel Up, No Traffic</span>
+                <span class="kb-dd-id">KB-PAN-VPN-001</span>
+              </span>
+            </button>
+            <button class="kb-dd-item" onclick="askKb('kb-pan-mgmt-001'); closeKbDropdown()">
+              <span class="kb-dd-icon">🖥️</span>
+              <span class="kb-dd-text">
+                <span class="kb-dd-title">Panorama — Commit, Push &amp; Design</span>
+                <span class="kb-dd-id">KB-PAN-MGMT-001</span>
+              </span>
+            </button>
+            <button class="kb-dd-item" onclick="askKb('kb-cortex-xdr-001'); closeKbDropdown()">
+              <span class="kb-dd-icon">🛡️</span>
+              <span class="kb-dd-text">
+                <span class="kb-dd-title">Cortex XDR/XSIAM — Alert Grouping, Network Location &amp; CIE</span>
+                <span class="kb-dd-id">KB-CORTEX-XDR-001</span>
+              </span>
+            </button>
+            <button class="kb-dd-item" onclick="askKb('kb-pa-routing-001'); closeKbDropdown()">
+              <span class="kb-dd-icon">🌐</span>
+              <span class="kb-dd-text">
+                <span class="kb-dd-title">Prisma Access — Routing, Service Connections &amp; BGP</span>
+                <span class="kb-dd-id">KB-PA-ROUTING-001</span>
+              </span>
+            </button>
+            <button class="kb-dd-item" onclick="askKb('kb-scm-aiops-0001'); closeKbDropdown()">
+              <span class="kb-dd-icon">📊</span>
+              <span class="kb-dd-text">
+                <span class="kb-dd-title">AIOps &amp; SCM — Telemetry Onboarding &amp; Troubleshooting</span>
+                <span class="kb-dd-id">KB-SCM-AIOPS-0001</span>
+              </span>
+            </button>
+          </div>
+        </div>
+      </div>
+      <div id="context-chips"></div>
+    </div>
+
+    <div id="messages">
+      <div id="welcome">
+        <div class="w-logo"><svg viewBox="0 0 32 32" width="30" height="30" fill="none" stroke="white" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true"><path d="M4 26 L12 8 L20 22 L28 12"/><path d="M4 26 L28 26" opacity=".55"/></svg></div>
+        <h2>Hey — what are we troubleshooting today?</h2>
+        <p>Ask anything about Palo Alto Networks: NGFW, Panorama, Cortex XDR, Prisma Access. Bring configs, logs, CLI output — Copilot reads them.</p>
+        <div class="example-grid">
+          <button class="example" onclick="prefillInput(&quot;What’s the most common rule problem in NGFW? Walk me through finding and fixing it.&quot;)"><b>Audit my rule base</b>What's the most common rule problem in NGFW?</button>
+          <button class="example" onclick="prefillInput(&quot;Explain what ‘show running security-policy’ outputs and how to read it.&quot;)"><b>Decode CLI output</b>Explain "show running security-policy"</button>
+          <button class="example" onclick="prefillInput(&quot;Traffic from 10.1.0.0/24 to the DMZ is getting dropped. Help me diagnose why.&quot;)"><b>Troubleshoot a drop</b>Traffic from 10.1.0.0/24 to DMZ getting dropped</button>
+          <button class="example" onclick="prefillInput(&quot;What are the pre-flight checks for a PAN-OS 10.2 to 11.1 upgrade?&quot;)"><b>PAN-OS migration</b>Pre-flight checks for 10.2 → 11.1 upgrade</button>
+        </div>
+        <div class="info-card">
+          <div class="info-row info-privacy">
+            <span>🔒</span>
+            <span>Credentials auto-redacted · configs go directly to Anthropic's API, never to ADK Cyber</span>
+          </div>
+          <div class="info-row info-tip">
+            <span>⚠️</span>
+            <div><strong>Best practice:</strong> Paste only the section of config relevant to your question rather than a full <code>show config running</code> export. This limits unnecessary exposure of your network topology to third-party AI infrastructure.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="input-bar">
+      <div id="chat-attach-strip" class="attach-strip" aria-label="Pasted screenshots to send"></div>
+      <div id="input-wrap">
+        <textarea id="user-input" rows="1"
+          placeholder="Ask about any Palo Alto Networks product… (paste screenshots to attach)"
+          onkeydown="handleKey(event)" oninput="autoResize(this)"></textarea>
+        <button id="send-btn" onclick="sendMessage()">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>
+          </svg>
+        </button>
+      </div>
+      <div id="model-picker">
+        <span id="model-picker-label">Model:</span>
+        <button class="model-pill active" data-model="auto"                    onclick="setModel('auto')">⚡ Auto</button>
+        <button class="model-pill"        data-model="claude-haiku-4-5-20251001" onclick="setModel('claude-haiku-4-5-20251001')">Haiku</button>
+        <button class="model-pill"        data-model="claude-sonnet-4-6"         onclick="setModel('claude-sonnet-4-6')">Sonnet</button>
+        <button class="model-pill"        data-model="claude-opus-4-7"           onclick="setModel('claude-opus-4-7')">Opus</button>
+        <span id="provider-mode-pill" onclick="toggleProvider()"></span>
+      </div>
+      <div id="input-hint">
+        <span>Shift+Enter for newline · Enter to send</span>
+        <span style="display:flex;gap:10px;align-items:center;">
+          <span id="config-ind"></span>
+          <span id="app-version" onclick="recheckVersion()" title="Installed version (click to re-check for updates)" style="cursor:pointer;opacity:0.7;"></span>
+        </span>
+      </div>
+    </div>
+  </main>
+
+  <!-- ── RIGHT SIDEBAR ─────────────────────────────────────────── -->
+  <aside id="right-sidebar">
+
+    <div class="rs-section" style="padding-bottom:12px;">
+      <button id="new-chat-btn" onclick="newChat()">
+        <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+        New Chat
+      </button>
+    </div>
+
+    <div class="rs-divider" style="margin-top:0;"></div>
+
+    <!-- Recent Docs -->
+    <div class="rs-section" style="padding-bottom:8px;">
+      <span class="rs-label">PAN-OS Docs</span>
+      <div class="doc-link" onclick="window.open('https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-release-notes','_blank')">
+        <span class="doc-title">PAN-OS 11.1 Release Notes</span>
+        <span class="doc-meta">docs.paloaltonetworks.com</span>
+      </div>
+      <div class="doc-link" onclick="window.open('https://docs.paloaltonetworks.com/best-practices','_blank')">
+        <span class="doc-title">Best Practice Security Policy</span>
+        <span class="doc-meta">Palo Alto KB</span>
+      </div>
+      <div class="doc-link" onclick="window.open('https://docs.paloaltonetworks.com/cortex/cortex-xdr/cortex-xdr-pro-admin/investigation-and-response','_blank')">
+        <span class="doc-title">Cortex XDR Investigation Guide</span>
+        <span class="doc-meta">docs.paloaltonetworks.com</span>
+      </div>
+    </div>
+
+    <div class="rs-divider"></div>
+
+    <!-- ── Chat provider settings ──────────────────────────────── -->
+    <div id="provider-section" class="rs-section" style="padding-bottom:6px;">
+      <div id="provider-toggle" onclick="toggleProviderPanel()">
+        <span class="rs-label" style="margin-bottom:0;">Chat Provider</span>
+        <span id="provider-mode-label"></span>
+        <span id="provider-chevron">›</span>
+      </div>
+      <div id="provider-panel">
+        <label class="provider-radio">
+          <input type="radio" name="chat_provider" value="cloud" onchange="onProviderChange()">
+          <span>
+            <strong>ADK Cyber AI (cloud)</strong>
+            <span class="provider-radio-sub">Anthropic-backed · best reasoning · queries count toward your quota</span>
+          </span>
+        </label>
+        <label class="provider-radio">
+          <input type="radio" name="chat_provider" value="local" onchange="onProviderChange()">
+          <span>
+            <strong>My local LLM</strong>
+            <span class="provider-radio-sub">Stays on your machine · no quota · best-effort responses</span>
+          </span>
+        </label>
+
+        <div id="local-llm-fields">
+          <label class="provider-field">
+            <span>Base URL</span>
+            <input id="local-base-url" type="text" placeholder="http://localhost:11434/v1" spellcheck="false">
+          </label>
+          <label class="provider-field">
+            <span>Model</span>
+            <div class="provider-field-row">
+              <select id="local-model-select" title="Pick from server list" onchange="onLocalModelSelect()">
+                <option value="">— refresh list —</option>
+              </select>
+              <button type="button" class="provider-mini-btn" onclick="refreshLocalModels()">List</button>
+            </div>
+            <input id="local-model" type="text" placeholder="qwen2.5:14b" spellcheck="false" style="margin-top:4px;">
+          </label>
+          <label class="provider-field">
+            <span>API key (optional)</span>
+            <input id="local-api-key" type="password" placeholder="(blank if your server doesn't require one)" autocomplete="off">
+          </label>
+          <label class="provider-field">
+            <span>Context window (tokens, estimate)</span>
+            <input id="local-context-tokens" type="number" min="4096" max="1000000" step="1024" placeholder="32768">
+          </label>
+          <label class="provider-field">
+            <span>Max reply tokens</span>
+            <input id="local-max-tokens" type="number" min="256" max="131072" step="256" placeholder="8192">
+          </label>
+          <label class="provider-field">
+            <span>Temperature</span>
+            <input id="local-temperature" type="number" min="0" max="2" step="0.05" placeholder="0.2">
+          </label>
+          <label class="provider-field">
+            <span>Conversation memory (messages)</span>
+            <input id="local-history-turns" type="number" min="2" max="400" step="2" placeholder="40">
+          </label>
+          <label class="provider-check">
+            <input type="checkbox" id="local-truncate-config" checked>
+            Auto-truncate oversized config pastes for local context
+          </label>
+          <label class="provider-check">
+            <input type="checkbox" id="local-supports-vision">
+            Model supports vision (screenshots in chat)
+          </label>
+          <div style="font-size:10px;color:var(--text-dim);margin:-2px 0 4px;line-height:1.4;">Match context window to your server (Ollama num_ctx / LM Studio). Lower memory on 8K–16K models.</div>
+          <button id="local-test-btn" type="button" onclick="testLocalLLM()">Test connection</button>
+          <div id="local-test-result"></div>
+          <div id="provider-save-row">
+            <button id="provider-save-btn" type="button" onclick="saveProvider()">Save</button>
+            <span id="provider-save-status"></span>
+          </div>
+        </div>
+        <div id="provider-tier-lock"></div>
+      </div>
+    </div>
+
+    <div class="rs-divider"></div>
+
+    <!-- Live firewall connection + tools (read-only) -->
+    <div id="firewall-section" class="rs-section" style="padding-bottom:6px;">
+      <div id="firewall-toggle" onclick="toggleFirewallPanel()" style="cursor:pointer;display:flex;align-items:center;gap:6px;">
+        <span class="rs-label" style="margin-bottom:0;">Firewall (read-only)</span>
+        <span id="firewall-mode-label" style="font-size:11px;color:var(--text-dim);"></span>
+        <span id="firewall-chevron" style="margin-left:auto;">›</span>
+      </div>
+      <div id="firewall-panel" style="display:none;">
+        <div id="firewall-disconnected">
+          <label class="provider-field"><span>Host / IP</span>
+            <input id="fw-host" type="text" placeholder="192.0.2.1 or fw01.corp.example.com" spellcheck="false"></label>
+          <label class="provider-field"><span>Username</span>
+            <input id="fw-user" type="text" autocomplete="off" spellcheck="false"></label>
+          <label class="provider-field"><span>Password</span>
+            <input id="fw-pass" type="password" autocomplete="off"></label>
+          <label class="provider-check"><input type="checkbox" id="fw-verify-tls"> Verify TLS certificate (uncheck for self-signed)</label>
+          <div style="font-size:10px;color:var(--text-dim);margin:-2px 0 4px;line-height:1.4;">Credentials fetch an API key once, then are discarded. The key is stored encrypted (DPAPI) on this machine. Read-only: only show/test commands and config reads are possible — never a commit.</div>
+          <button id="fw-connect-btn" type="button" onclick="connectFirewall()">Connect</button>
+          <div id="fw-connect-status" style="font-size:11px;margin-top:4px;color:var(--text-sub);"></div>
+        </div>
+        <div id="firewall-connected" style="display:none;">
+          <div id="fw-info" style="font-size:11px;color:var(--text-sub);line-height:1.5;margin-bottom:6px;"></div>
+          <button type="button" onclick="disconnectFirewall()" class="provider-mini-btn">Disconnect</button>
+
+          <div class="rs-divider" style="margin:10px 0;"></div>
+          <span class="rs-label">Policy / routing test</span>
+          <label class="provider-field"><span>Test type</span>
+            <select id="fw-test-kind" onchange="onFwTestKind()">
+              <option value="security-policy-match">Security policy match</option>
+              <option value="nat-policy-match">NAT policy match</option>
+              <option value="routing-fib-lookup">Routing FIB lookup</option>
+            </select></label>
+          <div id="fw-test-fields"></div>
+          <button type="button" onclick="runFirewallTest()">Run test</button>
+          <pre id="fw-test-result" class="fw-output"></pre>
+
+          <div class="rs-divider" style="margin:10px 0;"></div>
+          <span class="rs-label">Commit preview</span>
+          <div style="font-size:10px;color:var(--text-dim);margin-bottom:4px;">Diff candidate vs running config — what a commit would change. Read-only.</div>
+          <button type="button" onclick="previewCommit()">Preview pending changes</button>
+          <pre id="fw-commit-result" class="fw-output"></pre>
+        </div>
+      </div>
+    </div>
+
+    <div class="rs-divider"></div>
+
+    <!-- Config hygiene / best-practice checks -->
+    <div id="checks-section" class="rs-section" style="padding-bottom:6px;">
+      <span class="rs-label">Config hygiene check</span>
+      <div style="font-size:10px;color:var(--text-dim);margin-bottom:4px;">Best-practice scan of your security rulebase (any-any rules, missing profiles/logging, shadowed rules). Runs locally.</div>
+      <button type="button" onclick="runHygiene('paste')">Check pasted config</button>
+      <button type="button" id="fw-hygiene-live" onclick="runHygiene('firewall')" style="display:none;">Check live firewall</button>
+      <div id="checks-result" style="margin-top:6px;"></div>
+    </div>
+
+    <div class="rs-divider"></div>
+
+    <!-- File / Config paste area -->
+    <div id="config-section" class="rs-section" style="padding:8px 12px 6px;flex-shrink:0;">
+      <span class="rs-label">Paste Config / CLI Output</span>
+      <div id="config-hint">Paste PAN-OS config, CLI output, or log entries here. For best privacy, paste only the section relevant to your question. Credentials are auto-redacted before sending.</div>
+
+      <label id="upload-btn" for="upload-file">
+        <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+        Upload file (.txt, .xml, .cfg, .log)
+      </label>
+      <input type="file" id="upload-file" accept=".txt,.xml,.cfg,.conf,.log" onchange="uploadFile(this)"/>
+      <div id="upload-status"></div>
+
+      <div id="cfg-attach-strip" class="attach-strip" aria-label="Pasted screenshots to send"></div>
+      <textarea id="config-paste" rows="5"
+        placeholder="# paste the relevant section — e.g., a specific policy rule, BGP neighbor config, or IKE profile… (or paste a screenshot)"
+        oninput="updateConfigStatus()"></textarea>
+      <div id="config-status"></div>
+      <div id="local-context-warn"></div>
+      <div id="large-cfg-warn">⚠ Config &gt;8,000 chars — counts as <strong>3 queries</strong> on Free tier</div>
+    </div>
+
+    <div class="rs-divider2"></div>
+
+    <!-- Quick actions -->
+    <div id="quick-section">
+      <span class="rs-label">Quick Actions</span>
+      <button class="qa-btn" onclick="quickAsk('Audit my rulebase for shadow rules, overly permissive entries, and rules missing security profiles.')"><span class="qa-icon">🔍</span>Audit for shadow &amp; bad rules</button>
+      <button class="qa-btn" onclick="quickAsk('Explain what this policy does in plain English, noting what traffic it permits, what zones it spans, and any concerns.')"><span class="qa-icon">📖</span>Explain this config</button>
+      <button class="qa-btn" onclick="quickAsk('Walk me through diagnosing why traffic might be hitting the interzone-default deny instead of my allow rule.')"><span class="qa-icon">🛠️</span>Traffic hitting deny? Debug</button>
+      <button class="qa-btn" onclick="quickAsk('What are the most common reasons an IPSec VPN tunnel comes up but passes no traffic?')"><span class="qa-icon">🔗</span>IPSec tunnel no traffic</button>
+      <button class="qa-btn" onclick="quickAsk('Convert my port-based security rules to App-ID. List the App-IDs I should use and any implicit dependencies.')"><span class="qa-icon">🔄</span>Convert to App-ID</button>
+      <button class="qa-btn" onclick="quickAsk('Explain the Panorama device-group and template stack hierarchy and how inheritance works in practice.')"><span class="qa-icon">🗂️</span>Panorama hierarchy explained</button>
+    </div>
+
+  </aside>
+
+</div>
+
+<script>
+/* ================================================================
+   ADK Cyber AI — Local Desktop JS
+   ================================================================ */
+
+// .NET build: no localhost server — the bridge shim intercepts all API
+// fetches by pathname, so API just needs to produce parseable URLs.
+const _apiPort = window.location.port || '0';
+const API = 'http://127.0.0.1:' + _apiPort;
+
+// Product metadata
+const PRODUCTS = {
+  'pa-series':     { name:'PA-Series NGFW',          icon:'🔥', desc:'security policy, NAT, App-ID, decryption, HA',          chips:['Security policy','NAT rules','App-ID','Decryption','HA design'] },
+  'vm-series':     { name:'VM-Series',                icon:'☁️', desc:'VMware, Azure, AWS, GCP deployment and config',          chips:['VMware/Azure/AWS deploy','Interfaces','Routing','Bootstrap'] },
+  'cn-series':     { name:'CN-Series',                icon:'🐳', desc:'Kubernetes, container security, service graph',          chips:['Kubernetes','Daemonset','Service graph','eBPF'] },
+  'panorama':      { name:'Panorama',                 icon:'🗂️', desc:'device groups, templates, log collectors, migrations',   chips:['Device groups','Templates','Log collectors','Migrations'] },
+  'prisma-access': { name:'Prisma Access',            icon:'🌐', desc:'mobile users, remote networks, ZTNA, service connections', chips:['Mobile users','Remote networks','Service connections','SPNs'] },
+  'prisma-sdwan':  { name:'Prisma SD-WAN',            icon:'🔀', desc:'ION devices, policy sets, BGP, path quality',           chips:['ION devices','Policy sets','BGP','Path quality'] },
+  'adem':          { name:'ADEM',                     icon:'📊', desc:'digital experience monitoring, autonomous tests',        chips:['Digital experience','Autonomous tests','Real user monitoring'] },
+  'cspm':          { name:'Prisma Cloud CSPM',        icon:'🛡️', desc:'misconfigurations, compliance checks, asset inventory',  chips:['Misconfigurations','Compliance checks','Asset inventory'] },
+  'cwp':           { name:'CWP / CWPP',               icon:'💻', desc:'host defender, container defender, serverless',          chips:['Host defender','Container defender','Serverless','Compliance'] },
+  'ciem':          { name:'CIEM',                     icon:'🔑', desc:'net effective permissions, least privilege, identity risks', chips:['Net effective permissions','Least privilege','Identity risks'] },
+  'appsec':        { name:'Application Security',     icon:'🧪', desc:'SAST, SCA, IaC scanning, secrets detection',            chips:['SAST','SCA','IaC scanning','Secrets detection'] },
+  'xdr':           { name:'Cortex XDR',               icon:'🔎', desc:'endpoint policy, exclusions, BIOCs, causality chains',  chips:['Endpoint policy','Exclusions','BIOCs','Causality chains'] },
+  'xsoar':         { name:'Cortex XSOAR',             icon:'⚙️', desc:'playbooks, integrations, indicators, automations',      chips:['Playbooks','Integrations','Indicators','Automations'] },
+  'xsiam':         { name:'Cortex XSIAM',             icon:'🧠', desc:'AI-driven SOC, rules, correlation, log ingestion',      chips:['AI-driven SOC','Rules','Correlation','Ingestion'] },
+  'xpanse':        { name:'Cortex Xpanse',            icon:'🌍', desc:'attack surface, asset discovery, risk scoring',         chips:['Attack surface','Asset discovery','Risk scoring'] },
+  'wildfire':      { name:'WildFire',                 icon:'🔬', desc:'verdict lookup, file submission, signatures',           chips:['Verdict lookup','File submission','Signatures','Baselining'] },
+  'atp':           { name:'Adv. Threat Prevention',   icon:'🚫', desc:'IPS signatures, C2, evasion, inline ML',               chips:['IPS signatures','C2','Evasion','Inline ML'] },
+  'urlf':          { name:'Adv. URL Filtering',       icon:'🔗', desc:'custom categories, PAN-DB, credential submission',      chips:['Custom categories','PAN-DB','Credential submission'] },
+  'dns-sec':       { name:'DNS Security',             icon:'🔍', desc:'DNS sinkhole, tunneling detection, domains',            chips:['DNS sinkhole','Tunneling detection','Domains'] },
+  'unit42':        { name:'Unit 42',                  icon:'🕵️', desc:'threat reports, IOCs, campaign tracking, ransomware',   chips:['Threat reports','IOCs','Campaign tracking','Ransomware'] },
+  'globalprotect': { name:'GlobalProtect',            icon:'🔒', desc:'gateway/portal config, HIP, split tunnel',              chips:['Gateway/portal','HIP','Split tunnel','Gateways'] },
+  'cie':           { name:'Cloud Identity Engine',    icon:'🪪', desc:'directory sync, SAML, User-ID, authentication',        chips:['Directory sync','SAML','User-ID','Auth'] },
+  'ai-runtime':    { name:'AI Runtime Security',      icon:'🤖', desc:'LLM protection, AI posture, data exposure',            chips:['LLM protection','AI posture','Data exposure'] },
+  'strata-log':    { name:'Strata Logging Service',   icon:'📋', desc:'log forwarding, retention, queries, CDL',              chips:['Log forwarding','Retention','Queries','CDL'] },
+};
+
+// State
+let currentProduct       = null;
+let currentConvId        = null;
+let configText           = '';
+let isStreaming          = false;
+let authMode             = 'login'; // 'login' | 'register'
+let currentTier          = 'free';  // updated on login/refresh; drives model & quota UI
+let _kbScrollToTop       = false;   // set by askKb(); clears after done event scrolls to top of response
+
+// ── Model selection ───────────────────────────────────────────────
+let selectedModel = 'auto';
+
+function setModel(model) {
+  selectedModel = model;
+  document.querySelectorAll('.model-pill').forEach(p => {
+    p.classList.toggle('active', p.dataset.model === model);
+  });
+}
+
+function modelLabel(m) {
+  if (!m) return '';
+  if (m.includes('opus'))   return 'Opus';
+  if (m.includes('sonnet')) return 'Sonnet';
+  if (m.includes('haiku'))  return 'Haiku';
+  return m;
+}
+
+// ── Init ─────────────────────────────────────────────────────────
+async function init() {
+  applyTheme();
+  await checkAuthStatus();
+  checkForUpdate();
+  loadAdvisories();
+  loadProviderSettings();
+  // Re-poll advisories every 10 min so a new HIGH/CRITICAL surfaces within
+  // ~10 min of the next hourly backend fetch.
+  setInterval(loadAdvisories, 10 * 60 * 1000);
+  // Re-check for new app versions every 30 min so the banner appears even
+  // for users who leave the app open for days. Server-side response is
+  // hourly-cached so this is cheap.
+  setInterval(checkForUpdate, 30 * 60 * 1000);
+}
+
+function hideUpdateBanner() {
+  const b = document.getElementById('update-banner');
+  b.style.display = 'none';
+  document.documentElement.style.setProperty('--update-banner-h', '0px');
+}
+
+function showUpdateBanner() {
+  const b = document.getElementById('update-banner');
+  b.style.display = 'flex';
+  // Publish the live height so the advisory banner can stack underneath.
+  document.documentElement.style.setProperty('--update-banner-h', b.offsetHeight + 'px');
+}
+
+// ── Auto-update ───────────────────────────────────────────────────
+async function checkForUpdate() {
+  try {
+    const res = await fetch(`${API}/api/version`);
+    if (!res.ok) return;
+    const data = await res.json();
+    // Always render the installed version label so users can confirm at a
+    // glance which build they're running.
+    const verEl = document.getElementById('app-version');
+    if (verEl && data.current_version) {
+      const cur    = data.current_version.replace(/^v/, '');
+      const latest = (data.latest_version || cur).replace(/^v/, '');
+      verEl.textContent = 'v' + cur;
+      verEl.title = data.update_available
+        ? `Installed v${cur} · update available: v${latest} (click to re-check)`
+        : `Installed v${cur} · latest available: v${latest} (click to re-check)`;
+    }
+    if (data.update_available) {
+      document.getElementById('update-banner-msg').textContent =
+        `Update available: v${data.latest_version} — install and restart automatically.`;
+      showUpdateBanner();
+    }
+  } catch (e) { /* silent — app works fine without update check */ }
+}
+
+// ── Chat provider settings (cloud vs local LLM) ────────────────────
+// State pulled from GET /api/settings — kept in sync with the backend so the
+// mode pill, quota UI, and request branching all reflect the same truth.
+let _providerState = {
+  settings:           { chat_provider: 'cloud', local_base_url: '', local_model: '', local_api_key: '' },
+  tier:               'free',
+  effective_provider: 'cloud',
+  providers_available:{ cloud: true, local: true },
+};
+
+function toggleProviderPanel() {
+  document.getElementById('provider-section').classList.toggle('expanded');
+}
+
+async function loadProviderSettings() {
+  try {
+    const res = await fetch(`${API}/api/settings`);
+    if (!res.ok) return;
+    _providerState = await res.json();
+    renderProviderUI();
+    // First-run auto-detect: most Windows users run LM Studio (port 1234) but
+    // the historical default is Ollama (port 11434). If the user has never
+    // configured a URL — or never touched the old Ollama default — probe both
+    // and silently fill in whichever responds. Fire-and-forget; if nothing
+    // answers, the existing fields stay empty and the user can set up later.
+    tryAutoDetectLocalLlm();
+  } catch (e) { /* silent — defaults stay in place */ }
+}
+
+async function tryAutoDetectLocalLlm() {
+  const st = _providerState.settings || {};
+  const url   = (st.local_base_url || '').trim();
+  const model = (st.local_model    || '').trim();
+  const isUnconfigured = !url
+    || (url === 'http://localhost:11434/v1' && !model);  // shipped default + never picked a model
+  if (!isUnconfigured) return;
+  try {
+    const res = await fetch(`${API}/api/local_llm/detect`);
+    if (!res.ok) return;
+    const d = await res.json();
+    if (!d.detected) return;
+    // Fill the UI fields, then silently POST settings so subsequent launches
+    // don't re-probe. Don't go through saveProvider() — that one flashes a
+    // "Saving…" status the user shouldn't see for a fire-and-forget detect.
+    document.getElementById('local-base-url').value = d.base_url;
+    document.getElementById('local-model').value    = d.model || '';
+    const merged = { ...(_providerState.settings || {}), local_base_url: d.base_url, local_model: d.model || '' };
+    try {
+      const saveRes = await fetch(`${API}/api/settings`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify(merged),
+      });
+      if (saveRes.ok) {
+        const saved = await saveRes.json();
+        _providerState.settings = saved.settings;
+      }
+    } catch (e) { /* silent */ }
+    // Populate the dropdown so the user sees every available model on opening Settings.
+    refreshLocalModels();
+  } catch (e) { /* silent */ }
+}
+
+function renderProviderUI() {
+  const st     = _providerState.settings || {};
+  const eff    = _providerState.effective_provider || 'cloud';
+  const avail  = _providerState.providers_available || {};
+  const tier   = _providerState.tier || 'free';
+  const section = document.getElementById('provider-section');
+
+  // Hydrate radios + fields
+  document.querySelectorAll('input[name="chat_provider"]').forEach(r => {
+    r.checked  = (r.value === st.chat_provider);
+    const row = r.closest('.provider-radio');
+    const isDisabled = avail[r.value] === false;
+    if (row) row.classList.toggle('disabled', isDisabled);
+    r.disabled = isDisabled;
+  });
+  document.getElementById('local-base-url').value = st.local_base_url || '';
+  document.getElementById('local-model').value    = st.local_model    || '';
+  document.getElementById('local-api-key').value  = st.local_api_key  || '';
+  document.getElementById('local-history-turns').value = st.local_history_turns || 40;
+  const ctxEl = document.getElementById('local-context-tokens');
+  if (ctxEl) ctxEl.value = st.local_context_tokens || 32768;
+  const maxEl = document.getElementById('local-max-tokens');
+  if (maxEl) maxEl.value = st.local_max_tokens || 8192;
+  const tempEl = document.getElementById('local-temperature');
+  if (tempEl) tempEl.value = st.local_temperature ?? 0.2;
+  const truncEl = document.getElementById('local-truncate-config');
+  if (truncEl) truncEl.checked = st.local_truncate_config !== false;
+  const visEl = document.getElementById('local-supports-vision');
+  if (visEl) visEl.checked = !!st.local_supports_vision;
+  syncLocalModelSelect(st.local_model || '');
+
+  // Show the local-fields group only when local is the current selection.
+  section.classList.toggle('show-local', st.chat_provider === 'local');
+  if (st.chat_provider === 'local') {
+    section.classList.add('expanded');
+  }
+
+  // Header label summarising the effective mode
+  const label = document.getElementById('provider-mode-label');
+  if (eff === 'local') {
+    label.textContent = `Local · ${st.local_model || '(no model)'}`;
+  } else {
+    label.textContent = 'Cloud · ADK Cyber AI';
+  }
+
+  // Tier-aware lock messaging
+  const lock = document.getElementById('provider-tier-lock');
+  if (tier === 'local') {
+    lock.innerHTML = '🔒 Your account is on the <strong>Local</strong> tier — cloud chat is not included. <a href="https://adkcyber.com/pan-copilot.html" target="_blank" rel="noopener">Upgrade to Pro</a> to unlock cloud mode.';
+    lock.classList.add('show');
+  } else if (!avail.local) {
+    const email = (document.getElementById('acct-email')?.textContent || '').trim();
+    const qs = email && email !== '—' ? `?checkout[email]=${encodeURIComponent(email)}` : '';
+    lock.innerHTML = `Local-LLM mode requires the <strong>Local</strong> tier ($5/mo). <a href="${LS_LOCAL_URL + qs}" target="_blank" rel="noopener">Get the Local tier</a> to use your own local model.`;
+    lock.classList.add('show');
+  } else {
+    lock.classList.remove('show');
+    lock.textContent = '';
+  }
+
+  // Mode pill next to the model picker
+  const pill = document.getElementById('provider-mode-pill');
+  if (pill) {
+    pill.classList.remove('cloud', 'local');
+    pill.classList.add(eff);
+    const canToggle = avail.cloud && avail.local;
+    const baseLabel = eff === 'local' ? `Local · ${st.local_model || '?'}` : 'Cloud';
+    pill.textContent = canToggle ? `${baseLabel}  ⇄` : baseLabel;
+    pill.style.cursor = canToggle ? 'pointer' : 'default';
+    if (canToggle) {
+      pill.title = eff === 'local' ? 'Click to switch to Cloud' : 'Click to switch to Local';
+    } else {
+      pill.title = eff === 'local'
+        ? `Local provider at ${st.local_base_url}`
+        : 'Cloud provider (Anthropic)';
+    }
+  }
+
+  // Hide the Anthropic model picker when in local mode (it's irrelevant).
+  document.querySelectorAll('.model-pill[data-model]').forEach(b => {
+    b.style.display = (eff === 'local') ? 'none' : '';
+  });
+  const lbl = document.getElementById('model-picker-label');
+  if (lbl) lbl.style.display = (eff === 'local') ? 'none' : '';
+
+  // Hide the "config >8K = 3 queries" weight warning in local mode (no quota).
+  const cfgWarn = document.getElementById('large-cfg-warn');
+  if (cfgWarn) cfgWarn.style.display = (eff === 'local') ? 'none' : cfgWarn.style.display;
+  updateLocalContextWarn();
+}
+
+function syncLocalModelSelect(modelName) {
+  const sel = document.getElementById('local-model-select');
+  if (!sel || !modelName) return;
+  const opts = Array.from(sel.options).map(o => o.value);
+  if (!opts.includes(modelName)) {
+    const opt = document.createElement('option');
+    opt.value = modelName;
+    opt.textContent = modelName;
+    sel.appendChild(opt);
+  }
+  sel.value = modelName;
+}
+
+function onLocalModelSelect() {
+  const sel = document.getElementById('local-model-select');
+  const inp = document.getElementById('local-model');
+  if (sel && sel.value && inp) inp.value = sel.value;
+}
+
+async function refreshLocalModels() {
+  const result = document.getElementById('local-test-result');
+  const base = document.getElementById('local-base-url').value.trim();
+  if (!base) {
+    if (result) { result.className = 'error'; result.textContent = 'Enter a base URL first.'; }
+    return;
+  }
+  const params = new URLSearchParams({ base_url: base });
+  const key = document.getElementById('local-api-key').value;
+  if (key) params.set('api_key', key);
+  if (result) { result.className = ''; result.textContent = 'Listing models…'; }
+  try {
+    const res = await fetch(`${API}/api/local_llm/models?${params}`);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      if (result) { result.className = 'error'; result.textContent = '✗ ' + (data.detail || res.statusText); }
+      return;
+    }
+    const sel = document.getElementById('local-model-select');
+    if (!sel) return;
+    const cur = document.getElementById('local-model').value.trim();
+    sel.innerHTML = '<option value="">— select model —</option>';
+    (data.models || []).forEach(m => {
+      const opt = document.createElement('option');
+      opt.value = m;
+      opt.textContent = m;
+      sel.appendChild(opt);
+    });
+    if (cur) syncLocalModelSelect(cur);
+    if (result) {
+      result.className = 'ok';
+      result.textContent = `✓ ${data.count || 0} model(s) listed`;
+    }
+  } catch (e) {
+    if (result) { result.className = 'error'; result.textContent = 'List failed: ' + e.message; }
+  }
+}
+
+let _contextEstimateTimer = null;
+async function updateLocalContextWarn() {
+  const warn = document.getElementById('local-context-warn');
+  if (!warn) return;
+  const eff = _providerState.effective_provider || 'cloud';
+  if (eff !== 'local') {
+    warn.classList.remove('show', 'over');
+    warn.textContent = '';
+    return;
+  }
+  const cfg = document.getElementById('config-paste')?.value || '';
+  const msg = document.getElementById('user-input')?.value || '';
+  try {
+    const res = await fetch(`${API}/api/local_llm/context_estimate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        config_text: cfg,
+        message: msg,
+        conversation_id: currentConvId || null,
+      }),
+    });
+    if (!res.ok) return;
+    const est = await res.json();
+    if (!est.warn && !est.over_budget) {
+      warn.classList.remove('show', 'over');
+      warn.textContent = '';
+      return;
+    }
+    const b = est.breakdown || {};
+    warn.classList.add('show');
+    warn.classList.toggle('over', !!est.over_budget);
+    const truncNote = est.truncate_config_enabled
+      ? ' Auto-truncate is on — server will trim config if needed.'
+      : '';
+    warn.innerHTML = est.over_budget
+      ? `⚠ ~${est.estimated_total_tokens.toLocaleString()} / ${est.context_limit.toLocaleString()} tokens (over budget). Paste a smaller config section or raise context window.${truncNote}`
+      : `⚠ ~${est.estimated_total_tokens.toLocaleString()} / ${est.context_limit.toLocaleString()} tokens (≥70% of context). Config ${b.config || 0} · history ${b.history || 0}.${truncNote}`;
+  } catch (e) { /* silent */ }
+}
+
+function scheduleContextEstimate() {
+  clearTimeout(_contextEstimateTimer);
+  _contextEstimateTimer = setTimeout(updateLocalContextWarn, 400);
+}
+
+function onProviderChange() {
+  const radio = document.querySelector('input[name="chat_provider"]:checked');
+  if (!radio) return;
+  _providerState.settings.chat_provider = radio.value;
+  document.getElementById('provider-section').classList.toggle('show-local', radio.value === 'local');
+  if (radio.value === 'local') {
+    document.getElementById('provider-section').classList.add('expanded');
+  }
+  // Persist immediately — selecting a provider should switch right away, no
+  // separate Save click. (Field edits still use the Save button.)
+  saveProvider();
+}
+
+// One-click switch via the mode pill. Only meaningful when the tier has both
+// providers available (owner/pro/max with a configured local endpoint).
+async function toggleProvider() {
+  const avail = _providerState.providers_available || {};
+  if (!avail.cloud || !avail.local) return;
+  const st   = _providerState.settings || {};
+  const cur  = st.chat_provider || 'cloud';
+  const next = cur === 'local' ? 'cloud' : 'local';
+  // Switching to local needs a configured endpoint — open settings if missing.
+  if (next === 'local' && !(st.local_base_url || '').trim()) {
+    document.getElementById('provider-section').classList.add('expanded');
+    return;
+  }
+  try {
+    const res = await fetch(`${API}/api/settings`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ chat_provider: next }),
+    });
+    if (!res.ok) return;
+    const data = await res.json();
+    _providerState.settings           = data.settings;
+    _providerState.effective_provider = data.effective_provider;
+    renderProviderUI();
+  } catch (e) { /* leave the pill as-is on failure */ }
+}
+
+async function saveProvider() {
+  const radio  = document.querySelector('input[name="chat_provider"]:checked');
+  const status = document.getElementById('provider-save-status');
+  status.textContent = 'Saving…';
+  const body = {
+    chat_provider:  radio ? radio.value : 'cloud',
+    local_base_url: document.getElementById('local-base-url').value.trim(),
+    local_model:    document.getElementById('local-model').value.trim(),
+    local_api_key:  document.getElementById('local-api-key').value,
+    local_history_turns: parseInt(document.getElementById('local-history-turns').value, 10) || 40,
+    local_context_tokens: parseInt(document.getElementById('local-context-tokens').value, 10) || 32768,
+    local_max_tokens: parseInt(document.getElementById('local-max-tokens').value, 10) || 8192,
+    local_temperature: parseFloat(document.getElementById('local-temperature').value) || 0.2,
+    local_truncate_config: document.getElementById('local-truncate-config').checked,
+    local_supports_vision: document.getElementById('local-supports-vision').checked,
+  };
+  try {
+    const res = await fetch(`${API}/api/settings`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      status.textContent = err.detail || `Save failed (${res.status})`;
+      status.style.color = '#f85149';
+      return;
+    }
+    const data = await res.json();
+    _providerState.settings           = data.settings;
+    _providerState.effective_provider = data.effective_provider;
+    renderProviderUI();
+    status.textContent = '✓ Saved';
+    status.style.color = '#4caf50';
+    setTimeout(() => { status.textContent = ''; }, 2500);
+  } catch (e) {
+    status.textContent = 'Save failed — server unreachable.';
+    status.style.color = '#f85149';
+  }
+}
+
+async function testLocalLLM() {
+  const result = document.getElementById('local-test-result');
+  result.className = '';
+  result.textContent = 'Testing…';
+  const body = {
+    base_url: document.getElementById('local-base-url').value.trim(),
+    model:    document.getElementById('local-model').value.trim(),
+    api_key:  document.getElementById('local-api-key').value || null,
+  };
+  try {
+    const res = await fetch(`${API}/api/local_llm/test`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify(body),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      result.className = 'error';
+      result.textContent = '✗ ' + (data.detail || `HTTP ${res.status}`);
+      return;
+    }
+    result.className = 'ok';
+    result.textContent = `✓ Connected · ${data.latency_ms} ms · ${data.model || ''}`;
+    // Auto-save on a successful test — a tested-but-unsaved provider is the
+    // most common "it won't connect" trap, so persist it immediately.
+    await saveProvider();
+  } catch (e) {
+    result.className = 'error';
+    result.textContent = '✗ Connection failed — server unreachable.';
+  }
+}
+
+// ── PAN security advisory banner ──────────────────────────────────
+// Backend polls https://security.paloaltonetworks.com/rss.xml hourly and
+// only surfaces HIGH/CRITICAL items published after install. We just render
+// whatever the backend returns.
+let _advisoryCache = [];
+
+async function loadAdvisories(force) {
+  try {
+    const url = `${API}/api/advisories${force ? '?force=1' : ''}`;
+    const res = await fetch(url);
+    if (!res.ok) return;
+    const data = await res.json();
+    _advisoryCache = Array.isArray(data.advisories) ? data.advisories : [];
+    window.__deviceVersion = data.device_version || '';
+    renderAdvisoryBanner();
+  } catch (e) { /* silent — banner just stays in its previous state */ }
+}
+
+function renderAdvisoryBanner() {
+  const banner  = document.getElementById('advisory-banner');
+  const summary = document.getElementById('advisory-summary');
+  const list    = document.getElementById('advisory-list');
+  if (!banner || !summary || !list) return;
+
+  const items = _advisoryCache;
+  if (!items.length) {
+    banner.classList.remove('show');
+    banner.classList.remove('expanded');
+    return;
+  }
+
+  const nCritical = items.filter(i => i.severity === 'CRITICAL').length;
+  const nHigh     = items.filter(i => i.severity === 'HIGH').length;
+  banner.classList.toggle('sev-high', nCritical === 0);
+
+  const parts = [];
+  if (nCritical) parts.push(`${nCritical} Critical`);
+  if (nHigh)     parts.push(`${nHigh} High`);
+  const noun = items.length === 1 ? 'advisory' : 'advisories';
+  const devVer = window.__deviceVersion || '';
+  const devTag = devVer ? ` · your device: PAN-OS ${devVer}` : '';
+  summary.textContent = `${parts.join(' · ')} Palo Alto security ${noun}${devTag} — click to view`;
+
+  list.innerHTML = items.map(it => {
+    const sev   = (it.severity || '').toUpperCase();
+    const date  = (it.pub_date || '').slice(0, 10);  // YYYY-MM-DD
+    const href  = it.link || '';
+    const title = it.title || it.cve_id || '';
+    // When a firewall is connected we know its PAN-OS version, so offer a
+    // one-click "am I affected?" that asks the AI with the device version.
+    const affectedBtn = devVer
+      ? `<button class="advisory-dismiss" style="color:var(--accent,#58a6ff);font-weight:600;" onclick="askAffected('${escAttr(it.cve_id)}', '${escAttr(title)}', event)" title="Am I affected?">?</button>`
+      : '';
+    return (
+      `<div class="advisory-row">` +
+        `<span class="advisory-sev ${sev}">${sev}</span>` +
+        `<a class="advisory-title" href="${escAttr(href)}" target="_blank" rel="noopener noreferrer" title="${escAttr(title)}">${escHtml(title)}</a>` +
+        `<span class="advisory-date">${escHtml(date)}</span>` +
+        affectedBtn +
+        `<button class="advisory-dismiss" onclick="dismissAdvisory('${escAttr(it.cve_id)}', event)" title="Dismiss">✕</button>` +
+      `</div>`
+    );
+  }).join('');
+
+  banner.classList.add('show');
+}
+
+function toggleAdvisoryBanner() {
+  document.getElementById('advisory-banner').classList.toggle('expanded');
+}
+
+async function dismissAdvisory(cveId, evt) {
+  if (evt) evt.stopPropagation();
+  if (!cveId) return;
+  // Optimistic: drop from local cache and re-render before the request returns.
+  _advisoryCache = _advisoryCache.filter(i => i.cve_id !== cveId);
+  renderAdvisoryBanner();
+  try {
+    await fetch(`${API}/api/advisories/dismiss`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ cve_id: cveId }),
+    });
+  } catch (e) { /* swallow — local cache already reflects dismissal */ }
+}
+
+// Top-level close: dismiss every currently-shown advisory. Banner stays hidden
+// until the next hourly backend poll inserts a brand-new HIGH/CRITICAL row.
+async function dismissAllAdvisories(evt) {
+  if (evt) evt.stopPropagation();
+  _advisoryCache = [];
+  renderAdvisoryBanner();
+  try {
+    await fetch(`${API}/api/advisories/dismiss_all`, { method: 'POST' });
+  } catch (e) { /* swallow — local cache already reflects dismissal */ }
+}
+
+// HTML-attribute-safe escape: same as escHtml but also handles quote chars.
+function escAttr(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+// Manual re-check: bypass the backend's 1-hour update cache via ?force=1.
+async function recheckVersion() {
+  const verEl = document.getElementById('app-version');
+  if (verEl) verEl.textContent = '…';
+  try {
+    const res = await fetch(`${API}/api/version?force=1`);
+    if (!res.ok) {
+      if (verEl) verEl.textContent = 'v?';
+      return;
+    }
+    const data = await res.json();
+    const cur    = (data.current_version || '?').replace(/^v/, '');
+    const latest = (data.latest_version || cur).replace(/^v/, '');
+    if (verEl) {
+      verEl.textContent = 'v' + cur;
+      verEl.title = data.update_available
+        ? `Installed v${cur} · update available: v${latest} (click to re-check)`
+        : `Installed v${cur} · latest available: v${latest} (click to re-check)`;
+    }
+    if (data.update_available) {
+      document.getElementById('update-banner-msg').textContent =
+        `Update available: v${data.latest_version} — install and restart automatically.`;
+      showUpdateBanner();
+    }
+  } catch (e) {
+    if (verEl) verEl.textContent = 'v?';
+  }
+}
+
+async function installUpdate() {
+  const btn = document.getElementById('update-install-btn');
+  const msg = document.getElementById('update-banner-msg');
+  btn.textContent = 'Downloading…';
+  btn.disabled = true;
+  msg.textContent = 'Downloading update — do not close this window…';
+  try {
+    const r = await fetch(`${API}/api/update`, { method: 'POST' });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      btn.textContent = 'Update Now';
+      btn.disabled = false;
+      msg.textContent = 'Update failed: ' + (err.detail || r.statusText);
+      return;
+    }
+    // Backend has verified the download, extracted to a staging dir, and
+    // launched the swap-and-relaunch helper. Poll /health until the app
+    // shuts itself down, then close this window so the helper can finish
+    // the file copy without lock conflicts.
+    msg.textContent = 'Installing update — this window will close automatically…';
+    _pollForUpdateShutdown();
+  } catch (e) {
+    btn.textContent = 'Update Now';
+    btn.disabled = false;
+    msg.textContent = 'Download failed. Try again later.';
+  }
+}
+
+async function _pollForUpdateShutdown() {
+  for (let i = 0; i < 90; i++) {        // poll up to ~3 minutes
+    await new Promise(r => setTimeout(r, 2000));
+    try {
+      await fetch(`${API}/health`, { cache: 'no-store', signal: AbortSignal.timeout(1500) });
+    } catch {
+      // Server is down — installer is now running and will close this window.
+      // Show a clean waiting screen; do NOT navigate away (causes about:blank flash).
+      document.body.innerHTML = `
+        <div style="
+          display:flex; flex-direction:column; align-items:center; justify-content:center;
+          height:100vh; background:#0d1520; color:#fff; font-family:system-ui,sans-serif;
+          gap:18px; text-align:center; padding:32px;">
+          <svg viewBox="0 0 32 32" width="48" height="48" fill="none" stroke="#00D4E4"
+               stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round">
+            <path d="M4 26 L12 8 L20 22 L28 12"/>
+            <path d="M4 26 L28 26" opacity=".5"/>
+          </svg>
+          <div style="font-size:18px; font-weight:700;">Installing update…</div>
+          <div style="font-size:13px; color:rgba(255,255,255,0.55); max-width:320px; line-height:1.6;">
+            ADK Cyber AI is updating. This window will close automatically.<br>
+            The app will relaunch when installation is complete.
+          </div>
+          <div style="width:40px; height:3px; background:#00D4E4; border-radius:2px;
+                      animation:pulse 1.2s ease-in-out infinite;"></div>
+        </div>
+        <style>
+          @keyframes pulse {
+            0%,100% { opacity:0.3; transform:scaleX(0.6); }
+            50%      { opacity:1;   transform:scaleX(1);   }
+          }
+        </style>`;
+      return;
+    }
+  }
+}
+
+async function checkAuthStatus() {
+  try {
+    const res  = await fetch(`${API}/api/auth/status`);
+    const data = await res.json();
+    if (data.authenticated) {
+      onAuthenticated(data);
+    } else {
+      showAuthOverlay();
+    }
+  } catch (e) {
+    // Server not yet ready — retry
+    setTimeout(checkAuthStatus, 800);
+  }
+}
+
+function onAuthenticated(data) {
+  document.getElementById('auth-overlay').style.display = 'none';
+  const used  = data.queries_used  ?? data.weekly_used  ?? 0;
+  const limit = data.queries_limit ?? data.weekly_limit ?? 10;
+  const period = data.period ?? (data.tier === 'free' ? 'weekly' : 'monthly');
+  updateTierUI(data.tier, used, limit, period);
+  document.getElementById('acct-email').textContent = data.email || '—';
+  document.getElementById('acct-tier').textContent  = tierLabel(data.tier);
+  updateUsageDisplay(used, limit, data.tier, period);
+  // Show/hide upgrade link
+  document.getElementById('upgrade-link').style.display = data.tier === 'free' ? 'inline-block' : 'none';
+  loadConversations();
+}
+
+function tierLabel(tier) {
+  switch (tier) {
+    case 'pro':   return 'Pro ($20/mo)';
+    case 'max':   return 'MAX ($50/mo)';
+    case 'local': return 'Local ($5/mo)';
+    case 'owner': return 'Owner';
+    default:      return 'Free';
+  }
+}
+
+const LS_PRO_URL   = 'https://adkcyber.lemonsqueezy.com/checkout/buy/1c4c4370-4557-4651-a684-fadaf1a44404';
+const LS_MAX_URL   = 'https://adkcyber.lemonsqueezy.com/checkout/buy/0475eb28-6e6b-4f68-adcc-9de6045192d6';
+const LS_LOCAL_URL = 'https://adkcyber.lemonsqueezy.com/checkout/buy/358bcb87-a7aa-4412-a546-77221ff418b6';
+
+function openUpgradeModal() {
+  const email = document.getElementById('acct-email').textContent.trim();
+  const qs = email && email !== '—' ? `?checkout[email]=${encodeURIComponent(email)}` : '';
+  document.getElementById('upgrade-pro-btn').href = LS_PRO_URL + qs;
+  document.getElementById('upgrade-max-btn').href = LS_MAX_URL + qs;
+  document.getElementById('upgrade-modal-backdrop').classList.add('open');
+}
+
+function closeUpgradeModal(e) {
+  if (!e || e.target === document.getElementById('upgrade-modal-backdrop') || e.target.id === 'upgrade-modal-close') {
+    document.getElementById('upgrade-modal-backdrop').classList.remove('open');
+  }
+}
+
+// ── Multi-vendor → PAN-OS migration (local /api/migrate) ──────────
+let migCiscoFile = null;
+let migXmlFile = null;
+
+function openMigrationModal() {
+  document.getElementById('migration-modal-backdrop').classList.add('open');
+}
+
+function closeMigrationModal(e) {
+  if (!e || e.target === document.getElementById('migration-modal-backdrop')) {
+    document.getElementById('migration-modal-backdrop').classList.remove('open');
+  }
+}
+
+function migUpdateReady() {
+  const ready = !!migCiscoFile;
+  document.getElementById('mig-run-btn').disabled = !ready;
+  document.getElementById('mig-zip-btn').disabled = !ready;
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  const cIn = document.getElementById('mig-cisco-input');
+  const xIn = document.getElementById('mig-xml-input');
+  if (cIn) {
+    cIn.addEventListener('change', () => {
+      migCiscoFile = cIn.files[0] || null;
+      document.getElementById('mig-cisco-label').textContent = migCiscoFile ? migCiscoFile.name : 'Drop or click';
+      migUpdateReady();
+    });
+  }
+  if (xIn) {
+    xIn.addEventListener('change', () => {
+      migXmlFile = xIn.files[0] || null;
+      document.getElementById('mig-xml-label').textContent = migXmlFile ? migXmlFile.name : 'Optional base XML';
+    });
+  }
+  migVendorHint();
+});
+
+function migFormData() {
+  const fd = new FormData();
+  fd.append('cisco_config', migCiscoFile);
+  if (migXmlFile) fd.append('base_xml', migXmlFile);
+  fd.append('vsys', document.getElementById('mig-vsys').value || 'vsys1');
+  fd.append('mode', 'firewall');
+  const vendor = document.getElementById('mig-vendor');
+  if (vendor) fd.append('source_vendor', vendor.value || 'auto');
+  return fd;
+}
+
+const MIG_VENDOR_HINTS = {
+  auto: 'Auto-detect: Cisco ASA/FTD JSON, Check Point mgmt_cli, FortiGate show full-configuration, Junos security {}, PAN-OS XML/SET.',
+  cisco: 'ASA running-config, FMC ASA-syntax export, or FTD JSON policy export.',
+  checkpoint: 'R80+ mgmt_cli / show configuration (add host, add network, add access-rule).',
+  fortinet: 'Paste config firewall address + policy sections (single VDOM).',
+  juniper: 'Junos security policies or ScreenOS set policy lines.',
+  palo: 'PAN-OS running-config XML or SET export (Palo-to-Palo re-platform).',
+  panorama: 'Panorama shared config XML — objects/rules imported; map to standalone vsys manually.',
+};
+
+function migVendorHint() {
+  const sel = document.getElementById('mig-vendor');
+  const el = document.getElementById('mig-vendor-hint');
+  if (sel && el) el.textContent = MIG_VENDOR_HINTS[sel.value] || MIG_VENDOR_HINTS.auto;
+}
+
+async function runMigrationPreview() {
+  if (!migCiscoFile) return;
+  const st = document.getElementById('mig-status');
+  st.textContent = 'Running local migration preview…';
+  try {
+    const res = await fetch('/api/migrate/preview', { method: 'POST', body: migFormData() });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      st.textContent = 'Error: ' + (err.detail || res.statusText);
+      return;
+    }
+    const data = await res.json();
+    const s = data.summary || {};
+    st.textContent =
+      `Vendor: ${data.source_vendor || '?'} | Format: ${data.source_format}\n` +
+      `SET commands: ${data.counts.set_commands}\n` +
+      `Addresses: ${data.counts.addresses} | Rules: ${data.counts.security_rules} | NAT: ${data.counts.nat_rules} | VPN: ${data.counts.vpn_tunnels}\n` +
+      `Report: auto=${s.auto||0} approximation=${s.approximation||0} manual=${s.manual_required||0} blocker=${s.blocker||0} unmapped=${s.unmapped_lines||0}`;
+  } catch (e) {
+    st.textContent = 'Preview failed: ' + e.message;
+  }
+}
+
+async function downloadMigrationZip() {
+  if (!migCiscoFile) return;
+  const st = document.getElementById('mig-status');
+  st.textContent = 'Building ZIP bundle…';
+  try {
+    const res = await fetch('/api/migrate', { method: 'POST', body: migFormData() });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      st.textContent = 'Error: ' + (err.detail || res.statusText);
+      return;
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'pan_migration_bundle.zip';
+    a.click();
+    URL.revokeObjectURL(url);
+    st.textContent = 'Download started — review migration_report.json before commit.';
+  } catch (e) {
+    st.textContent = 'Download failed: ' + e.message;
+  }
+}
+
+// ── Data disclosure (one-time acknowledgment) ────────────────────
+function showDataDisclosure() {
+  document.getElementById('data-disclosure-backdrop').classList.add('open');
+}
+function closeDataDisclosure(e) {
+  if (!e || e.target === document.getElementById('data-disclosure-backdrop')) {
+    document.getElementById('data-disclosure-backdrop').classList.remove('open');
+  }
+}
+function ackDataDisclosure() {
+  localStorage.setItem('pcop_data_ack', '1');
+  document.getElementById('data-disclosure-backdrop').classList.remove('open');
+  sendMessage();
+}
+
+function updateTierUI(tier, queriesUsed, queriesLimit, period) {
+  currentTier = tier || 'free'; // keep module-level state in sync
+  const badge = document.getElementById('tier-badge');
+  badge.style.display = 'flex';
+  if (tier === 'pro') {
+    badge.className = 'pro';
+    const used = queriesUsed ?? 0;
+    const lim  = queriesLimit ?? 1000;
+    badge.textContent = `★ Pro · ${used.toLocaleString()}/${lim.toLocaleString()} this month`;
+  } else if (tier === 'max') {
+    badge.className = 'max';
+    const used = queriesUsed ?? 0;
+    const lim  = queriesLimit ?? 2500;
+    badge.textContent = `★ MAX · ${used.toLocaleString()}/${lim.toLocaleString()} this month`;
+  } else if (tier === 'local') {
+    badge.className = 'pro';  // reuse the green-ish pro styling
+    badge.textContent = '⚙ Local · runs on your machine';
+  } else if (tier === 'owner') {
+    badge.className = 'max';
+    badge.textContent = '★ Owner · unlimited';
+  } else {
+    badge.className = 'free';
+    const used = queriesUsed ?? 0;
+    const lim  = queriesLimit ?? 10;
+    badge.textContent = `Free · ${used}/${lim} this week`;
+  }
+  // Show the free-tier limitations box only for free users
+  document.getElementById('free-tier-info').style.display = (tier === 'free') ? 'block' : 'none';
+  // Re-evaluate the large-config warning with the current config value
+  updateConfigStatus();
+  // Refresh the provider panel — tier change can flip cloud availability.
+  if (_providerState) {
+    _providerState.tier = currentTier;
+    if (currentTier === 'local') {
+      _providerState.providers_available = { cloud: false, local: true };
+      _providerState.effective_provider  = 'local';
+      _providerState.settings.chat_provider = 'local';
+    }
+    renderProviderUI();
+  }
+}
+
+function updateUsageDisplay(queriesUsed, queriesLimit, tier, period) {
+  const row   = document.getElementById('acct-usage-row');
+  const label = document.querySelector('#acct-usage-row .acct-label');
+  const val   = document.getElementById('acct-usage');
+  row.style.display = 'flex';
+  if (tier === 'local') {
+    if (label) label.textContent = 'Cloud queries';
+    val.innerHTML = '<span style="color:var(--text-sub)">N/A — runs on your machine</span>';
+    return;
+  }
+  if (tier === 'owner') {
+    if (label) label.textContent = 'Queries';
+    val.innerHTML = '<span style="color:var(--text-sub)">Unlimited</span>';
+    return;
+  }
+  const used  = queriesUsed ?? 0;
+  const lim   = queriesLimit ?? (tier === 'free' ? 10 : tier === 'pro' ? 1000 : 2500);
+  const pct   = Math.min(100, Math.round((used / lim) * 100));
+  const p     = period ?? (tier === 'free' ? 'weekly' : 'monthly');
+
+  row.style.display = 'flex';
+  if (label) label.textContent = p === 'weekly' ? 'Queries this week' : 'Queries this month';
+  val.innerHTML = `
+    ${used.toLocaleString()} / ${lim.toLocaleString()}
+    <span style="margin-left:8px;font-size:10px;color:var(--text-sub)">${pct}%</span>
+    <div style="margin-top:5px;height:3px;border-radius:2px;background:var(--border);width:120px">
+      <div style="height:100%;border-radius:2px;width:${pct}%;background:${pct >= 90 ? '#e05252' : pct >= 70 ? '#d4891a' : 'var(--accent)'}"></div>
+    </div>`;
+}
+
+// ── Auth overlay ──────────────────────────────────────────────────
+function showAuthOverlay() {
+  document.getElementById('auth-overlay').style.display = 'flex';
+}
+
+function switchTab(mode) {
+  authMode = mode;
+  document.getElementById('tab-login').classList.toggle('active', mode === 'login');
+  document.getElementById('tab-register').classList.toggle('active', mode === 'register');
+  document.getElementById('auth-submit').textContent = mode === 'login' ? 'Sign In' : 'Create Account';
+  document.getElementById('auth-error').style.display = 'none';
+  document.getElementById('auth-password').autocomplete = mode === 'login' ? 'current-password' : 'new-password';
+}
+
+async function submitAuth() {
+  const email    = document.getElementById('auth-email').value.trim();
+  const password = document.getElementById('auth-password').value;
+  const btn      = document.getElementById('auth-submit');
+  const err      = document.getElementById('auth-error');
+  err.style.display = 'none';
+
+  if (!email || !password) {
+    showAuthError('Please enter your email and password.');
+    return;
+  }
+
+  btn.disabled = true;
+  btn.textContent = authMode === 'login' ? 'Signing in…' : 'Creating account…';
+
+  const endpoint = authMode === 'login' ? '/api/auth/login' : '/api/auth/register';
+
+  try {
+    const res = await fetch(`${API}${endpoint}`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({email, password}),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      showAuthError(data.detail || 'Authentication failed.');
+    } else {
+      onAuthenticated(data);
+    }
+  } catch (e) {
+    showAuthError('Could not reach local server. Is ADK Cyber AI running?');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = authMode === 'login' ? 'Sign In' : 'Create Account';
+  }
+}
+
+function showAuthError(msg) {
+  const el = document.getElementById('auth-error');
+  el.textContent = msg;
+  el.style.display = 'block';
+}
+
+// Enter key on auth form
+document.addEventListener('DOMContentLoaded', () => {
+  ['auth-email','auth-password'].forEach(id => {
+    document.getElementById(id).addEventListener('keydown', e => {
+      if (e.key === 'Enter') submitAuth();
+    });
+  });
+  init();
+});
+
+// ── Account panel ─────────────────────────────────────────────────
+function openSettings() {
+  document.getElementById('settings-panel').classList.add('open');
+}
+function closeSettings() {
+  document.getElementById('settings-panel').classList.remove('open');
+}
+
+async function logout() {
+  try {
+    await fetch(`${API}/api/auth/logout`, {method: 'POST'});
+  } catch {}
+  document.getElementById('tier-badge').style.display = 'none';
+  closeSettings();
+  showAuthOverlay();
+}
+
+// ── Theme ─────────────────────────────────────────────────────────
+function applyTheme() {
+  const t = localStorage.getItem('theme') || 'dark';
+  document.documentElement.setAttribute('data-theme', t);
+  document.getElementById('t-icon').textContent  = t === 'dark' ? '☀️' : '🌙';
+  document.getElementById('t-label').textContent = t === 'dark' ? 'Light' : 'Dark';
+}
+function toggleTheme() {
+  const next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+  localStorage.setItem('theme', next);
+  applyTheme();
+}
+
+// ── Product selection ─────────────────────────────────────────────
+function selectProduct(id) {
+  currentProduct = id;
+  const p = PRODUCTS[id];
+
+  document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
+  document.querySelector(`[data-id="${id}"]`)?.classList.add('active');
+
+  document.getElementById('context-icon').textContent = p.icon;
+  document.getElementById('context-name').textContent = p.name;
+  document.getElementById('context-desc').textContent = `· ${p.desc}`;
+
+  const chips = document.getElementById('context-chips');
+  chips.innerHTML = p.chips.map(c => `<button class="ctx-chip" onclick="quickAsk(${JSON.stringify(c).replace(/"/g, '&quot;')})">${escHtml(c)}</button>`).join('');
+}
+
+// ── Conversation list ─────────────────────────────────────────────
+async function loadConversations() {
+  try {
+    const res  = await fetch(`${API}/conversations`);
+    const list = await res.json();
+    renderConvList(list);
+  } catch {}
+}
+
+function renderConvList(list) {
+  const el = document.getElementById('conv-list');
+  if (!list.length) {
+    el.innerHTML = '<div id="conv-empty">No conversations yet.</div>';
+    return;
+  }
+  el.innerHTML = list.map(c => `
+    <div class="conv-item${c.id === currentConvId ? ' active' : ''}" onclick="loadConv(${JSON.stringify(c.id).replace(/"/g, '&quot;')})">
+      <span class="conv-item-title">${escHtml(c.title)}</span>
+      <button class="conv-item-del" onclick="deleteConv(event,${JSON.stringify(c.id).replace(/"/g, '&quot;')})" title="Delete">✕</button>
+    </div>
+  `).join('');
+}
+
+async function loadConv(id) {
+  try {
+    const res  = await fetch(`${API}/conversations/${id}`);
+    const data = await res.json();
+    currentConvId = id;
+    clearMessages();
+    for (const m of data.messages) {
+      if (m.role === 'user')      appendUserMessage(m.content);
+      if (m.role === 'assistant') appendAssistantMessage(m.content, null);
+    }
+    loadConversations();
+  } catch {}
+}
+
+async function deleteConv(e, id) {
+  e.stopPropagation();
+  await fetch(`${API}/conversations/${id}`, {method: 'DELETE'});
+  if (currentConvId === id) { currentConvId = null; newChat(); }
+  loadConversations();
+}
+
+// ── History header dropdown ───────────────────────────────────────
+function toggleHistoryDrop() {
+  const drop = document.getElementById('history-drop');
+  const isOpen = drop.classList.contains('open');
+  if (isOpen) { closeHistoryDrop(); } else { openHistoryDrop(); }
+}
+
+function openHistoryDrop() {
+  document.getElementById('history-drop').classList.add('open');
+  document.getElementById('history-btn').classList.add('open');
+  renderHistoryDrop();
+}
+
+function closeHistoryDrop() {
+  document.getElementById('history-drop').classList.remove('open');
+  document.getElementById('history-btn').classList.remove('open');
+}
+
+async function renderHistoryDrop() {
+  const list = document.getElementById('history-drop-list');
+  list.innerHTML = '<div id="history-drop-empty">Loading…</div>';
+  try {
+    const res  = await fetch(`${API}/conversations`);
+    const convs = await res.json();
+    if (!convs.length) {
+      list.innerHTML = '<div id="history-drop-empty">No history yet. Start a chat below.</div>';
+      return;
+    }
+    list.innerHTML = convs.map(c => `
+      <div class="hdrop-item${c.id === currentConvId ? ' active' : ''}"
+           onclick="hdropLoad(${JSON.stringify(c.id).replace(/"/g,'&quot;')})">
+        <span class="hdrop-title">${escHtml(c.title)}</span>
+        <button class="hdrop-del"
+                onclick="hdropDelete(event,${JSON.stringify(c.id).replace(/"/g,'&quot;')})"
+                title="Delete">✕</button>
+      </div>
+    `).join('');
+  } catch {
+    list.innerHTML = '<div id="history-drop-empty">Could not load history.</div>';
+  }
+}
+
+async function hdropLoad(id) {
+  closeHistoryDrop();
+  await loadConv(id);
+}
+
+async function hdropDelete(e, id) {
+  e.stopPropagation();
+  await fetch(`${API}/conversations/${id}`, { method: 'DELETE' });
+  if (currentConvId === id) { currentConvId = null; newChat(); }
+  loadConversations();
+  renderHistoryDrop();
+}
+
+// Close history dropdown on outside click or Escape
+document.addEventListener('click', function (e) {
+  const wrap = document.getElementById('history-wrap');
+  if (wrap && !wrap.contains(e.target)) closeHistoryDrop();
+  const kbWrap = document.getElementById('kb-dropdown-wrap');
+  if (kbWrap && !kbWrap.contains(e.target)) closeKbDropdown();
+});
+document.addEventListener('keydown', function (e) {
+  if (e.key === 'Escape') { closeHistoryDrop(); closeKbDropdown(); }
+});
+
+// ── KB header dropdown ────────────────────────────────────────────
+function toggleKbDropdown() {
+  const btn  = document.getElementById('kb-dropdown-btn');
+  const menu = document.getElementById('kb-dropdown-menu');
+  const open = menu.classList.contains('open');
+  if (open) { menu.classList.remove('open'); btn.classList.remove('open'); }
+  else       { menu.classList.add('open');    btn.classList.add('open');   }
+}
+function closeKbDropdown() {
+  document.getElementById('kb-dropdown-menu').classList.remove('open');
+  document.getElementById('kb-dropdown-btn').classList.remove('open');
+}
+
+// ── KB article shortcut ───────────────────────────────────────────
+// Called when a Knowledge Base entry in the left nav is clicked.
+// Sets the chat input to the KB trigger phrase and submits.
+function askKb(trigger) {
+  if (isStreaming) return;
+  _kbScrollToTop = true;
+  const input = document.getElementById('user-input');
+  input.value = trigger;
+  sendMessage();
+}
+
+function newChat() {
+  currentConvId = null;
+  clearMessages();
+  document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
+  currentProduct = null;
+  document.getElementById('context-icon').textContent = '🔥';
+  document.getElementById('context-name').textContent = 'ADK Cyber AI';
+  document.getElementById('context-desc').textContent = '· Select a product from the left to focus the chat, or ask anything below.';
+  document.getElementById('context-chips').innerHTML = '';
+  loadConversations();
+}
+
+// ── Messages ──────────────────────────────────────────────────────
+function clearMessages() {
+  const el = document.getElementById('messages');
+  el.innerHTML = `
+    <div id="welcome">
+      <div class="w-logo"><svg viewBox="0 0 32 32" width="30" height="30" fill="none" stroke="white" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true"><path d="M4 26 L12 8 L20 22 L28 12"/><path d="M4 26 L28 26" opacity=".55"/></svg></div>
+      <h2>Hey &mdash; what are we troubleshooting today?</h2>
+      <p>Ask anything about Palo Alto Networks: NGFW, Panorama, Cortex XDR, Prisma Access. Bring configs, logs, CLI output &mdash; Copilot reads them.</p>
+      <div class="example-grid">
+        <button class="example" onclick="prefillInput(&quot;What's the most common rule problem in NGFW? Walk me through finding and fixing it.&quot;)"><b>Audit my rule base</b>What's the most common rule problem in NGFW?</button>
+        <button class="example" onclick="prefillInput(&quot;Explain what 'show running security-policy' outputs and how to read it.&quot;)"><b>Decode CLI output</b>Explain &quot;show running security-policy&quot;</button>
+        <button class="example" onclick="prefillInput(&quot;Traffic from 10.1.0.0/24 to the DMZ is getting dropped. Help me diagnose why.&quot;)"><b>Troubleshoot a drop</b>Traffic from 10.1.0.0/24 to DMZ getting dropped</button>
+        <button class="example" onclick="prefillInput(&quot;What are the pre-flight checks for a PAN-OS 10.2 to 11.1 upgrade?&quot;)"><b>PAN-OS migration</b>Pre-flight checks for 10.2 to 11.1 upgrade</button>
+      </div>
+      <div class="info-card">
+        <div class="info-row info-privacy">
+          <span>🔒</span>
+          <span>Credentials auto-redacted · configs go directly to Anthropic's API, never to ADK Cyber</span>
+        </div>
+        <div class="info-row info-tip">
+          <span>⚠️</span>
+          <div><strong>Best practice:</strong> Paste only the section of config relevant to your question rather than a full <code>show config running</code> export. This limits unnecessary exposure of your network topology to third-party AI infrastructure.</div>
+        </div>
+      </div>
+    </div>`;
+}
+
+function hideWelcome() {
+  document.getElementById('welcome')?.remove();
+}
+
+function appendUserMessage(text, attachments) {
+  hideWelcome();
+  const div = document.createElement('div');
+  div.className = 'msg-row user';
+  let attachHtml = '';
+  if (attachments && attachments.length) {
+    const thumbs = attachments
+      .map(a => `<img alt="pasted screenshot" src="${a.dataUrl}" onclick="window.open(this.src,'_blank')">`)
+      .join('');
+    attachHtml = `<div class="msg-attach-row">${thumbs}</div>`;
+  }
+  div.innerHTML =
+    `<div class="msg-bubble">` +
+      `<div class="msg-label">You</div>` +
+      attachHtml +
+      `<div class="msg-text">${escHtml(text)}</div>` +
+    `</div>`;
+  document.getElementById('messages').appendChild(div);
+  scrollBottom();
+}
+
+function appendAssistantMessage(text, tokenMeta) {
+  hideWelcome();
+  const div = document.createElement('div');
+  div.className = 'msg-row assistant';
+  div.innerHTML = `
+    <div class="msg-bubble">
+      <div class="msg-label">ADK Cyber AI</div>
+      <div class="msg-content">${renderMarkdown(text)}</div>
+      ${tokenMeta ? `<div class="token-meta"><span>${tokenMeta.in_tokens} in</span><span>${tokenMeta.out_tokens} out</span></div>` : ''}
+    </div>`;
+  document.getElementById('messages').appendChild(div);
+  scrollBottom();
+  return div;
+}
+
+function appendThinking() {
+  hideWelcome();
+  const div = document.createElement('div');
+  div.className = 'thinking-row';
+  div.innerHTML = `
+    <div class="thinking-bubble">
+      <div class="dots"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div>
+      <span style="font-size:12px;color:var(--text-dim)">ADK Cyber AI is thinking…</span>
+    </div>`;
+  document.getElementById('messages').appendChild(div);
+  scrollBottom();
+  return div;
+}
+
+// ── Send message ──────────────────────────────────────────────────
+function quickAsk(q) {
+  document.getElementById('user-input').value = q;
+  sendMessage();
+}
+
+function prefillInput(text) {
+  const input = document.getElementById('user-input');
+  input.value = text;
+  autoResize(input);
+  input.focus();
+}
+
+// ── Pasted-image attachments ─────────────────────────────────────
+// Mirrors the backend limits in app.py — keep these in sync.
+const MAX_IMAGES_PER_MSG = 4;
+const MAX_IMAGE_BYTES    = 5 * 1024 * 1024;
+const ALLOWED_IMAGE_TYPES = new Set(['image/png','image/jpeg','image/gif','image/webp']);
+let pendingImages = [];  // [{ media_type, data (b64), dataUrl, sizeBytes }]
+
+function fmtKB(n) {
+  if (n < 1024) return n + ' B';
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+  return (n / (1024*1024)).toFixed(1) + ' MB';
+}
+
+function renderAttachStrip() {
+  const strip = document.getElementById('chat-attach-strip');
+  if (!strip) return;
+  strip.innerHTML = '';
+  pendingImages.forEach((img, idx) => {
+    const chip = document.createElement('div');
+    chip.className = 'attach-chip';
+    chip.title = `${img.media_type} · ${fmtKB(img.sizeBytes)}`;
+    chip.innerHTML =
+      `<img alt="pasted screenshot" src="${img.dataUrl}">` +
+      `<button type="button" class="attach-x" aria-label="Remove image" data-idx="${idx}">×</button>` +
+      `<div class="attach-size">${fmtKB(img.sizeBytes)}</div>`;
+    strip.appendChild(chip);
+  });
+  strip.classList.toggle('has-items', pendingImages.length > 0);
+  // Mirror the strip's contents into the config sidebar so the user sees the
+  // pending attachments from either paste site.
+  const mirror = document.getElementById('cfg-attach-strip');
+  if (mirror) {
+    mirror.innerHTML = strip.innerHTML;
+    mirror.classList.toggle('has-items', pendingImages.length > 0);
+  }
+}
+
+function removePendingImage(idx) {
+  pendingImages.splice(idx, 1);
+  renderAttachStrip();
+}
+
+function clearPendingImages() {
+  pendingImages = [];
+  renderAttachStrip();
+}
+
+function readImageFile(file) {
+  return new Promise((resolve, reject) => {
+    if (!ALLOWED_IMAGE_TYPES.has(file.type)) {
+      reject(new Error(`Unsupported image type ${file.type}. Use PNG, JPEG, GIF, or WEBP.`));
+      return;
+    }
+    if (file.size > MAX_IMAGE_BYTES) {
+      reject(new Error(`Image too large (${fmtKB(file.size)}). Max ${fmtKB(MAX_IMAGE_BYTES)}.`));
+      return;
+    }
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('Could not read pasted image.'));
+    reader.onload = () => {
+      const dataUrl = reader.result;  // "data:image/png;base64,AAAA..."
+      const comma = dataUrl.indexOf(',');
+      const b64   = comma >= 0 ? dataUrl.slice(comma + 1) : '';
+      resolve({
+        media_type: file.type,
+        data:       b64,
+        dataUrl:    dataUrl,
+        sizeBytes:  file.size,
+      });
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+async function handlePasteImages(e) {
+  const cd = e.clipboardData;
+  if (!cd) return;
+  // Collect images from clipboardData.items; fall back to .files if items is empty.
+  const imageFiles = [];
+  if (cd.items && cd.items.length) {
+    for (const item of cd.items) {
+      if (item.kind === 'file') {
+        const f = item.getAsFile();
+        if (f && f.type && f.type.startsWith('image/')) imageFiles.push(f);
+      }
+    }
+  } else if (cd.files && cd.files.length) {
+    for (const f of cd.files) {
+      if (f.type && f.type.startsWith('image/')) imageFiles.push(f);
+    }
+  }
+  if (!imageFiles.length) return;   // text paste — let the default run
+  e.preventDefault();
+  if (pendingImages.length + imageFiles.length > MAX_IMAGES_PER_MSG) {
+    alert(`You can attach up to ${MAX_IMAGES_PER_MSG} images per message.`);
+    return;
+  }
+  for (const f of imageFiles) {
+    try {
+      const img = await readImageFile(f);
+      pendingImages.push(img);
+    } catch (err) {
+      alert(err.message || 'Failed to attach image.');
+    }
+  }
+  renderAttachStrip();
+}
+
+// Wire up paste listeners + delegated remove-button clicks once the DOM is ready.
+document.addEventListener('DOMContentLoaded', () => {
+  const chatInput = document.getElementById('user-input');
+  const cfgInput  = document.getElementById('config-paste');
+  if (chatInput) chatInput.addEventListener('paste', handlePasteImages);
+  if (cfgInput)  cfgInput.addEventListener('paste', handlePasteImages);
+  const userInput = document.getElementById('user-input');
+  if (userInput) userInput.addEventListener('input', scheduleContextEstimate);
+  ['local-context-tokens', 'local-history-turns', 'local-max-tokens'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('change', scheduleContextEstimate);
+  });
+  // Single delegated click handler covers both strips.
+  document.addEventListener('click', (e) => {
+    const btn = e.target.closest('.attach-x');
+    if (!btn) return;
+    const idx = parseInt(btn.getAttribute('data-idx'), 10);
+    if (!Number.isNaN(idx)) removePendingImage(idx);
+  });
+});
+
+async function sendMessage() {
+  if (isStreaming) return;
+  const input = document.getElementById('user-input');
+  let   msg   = input.value.trim();
+  const imgs  = pendingImages.slice();   // snapshot — clear after dispatch
+  if (!msg && imgs.length === 0) return;
+  // Allow image-only sends with a default prompt so the model has a question to anchor to.
+  if (!msg && imgs.length) msg = 'Please analyze the attached screenshot(s) and explain what you see.';
+
+  const effProvider = _providerState.effective_provider || 'cloud';
+  const st = _providerState.settings || {};
+  if (effProvider === 'local' && imgs.length && !st.local_supports_vision) {
+    appendAssistantMessage(
+      '⚠️ Screenshot upload is disabled for local LLM mode. Enable **Model supports vision** in Settings → My local LLM, or switch to Cloud.',
+      null
+    );
+    return;
+  }
+
+  // One-time disclosure before first config submission OR first image upload.
+  const hasCfg = document.getElementById('config-paste').value.trim() || configText;
+  if ((hasCfg || imgs.length) && !localStorage.getItem('pcop_data_ack')) {
+    showDataDisclosure();
+    return; // user must acknowledge; ackDataDisclosure() will re-call sendMessage()
+  }
+
+  input.value = '';
+  autoResize(input);
+  clearPendingImages();
+  isStreaming = true;
+  document.getElementById('send-btn').disabled = true;
+
+  appendUserMessage(msg, imgs);
+  const thinking = appendThinking();
+
+  const cfgText = document.getElementById('config-paste').value.trim() || configText;
+
+  try {
+    const res = await fetch(`${API}/chat/stream`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        message:         msg,
+        config_text:     cfgText,
+        history:         [],          // backend loads history from DB; this field is unused
+        conversation_id: currentConvId,
+        product_id:      currentProduct,
+        model:           selectedModel,
+        images:          imgs.length
+          ? imgs.map(i => ({ media_type: i.media_type, data: i.data }))
+          : undefined,
+      }),
+    });
+
+    if (!res.ok) {
+      const err = await res.json();
+      thinking.remove();
+      appendAssistantMessage(`⚠️ ${err.detail || 'Error reaching the API.'}`, null);
+      return;
+    }
+
+    // Defer creating the assistant bubble until the first content token
+    // arrives. Local reasoning models can spend a meaningful amount of time
+    // in "thinking" mode before producing any answer; leaving the existing
+    // "ADK Cyber AI is thinking…" bubble visible during that window gives
+    // the user feedback without showing the chain-of-thought itself.
+    let placeholder = null;
+    let contentEl = null;
+    function ensurePlaceholder() {
+      if (placeholder) return;
+      thinking.remove();
+      placeholder = document.createElement('div');
+      placeholder.className = 'msg-row assistant';
+      placeholder.innerHTML = `
+        <div class="msg-bubble">
+          <div class="msg-label">ADK Cyber AI</div>
+          <div class="msg-content"></div>
+        </div>`;
+      document.getElementById('messages').appendChild(placeholder);
+      contentEl = placeholder.querySelector('.msg-content');
+    }
+    function setThinkingLabel(text) {
+      const label = thinking.querySelector('span');
+      if (label) label.textContent = text;
+    }
+
+    const reader = res.body.getReader();
+    const dec    = new TextDecoder();
+    let raw      = '';
+
+    while (true) {
+      const {done, value} = await reader.read();
+      if (done) break;
+      const chunk = dec.decode(value, {stream: true});
+      for (const line of chunk.split('\n')) {
+        if (!line.startsWith('data: ')) continue;
+        const data = JSON.parse(line.slice(6));
+        if (data.type === 'thinking_start') {
+          setThinkingLabel('ADK Cyber AI is researching the answer…');
+        } else if (data.type === 'thinking_end') {
+          setThinkingLabel('ADK Cyber AI is composing the response…');
+        } else if (data.type === 'token') {
+          ensurePlaceholder();
+          raw += data.text;
+          contentEl.innerHTML = renderMarkdown(raw) + '<span class="cursor"></span>';
+          scrollBottom();
+        } else if (data.type === 'done') {
+          ensurePlaceholder();
+          currentConvId = data.conversation_id;
+          contentEl.innerHTML = renderMarkdown(raw);
+          const meta = document.createElement('div');
+          meta.className = 'token-meta';
+          const mLabel = modelLabel(data.model);
+          const truncNote = data.config_truncated
+            ? '<span class="meta-redacted">✂ config truncated for local context</span>'
+            : '';
+          meta.innerHTML = `${mLabel ? `<span class="meta-model">${mLabel}</span>` : ''}<span>${data.input_tokens} in</span><span>${data.output_tokens} out</span>${data.redactions > 0 ? `<span class="meta-redacted">🔒 ${data.redactions} credential${data.redactions === 1 ? '' : 's'} auto-redacted</span>` : ''}${truncNote}`;
+          placeholder.querySelector('.msg-bubble').appendChild(meta);
+          // Refresh query counter in header for all tiers
+          if (data.queries_used != null) {
+            const tier   = data.tier   || 'free';
+            const period = data.period || (tier === 'free' ? 'weekly' : 'monthly');
+            updateTierUI(tier, data.queries_used, data.queries_limit, period);
+            updateUsageDisplay(data.queries_used, data.queries_limit, tier, period);
+          }
+          // KB articles: scroll back to the top of the response so the user
+          // reads from the beginning rather than landing at the end.
+          if (_kbScrollToTop) {
+            _kbScrollToTop = false;
+            const msgsEl = document.getElementById('messages');
+            msgsEl.scrollTop = placeholder.offsetTop - msgsEl.offsetTop;
+          }
+          loadConversations();
+        } else if (data.type === 'error') {
+          ensurePlaceholder();
+          contentEl.innerHTML = `<span style="color:#f85149">⚠️ ${escHtml(data.detail)}</span>`;
+        }
+      }
+    }
+  } catch (e) {
+    thinking.remove();
+    appendAssistantMessage(`⚠️ Lost connection to local server. Is ADK Cyber AI still running?`, null);
+  } finally {
+    isStreaming = false;
+    document.getElementById('send-btn').disabled = false;
+  }
+}
+
+function handleKey(e) {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    sendMessage();
+  }
+}
+
+function autoResize(el) {
+  el.style.height = 'auto';
+  el.style.height = Math.min(el.scrollHeight, 160) + 'px';
+}
+
+// ── Config paste ──────────────────────────────────────────────────
+function updateConfigStatus() {
+  const val  = document.getElementById('config-paste').value.trim();
+  const el   = document.getElementById('config-status');
+  const warn = document.getElementById('large-cfg-warn');
+  if (val) {
+    const lines = val.split('\n').length;
+    el.textContent = `${lines} lines · ${val.length.toLocaleString()} chars`;
+    el.className   = 'has';
+  } else {
+    el.textContent = '';
+    el.className   = '';
+  }
+  // Show large-config warning only for free-tier users with >8,000 char configs
+  if (warn) {
+    const eff = _providerState.effective_provider || 'cloud';
+    warn.style.display = (eff !== 'local' && currentTier === 'free' && val.length > 8000) ? 'block' : 'none';
+  }
+  document.getElementById('config-ind').textContent = val ? '📎 Config attached' : '';
+  scheduleContextEstimate();
+}
+
+async function uploadFile(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const status = document.getElementById('upload-status');
+  status.textContent = `Uploading ${file.name}…`;
+  status.className   = '';
+
+  const form = new FormData();
+  form.append('file', file);
+
+  try {
+    const res  = await fetch(`${API}/upload`, {method: 'POST', body: form});
+    const data = await res.json();
+    if (!res.ok) {
+      status.textContent = data.detail || 'Upload failed.';
+      status.className   = 'error';
+    } else {
+      document.getElementById('config-paste').value = data.text;
+      updateConfigStatus();
+      status.textContent = `✓ ${file.name} loaded (${(data.size / 1024).toFixed(1)} KB)`;
+      status.className   = 'loaded';
+    }
+  } catch {
+    status.textContent = 'Upload failed — server not reachable.';
+    status.className   = 'error';
+  }
+  input.value = '';
+}
+
+// ── Utilities ─────────────────────────────────────────────────────
+function scrollBottom() {
+  const el = document.getElementById('messages');
+  el.scrollTop = el.scrollHeight;
+}
+
+function escHtml(str) {
+  return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ── Full GFM markdown renderer ────────────────────────────────────
+function renderMarkdown(md) {
+  if (!md) return '';
+
+  // 1. Extract and protect fenced code blocks before any other processing
+  const codeBlocks = [];
+  let s = md.replace(/```([\w.-]*)\r?\n?([\s\S]*?)```/g, (_, lang, code) => {
+    const l = escHtml((lang || 'text').trim());
+    const c = escHtml(code.replace(/\n$/, ''));
+    const idx = codeBlocks.length;
+    codeBlocks.push(
+      `<div class="code-block">` +
+      `<div class="code-block-header">` +
+      `<span class="code-lang">${l}</span>` +
+      `<button class="copy-btn" onclick="copyCode(this)">Copy</button>` +
+      `</div><pre>${c}</pre></div>`
+    );
+    return `\x00CB${idx}\x00`;
+  });
+
+  // 2. Process line-by-line for block elements
+  const lines = s.split('\n');
+  const out = [];
+  let i = 0;
+
+  while (i < lines.length) {
+    const raw  = lines[i];
+    const line = raw.trim();
+
+    // ── Code block placeholder (whole line)
+    if (/^\x00CB\d+\x00$/.test(line)) {
+      out.push(raw.replace(/\x00CB(\d+)\x00/, (_, n) => codeBlocks[+n]));
+      i++; continue;
+    }
+
+    // ── Horizontal rule
+    if (/^(-{3,}|\*{3,}|_{3,})$/.test(line)) {
+      out.push('<hr>');
+      i++; continue;
+    }
+
+    // ── ATX Headers (# through ####)
+    const hm = line.match(/^(#{1,4})\s+(.+)/);
+    if (hm) {
+      const level = hm[1].length;
+      out.push(`<h${level}>${inlineMd(hm[2].replace(/#*\s*$/, '').trim())}</h${level}>`);
+      i++; continue;
+    }
+
+    // ── Table (header row followed by separator row |---|---|)
+    if (/^\|/.test(line) && i + 1 < lines.length && /^\|[\s\-:| ]+\|$/.test(lines[i + 1].trim())) {
+      const headers = splitRow(lines[i]);
+      i += 2; // skip header + separator
+      const rows = [];
+      while (i < lines.length && /^\|/.test(lines[i].trim())) {
+        rows.push(splitRow(lines[i]));
+        i++;
+      }
+      let t = '<div class="md-table-wrap"><table class="md-table"><thead><tr>';
+      headers.forEach(h => { t += `<th>${inlineMd(h)}</th>`; });
+      t += '</tr></thead>';
+      if (rows.length) {
+        t += '<tbody>';
+        rows.forEach(row => {
+          t += '<tr>';
+          for (let ci = 0; ci < Math.max(row.length, headers.length); ci++) {
+            t += `<td>${inlineMd(row[ci] || '')}</td>`;
+          }
+          t += '</tr>';
+        });
+        t += '</tbody>';
+      }
+      t += '</table></div>';
+      out.push(t);
+      continue;
+    }
+
+    // ── Blockquote
+    if (/^>/.test(line)) {
+      const bq = [];
+      while (i < lines.length && /^>/.test(lines[i].trim())) {
+        bq.push(lines[i].trim().replace(/^>\s?/, ''));
+        i++;
+      }
+      out.push(`<blockquote>${inlineMd(bq.join('\n'))}</blockquote>`);
+      continue;
+    }
+
+    // ── Ordered list
+    if (/^\d+\.\s/.test(line)) {
+      const items = [];
+      while (i < lines.length && /^\d+\.\s/.test(lines[i].trim())) {
+        items.push(`<li>${inlineMd(lines[i].trim().replace(/^\d+\.\s+/, ''))}</li>`);
+        i++;
+      }
+      out.push(`<ol>${items.join('')}</ol>`);
+      continue;
+    }
+
+    // ── Unordered list (supports - [ ] checkbox syntax)
+    if (/^[-*]\s/.test(line)) {
+      const items = [];
+      while (i < lines.length && /^[-*]\s/.test(lines[i].trim())) {
+        const lt = lines[i].trim();
+        const ck = lt.match(/^[-*]\s\[([ xX])\]\s(.+)/);
+        if (ck) {
+          const done = ck[1].toLowerCase() === 'x';
+          items.push(
+            `<li class="checklist-item">` +
+            `<span class="checkbox${done ? ' checked' : ''}">${done ? '✓' : ''}</span>` +
+            `${inlineMd(ck[2])}</li>`
+          );
+        } else {
+          items.push(`<li>${inlineMd(lt.replace(/^[-*]\s+/, ''))}</li>`);
+        }
+        i++;
+      }
+      out.push(`<ul>${items.join('')}</ul>`);
+      continue;
+    }
+
+    // ── Blank line
+    if (line === '') { i++; continue; }
+
+    // ── Paragraph: accumulate non-blank, non-block lines
+    const paraLines = [];
+    while (i < lines.length) {
+      const pt = lines[i].trim();
+      if (pt === '') break;
+      if (/^(#{1,4}\s|-{3,}|\*{3,}|_{3,}|>\s?|\||\d+\.\s|[-*]\s|\x00CB)/.test(pt)) break;
+      paraLines.push(lines[i]);
+      i++;
+    }
+    if (paraLines.length) {
+      out.push(`<p>${inlineMd(paraLines.join('<br>'))}</p>`);
+    } else {
+      i++; // safety: never infinite-loop
+    }
+  }
+
+  // 3. Restore any code block placeholders that ended up inside paragraph text
+  return out.join('\n').replace(/\x00CB(\d+)\x00/g, (_, n) => codeBlocks[+n]);
+}
+
+// Split a markdown table row "| a | b | c |" → ["a","b","c"]
+function splitRow(line) {
+  return line.trim().replace(/^\||\|$/g, '').split('|').map(c => c.trim());
+}
+
+// Inline markdown: bold, italic, inline-code, escaping
+function inlineMd(text) {
+  if (!text) return '';
+  // Escape HTML entities
+  let t = text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+  // Protect inline code from bold/italic processing
+  const ic = [];
+  t = t.replace(/`([^`]+)`/g, (_, code) => {
+    ic.push(`<code>${code}</code>`);
+    return `\x00IC${ic.length - 1}\x00`;
+  });
+  // Bold (** or __)
+  t = t.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
+  t = t.replace(/__([^_\n]+)__/g,      '<strong>$1</strong>');
+  // Italic (* or _) — single, not at word boundary to avoid CIDR clashes
+  t = t.replace(/\*([^*\n]+)\*/g, '<em>$1</em>');
+  // Restore inline code
+  t = t.replace(/\x00IC(\d+)\x00/g, (_, n) => ic[+n]);
+  return t;
+}
+
+function copyCode(btn) {
+  const code = btn.closest('.code-block').querySelector('pre').textContent;
+  navigator.clipboard.writeText(code).then(() => {
+    btn.textContent = 'Copied!';
+    btn.classList.add('copied');
+    setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 1800);
+  });
+}
+</script>
+
+<!-- Data disclosure modal (shown once before first config submission) -->
+<div id="data-disclosure-backdrop" onclick="closeDataDisclosure(event)">
+  <div id="data-disclosure-modal">
+    <h3>🔒 What gets sent when you submit a config</h3>
+    <p>Before you send your first config, here's exactly what happens:</p>
+    <ul class="disclosure-list">
+      <li><strong style="color:var(--green)">Auto-redacted before sending:</strong> passwords, shared secrets, pre-shared keys, API keys, private keys</li>
+      <li><strong style="color:var(--yellow)">Sent to Anthropic's API:</strong> network topology, IP addresses, zone architecture, management access rules — the AI needs this to diagnose your config</li>
+      <li><strong style="color:var(--text)">Never touches ADK Cyber's servers:</strong> only your email and session token reach ADK Cyber</li>
+    </ul>
+    <p><strong>Recommendation:</strong> paste only the section relevant to your question — a specific policy rule, BGP neighbor config, or IKE profile — rather than a full <code style="font-size:11px;color:#79c0ff;background:var(--code-bg);padding:1px 5px;border-radius:3px;">show config running</code> export.</p>
+    <button id="disclosure-ack-btn" onclick="ackDataDisclosure()">Got it — send my message</button>
+  </div>
+</div>
+
+<!-- Upgrade modal -->
+<div id="migration-modal-backdrop" onclick="closeMigrationModal(event)">
+  <div id="migration-modal" onclick="event.stopPropagation()">
+    <h3>Config Migration → PAN-OS</h3>
+    <p class="mig-sub">Local conversion to a <strong>standalone NGFW</strong> (vsys policy/objects + device-level interfaces/VPN). Cisco, Check Point, Fortinet, Juniper, or Palo-to-Palo. Outputs SET + merged XML under <code>vsys1</code> and migration report. Config never leaves your machine.</p>
+    <div style="margin-bottom:10px;font-size:12px;">
+      <label>Source vendor
+        <select id="mig-vendor" onchange="migVendorHint()" style="margin-left:6px;padding:4px 8px;border-radius:4px;border:1px solid var(--border);background:var(--surface2);color:var(--text);">
+          <option value="auto">Auto-detect</option>
+          <option value="cisco">Cisco ASA / FTD</option>
+          <option value="checkpoint">Check Point</option>
+          <option value="fortinet">Fortinet</option>
+          <option value="juniper">Juniper</option>
+          <option value="palo">Palo Alto (XML/SET)</option>
+          <option value="panorama">Panorama XML</option>
+        </select>
+      </label>
+      <div id="mig-vendor-hint" style="margin-top:6px;font-size:11px;color:var(--text-dim);"></div>
+    </div>
+    <div class="mig-grid">
+      <div class="mig-drop" id="mig-cisco-drop" onclick="document.getElementById('mig-cisco-input').click()">
+        <div>📄 Source config</div>
+        <div id="mig-cisco-label" style="margin-top:6px;font-size:11px;">Drop or click — .txt .cfg .conf .json .xml</div>
+        <input type="file" id="mig-cisco-input" accept=".txt,.cfg,.conf,.json,.log,.xml" hidden>
+      </div>
+      <div class="mig-drop" id="mig-xml-drop" onclick="document.getElementById('mig-xml-input').click()">
+        <div>🌐 Base firewall XML (optional)</div>
+        <div id="mig-xml-label" style="margin-top:6px;font-size:11px;">Running-config export to merge into vsys1</div>
+        <input type="file" id="mig-xml-input" accept=".xml" hidden>
+      </div>
+    </div>
+    <div style="display:flex;gap:12px;margin-bottom:12px;font-size:12px;align-items:center;">
+      <label>Target vsys <input id="mig-vsys" value="vsys1" style="width:72px;margin-left:4px;padding:4px 6px;border-radius:4px;border:1px solid var(--border);background:var(--surface2);color:var(--text);"></label>
+      <span style="font-size:11px;color:var(--text-dim);">Output is NGFW import format — load SET on the firewall or merge XML into vsys, not Panorama DG.</span>
+      <input type="hidden" id="mig-mode" value="firewall">
+    </div>
+    <div class="mig-status" id="mig-status">Upload source config to begin.</div>
+    <div class="mig-actions">
+      <button type="button" class="primary" id="mig-run-btn" onclick="runMigrationPreview()" disabled>Preview report</button>
+      <button type="button" id="mig-zip-btn" onclick="downloadMigrationZip()" disabled>Download ZIP bundle</button>
+      <button type="button" onclick="closeMigrationModal()">Close</button>
+    </div>
+  </div>
+</div>
+
+<div id="upgrade-modal-backdrop" onclick="closeUpgradeModal(event)">
+  <div id="upgrade-modal">
+    <h3>Upgrade ADK Cyber AI</h3>
+    <p>Choose a plan to unlock more queries. Your session will update automatically after payment.</p>
+    <a id="upgrade-pro-btn" class="upgrade-plan-card pro" href="#" target="_blank">
+      <div class="plan-name">Pro — $20 / month</div>
+      <div class="plan-price">1,000 queries / month</div>
+      <div class="plan-limit">25× more than Free</div>
+    </a>
+    <a id="upgrade-max-btn" class="upgrade-plan-card max" href="#" target="_blank">
+      <div class="plan-name">MAX — $50 / month</div>
+      <div class="plan-price">2,500 queries / month</div>
+      <div class="plan-limit">No seat cap · Power users &amp; consultants</div>
+    </a>
+    <button id="upgrade-modal-close" onclick="closeUpgradeModal()">Cancel</button>
+  </div>
+</div>
+
+
+<style>
+  .fw-output {
+    display: none;
+    white-space: pre-wrap;
+    word-break: break-all;
+    max-height: 220px;
+    overflow: auto;
+    font-size: 10px;
+    line-height: 1.45;
+    background: var(--code-bg, #0d1117);
+    color: var(--text-sub, #adbac7);
+    padding: 6px 8px;
+    border-radius: 4px;
+    margin-top: 6px;
+  }
+</style>
+<script>
+  // ── Firewall (read-only) tools ─────────────────────────────────────────
+  function toggleFirewallPanel() {
+    const p = document.getElementById('firewall-panel');
+    const c = document.getElementById('firewall-chevron');
+    const open = p.style.display === 'none';
+    p.style.display = open ? 'block' : 'none';
+    if (c) c.style.transform = open ? 'rotate(90deg)' : '';
+    if (open) refreshFirewallStatus();
+  }
+
+  async function refreshFirewallStatus() {
+    try {
+      const r = await fetch(`${API}/api/firewall/status`);
+      if (r.ok) applyFirewallStatus(await r.json());
+    } catch (e) { /* app unreachable — leave UI as is */ }
+  }
+
+  function applyFirewallStatus(s) {
+    const connected = !!(s && s.connected);
+    const disc = document.getElementById('firewall-disconnected');
+    const conn = document.getElementById('firewall-connected');
+    if (disc) disc.style.display = connected ? 'none' : 'block';
+    if (conn) conn.style.display = connected ? 'block' : 'none';
+    const label = document.getElementById('firewall-mode-label');
+    if (label) label.textContent = connected ? (s.hostname || s.host || 'connected') : 'not connected';
+    const liveBtn = document.getElementById('fw-hygiene-live');
+    if (liveBtn) liveBtn.style.display = connected ? 'inline-block' : 'none';
+    if (connected) {
+      document.getElementById('fw-info').innerHTML =
+        `<strong>${escHtml(s.hostname || s.host || '')}</strong><br>` +
+        `${escHtml(s.model || '')} · PAN-OS ${escHtml(s.sw_version || '?')}<br>` +
+        `<span style="color:var(--text-dim)">${escHtml(s.host || '')}</span>`;
+      onFwTestKind();
+    }
+  }
+
+  async function connectFirewall() {
+    const host = document.getElementById('fw-host').value.trim();
+    const user = document.getElementById('fw-user').value.trim();
+    const password = document.getElementById('fw-pass').value;
+    const verify_tls = document.getElementById('fw-verify-tls').checked;
+    const st = document.getElementById('fw-connect-status');
+    if (!host || !user || !password) { st.textContent = 'Host, username and password are required.'; return; }
+    const btn = document.getElementById('fw-connect-btn');
+    btn.disabled = true; st.textContent = 'Connecting…';
+    try {
+      const r = await fetch(`${API}/api/firewall/connect`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ host, user, password, verify_tls }),
+      });
+      const d = await r.json();
+      if (!r.ok) { st.textContent = d.detail || 'Connection failed.'; btn.disabled = false; return; }
+      document.getElementById('fw-pass').value = '';   // never keep the password around
+      st.textContent = '';
+      applyFirewallStatus({ connected: true, host: d.host, hostname: d.hostname, model: d.model, sw_version: d.sw_version });
+      loadAdvisories(false);   // refresh the device-version badge
+    } catch (e) { st.textContent = 'Could not reach the app.'; }
+    btn.disabled = false;
+  }
+
+  async function disconnectFirewall() {
+    try { await fetch(`${API}/api/firewall/disconnect`, { method: 'POST' }); } catch (e) {}
+    applyFirewallStatus({ connected: false });
+    loadAdvisories(false);
+  }
+
+  const FW_TEST_FIELDS = {
+    'security-policy-match': [['source','Source IP','10.0.0.5'],['destination','Destination IP','8.8.8.8'],['protocol','Protocol (6=TCP, 17=UDP)','6'],['destination_port','Destination port','443'],['application','Application (optional)','ssl']],
+    'nat-policy-match': [['source','Source IP','10.0.0.5'],['destination','Destination IP','8.8.8.8'],['protocol','Protocol','6'],['destination_port','Destination port','443'],['source_zone','From zone (optional)','trust']],
+    'routing-fib-lookup': [['ip','Destination IP','8.8.8.8'],['virtual_router','Virtual router','default']],
+  };
+
+  function onFwTestKind() {
+    const kind = document.getElementById('fw-test-kind').value;
+    const wrap = document.getElementById('fw-test-fields');
+    wrap.innerHTML = (FW_TEST_FIELDS[kind] || []).map(([k, label, ph]) =>
+      `<label class="provider-field"><span>${escHtml(label)}</span>` +
+      `<input data-fw-param="${escAttr(k)}" type="text" placeholder="${escAttr(ph)}" spellcheck="false"></label>`
+    ).join('');
+  }
+
+  async function runFirewallTest() {
+    const kind = document.getElementById('fw-test-kind').value;
+    const params = {};
+    document.querySelectorAll('#fw-test-fields [data-fw-param]').forEach(inp => {
+      const v = inp.value.trim();
+      if (v) params[inp.getAttribute('data-fw-param')] = v;
+    });
+    const out = document.getElementById('fw-test-result');
+    out.style.display = 'block'; out.textContent = 'Running…';
+    try {
+      const r = await fetch(`${API}/api/firewall/test`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ kind, params }),
+      });
+      const d = await r.json();
+      if (!r.ok) { out.textContent = d.detail || 'Test failed.'; return; }
+      out.textContent = d.ran ? (d.result || '(no output)') : `Not connected — run this in the CLI:\n${d.cli}`;
+    } catch (e) { out.textContent = 'Request failed.'; }
+  }
+
+  async function previewCommit() {
+    const out = document.getElementById('fw-commit-result');
+    out.style.display = 'block'; out.textContent = 'Fetching candidate vs running config…';
+    try {
+      const r = await fetch(`${API}/api/firewall/commit-preview`, { method: 'POST' });
+      const d = await r.json();
+      if (!r.ok) { out.textContent = d.detail || 'Preview failed.'; return; }
+      if (!d.has_changes) { out.textContent = 'No pending changes (candidate matches running).'; return; }
+      out.textContent = `+${d.added} / -${d.removed} lines\n\n${d.diff}`;
+      prefillInput(`Explain what this PAN-OS commit will change and flag anything risky:\n\n${(d.diff || '').slice(0, 4000)}`);
+    } catch (e) { out.textContent = 'Request failed.'; }
+  }
+
+  // ── Config hygiene ──────────────────────────────────────────────────────
+  async function runHygiene(source) {
+    const out = document.getElementById('checks-result');
+    const body = { source };
+    if (source === 'paste') {
+      body.config_text = document.getElementById('config-paste').value.trim();
+      if (!body.config_text) { out.innerHTML = '<div style="font-size:11px;color:var(--yellow)">Paste a config first.</div>'; return; }
+    }
+    out.innerHTML = '<div style="font-size:11px;color:var(--text-dim)">Scanning…</div>';
+    try {
+      const r = await fetch(`${API}/api/checks/run`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const d = await r.json();
+      if (!r.ok) { out.innerHTML = `<div style="font-size:11px;color:#f85149">${escHtml(d.detail || 'Check failed.')}</div>`; return; }
+      renderHygiene(d);
+    } catch (e) { out.innerHTML = '<div style="font-size:11px;color:#f85149">Request failed.</div>'; }
+  }
+
+  function renderHygiene(d) {
+    const out = document.getElementById('checks-result');
+    if (!d.rule_count) { out.innerHTML = '<div style="font-size:11px;color:var(--yellow)">No security rules found in that config.</div>'; return; }
+    if (!d.findings.length) { out.innerHTML = `<div style="font-size:11px;color:var(--green)">✓ ${d.rule_count} rules scanned — no issues found.</div>`; return; }
+    const sevColor = { high: '#f85149', medium: '#d29922', low: '#58a6ff', info: '#8b949e' };
+    const rows = d.findings.map(f => {
+      const col = sevColor[f.severity] || '#888';
+      return `<div style="border-left:3px solid ${col};padding:4px 8px;margin:4px 0;background:var(--code-bg,#0d1117);border-radius:3px;">` +
+        `<div style="font-size:10px;text-transform:uppercase;color:${col}">${escHtml(f.severity)} · ${escHtml(f.category)}</div>` +
+        `<div style="font-size:11px;"><strong>${escHtml(f.rule)}</strong> — ${escHtml(f.message)}</div>` +
+        `<div style="font-size:10px;color:var(--text-dim)">${escHtml(f.remediation)}</div></div>`;
+    }).join('');
+    out.innerHTML = `<div style="font-size:11px;margin:6px 0 2px;">${d.rule_count} rules · ${d.findings.length} findings</div>${rows}` +
+      `<button type="button" onclick="askHygieneInChat()" class="provider-mini-btn" style="margin-top:6px;">Ask AI to prioritize these</button>`;
+    window.__lastHygiene = d;
+  }
+
+  function askHygieneInChat() {
+    const d = window.__lastHygiene; if (!d) return;
+    const lines = d.findings.map(f => `- [${f.severity}] ${f.rule}: ${f.message}`).join('\n');
+    prefillInput(`My PAN-OS config hygiene scan found these issues. Prioritize them and give me the exact set-commands to fix the top 3:\n\n${lines}`);
+  }
+
+  // ── Advisory "Am I affected?" (uses the connected device's PAN-OS version) ─
+  function askAffected(cve, title, evt) {
+    if (evt) evt.stopPropagation();
+    const v = window.__deviceVersion || 'unknown';
+    prefillInput(`My firewall is running PAN-OS ${v}. Am I affected by ${cve} (${title})? If so, what is the fix or workaround?`);
+  }
+
+  // Reflect firewall state on load (sets the hygiene "live" button visibility).
+  document.addEventListener('DOMContentLoaded', refreshFirewallStatus);
+</script>
+<script>
+  window.addEventListener('beforeunload', function () {
+    const token = window.__SHUTDOWN_TOKEN__ || '';
+    navigator.sendBeacon('/api/shutdown', new Blob(
+      [JSON.stringify({shutdown_token: token})],
+      {type: 'application/json'}
+    ));
+  });
+</script>
+</body>
+</html>
