@@ -123,6 +123,14 @@ def test_returns_matching_later_issues_for_version_plus_symptom(db):
     assert "11.1" in block                 # train shown in the header
 
 
+def test_header_does_not_double_panos_prefix(db):
+    # When the user literally writes "PAN-OS 11.1.4", the header must read
+    # "PAN-OS 11.1.4", not "PAN-OS PAN-OS 11.1.4".
+    block = known_issues_context("running PAN-OS 11.1.4 with tunnel drops", db)
+    assert "PAN-OS 11.1.4" in block
+    assert "PAN-OS PAN-OS" not in block
+
+
 def test_no_issues_when_running_newer_than_all_fixes(db):
     # 11.1.10 is >= every fixed_in in train 11.1, so nothing is "later".
     assert known_issues_context("on 11.1.10 with tunnel drops", db) == ""

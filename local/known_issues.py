@@ -47,7 +47,11 @@ def detect_version(text):
     if not m:
         return None
     hotfix = int(m.group(4)) if m.group(4) else 0
-    return (int(m.group(1)), int(m.group(2)), int(m.group(3)), hotfix, m.group(0).strip())
+    major, feature, maint = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    # Canonical "major.feature.maint[-hN]" -- never the raw matched text, which may
+    # include a "PAN-OS " prefix and would double up in the rendered header.
+    raw = f"{major}.{feature}.{maint}" + (f"-h{hotfix}" if hotfix else "")
+    return (major, feature, maint, hotfix, raw)
 
 
 def _fts_query(query):
