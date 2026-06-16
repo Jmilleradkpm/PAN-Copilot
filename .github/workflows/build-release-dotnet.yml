@@ -119,11 +119,18 @@ jobs:
             Write-Warning "known_issues.json unavailable ($($_.Exception.Message)) -- known-issues lookup will be inert in this build."
           }
 
-      - name: Publish (self-contained, single-file)
+      # MULTI-FILE on purpose (do NOT re-add PublishSingleFile). The self-contained
+      # single-file bundle is a ~63 MB self-extracting exe that trips Bitdefender
+      # Atc4 behavioral detection: on auto-update it locks the downloaded zip and
+      # STRIPS the exe out of it (zip 66.6 MB -> ~390 KB), so the swap never applies
+      # and the client loops on "update available" / "access denied". A normal
+      # multi-file self-contained publish (apphost exe + loose DLLs, ~150 MB) is
+      # left intact by Bitdefender (verified 2026-06-15, incl. Mark-of-the-Web) and
+      # still needs no .NET runtime on the target.
+      - name: Publish (self-contained, multi-file)
         shell: pwsh
         run: |
           dotnet publish PanCopilot.csproj -c Release -r win-x64 --self-contained true `
-            /p:PublishSingleFile=true /p:IncludeNativeLibrariesForSelfExtract=true `
             -o publish
           # SANITY: plaintext system prompt must never appear in publish/.
           $leak = Get-ChildItem publish -Recurse -File -ErrorAction SilentlyContinue |
