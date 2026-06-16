@@ -110,10 +110,16 @@ jobs:
       # Best-effort: build still succeeds if unavailable; the lookup is then inert.
       - name: Fetch known-issues corpus
         shell: pwsh
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.CF_R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.CF_R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          R2_ENDPOINT: "https://${{ secrets.CF_R2_ACCOUNT_ID }}.r2.cloudflarestorage.com"
+          BUCKET: ${{ secrets.CF_R2_BUCKET }}
         run: |
           try {
-            Invoke-WebRequest -Uri "https://downloads.adkcyber.com/data/known_issues.json" `
-              -OutFile "known_issues.json" -UseBasicParsing -TimeoutSec 60
+            aws s3 cp "s3://${env:BUCKET}/data/known_issues.json" known_issues.json --endpoint-url $env:R2_ENDPOINT
+            if ($LASTEXITCODE -ne 0) { throw "aws s3 cp exited $LASTEXITCODE" }
             Write-Host "Fetched known_issues.json ($('{0:N0}' -f ((Get-Item known_issues.json).Length / 1KB)) KB)"
           } catch {
             Write-Warning "known_issues.json unavailable ($($_.Exception.Message)) -- known-issues lookup will be inert in this build."
