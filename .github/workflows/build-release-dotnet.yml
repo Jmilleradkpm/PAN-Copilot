@@ -144,6 +144,23 @@ jobs:
           if ($leak) { throw "FAIL: plaintext prompt leaked into publish/: $($leak.FullName)" }
           Write-Host "OK: no plaintext system prompt in publish/"
 
+      # Guard against a mislabeled release: the built exe's version MUST match the
+      # requested release version. A drift here (e.g. the version not getting
+      # injected) is what produced a v3.12 manifest pointing at a 3.11 binary and
+      # the resulting auto-update loop. Fail loudly BEFORE anything is signed,
+      # packaged, or uploaded, so a bad artifact can never reach R2.
+      - name: Verify built exe version matches the release
+        shell: pwsh
+        run: |
+          $expected = "${{ inputs.version }}".TrimStart('v')                    # e.g. 3.12
+          $exe = "publish\PAN Copilot.exe"
+          if (-not (Test-Path $exe)) { throw "Build verification failed: $exe not found" }
+          $fv = (Get-Item $exe).VersionInfo.FileVersion                          # e.g. 3.12.0.0
+          if ($fv -notlike "$expected.*" -and $fv -ne $expected) {
+            throw "Version mismatch: requested $expected but built exe reports $fv. Aborting to avoid publishing a mislabeled, loop-causing release."
+          }
+          Write-Host "Version check OK: built exe $fv matches requested $expected"
+
       - name: Azure login (OIDC)
         uses: azure/login@v2
         with:

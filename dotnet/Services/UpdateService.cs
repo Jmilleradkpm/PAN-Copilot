@@ -61,11 +61,27 @@ public sealed class UpdateService
             var zipSha       = Read("zip_sha256").ToLowerInvariant();
             var installerUrl = Read("installer_url");
             var installerSha = Read("installer_sha256").ToLowerInvariant();
+            var available = CompareVersions(latest, CurrentVersion) > 0;
+            // Self-healing loop guard. If we already downloaded this exact artifact
+            // (same version AND same zip hash) and it turned out to be mislabeled —
+            // its binary was not actually newer — keep the banner hidden so the user
+            // is not stuck re-attempting a bad release. A new version, or a corrected
+            // re-upload under the same version (different hash), clears the skip.
+            var skip = ReadSkip();
+            if (skip is { } s)
+            {
+                if (available
+                    && string.Equals(s.version, latest, StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(s.sha, zipSha, StringComparison.OrdinalIgnoreCase))
+                    available = false;
+                else
+                    ClearSkip();
+            }
             _cache = new JsonObject
             {
                 ["current_version"]   = CurrentVersion,
                 ["latest_version"]    = latest,
-                ["update_available"]  = CompareVersions(latest, CurrentVersion) > 0,
+                ["update_available"]  = available,
                 // Portable zip flow (v3.5+ InstallUpdateAsync reads these — they
                 // were missing in v3.5 and v3.7 of GetVersionInfoAsync, which is
                 // why every Update Now click failed with "Invalid update source"
@@ -190,6 +206,23 @@ public sealed class UpdateService
             if (!File.Exists(stagedExe))
                 throw new InvalidOperationException("Update zip is missing PAN Copilot.exe — refusing to install.");
             VerifyInstaller(stagedExe, "");  // hash check skipped (already done on the zip); only Authenticode runs
+
+            // Guard against a mislabeled manifest: if the staged exe is not actually
+            // newer than the running build, swapping it in would relaunch the same
+            // version, which immediately re-detects the update — an endless loop.
+            // (A v3.12 manifest pointing at a 3.11 binary produced exactly this.)
+            // Refuse rather than loop.
+            var stagedFileVer = System.Diagnostics.FileVersionInfo.GetVersionInfo(stagedExe).FileVersion ?? "";
+            if (CompareVersions(stagedFileVer, CurrentVersion) <= 0)
+            {
+                // Record this exact artifact (version + hash) as bad and drop the
+                // cache so the banner clears on the next poll instead of re-looping.
+                WriteSkip(version, expectedZipSha);
+                _cache = null;
+                throw new InvalidOperationException(
+                    $"Update artifact reports version {stagedFileVer}, which is not newer than the installed {CurrentVersion}. " +
+                    "The release manifest appears mislabeled; skipping to avoid an update loop.");
+            }
         }
         catch
         {
@@ -253,6 +286,42 @@ public sealed class UpdateService
                     try { File.Delete(f); } catch { }
         }
         catch { }
+    }
+
+    // ── Mislabeled-release skip marker ───────────────────────────────────────
+    // Persists the exact artifact (version + zip hash) we attempted but could not
+    // actually upgrade to (its binary was not newer). While the manifest keeps
+    // advertising that same artifact, the banner stays suppressed so the user is
+    // not stuck in an update loop. A new version, or a corrected re-upload under
+    // the same version (different hash), clears it automatically.
+    private static string SkipMarkerPath =>
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                     "ADK Cyber AI", "update_skip.txt");
+
+    private static (string version, string sha)? ReadSkip()
+    {
+        try
+        {
+            if (!File.Exists(SkipMarkerPath)) return null;
+            var lines = File.ReadAllLines(SkipMarkerPath);
+            return lines.Length >= 2 ? (lines[0].Trim(), lines[1].Trim()) : null;
+        }
+        catch { return null; }
+    }
+
+    private static void WriteSkip(string version, string sha)
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(SkipMarkerPath)!);
+            File.WriteAllText(SkipMarkerPath, version + "\n" + sha);
+        }
+        catch { }
+    }
+
+    private static void ClearSkip()
+    {
+        try { if (File.Exists(SkipMarkerPath)) File.Delete(SkipMarkerPath); } catch { }
     }
 
     /// <summary>Fail-closed integrity check: manifest SHA-256 + Authenticode signer.</summary>
