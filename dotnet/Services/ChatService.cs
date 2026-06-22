@@ -136,34 +136,11 @@ public sealed class ChatService
             }
         }
 
-        // ── cloud preflight: key + weighted quota ────────────────────────
-        string? apiKey = null;
-        if (provider == "cloud")
-        {
-            apiKey = _session.AnthropicKey;
-            if (string.IsNullOrEmpty(apiKey))
-            {
-                await Error("Session key missing. Please log out and log back in.");
-                return;
-            }
-            var weight = (tier == "free" && configLen > MaxConfigLenFree) ? MaxQueryWeight : 1;
-            LicenseClient.QuotaResult check;
-            try { check = await _license.CheckQuotaAsync(_session.Token!, weight); }
-            catch (Exception ex) { await Error("Could not reach the license server: " + ex.Message); return; }
-            if (!check.Allowed)
-            {
-                var detail = check.Detail ?? "Query limit reached.";
-                if (weight == MaxQueryWeight)
-                    detail += $" This config paste ({configLen:N0} chars) counted as {MaxQueryWeight} queries — " +
-                              $"free tier charges {MaxQueryWeight} queries for configs over {MaxConfigLenFree:N0} characters. " +
-                              "Upgrade to Pro for full config analysis with advanced models: adkcyber.com/pan-copilot.html";
-                await Error(detail);
-                return;
-            }
-            _session.QueriesUsed = check.QueriesUsed;
-            _session.QueriesLimit = check.QueriesLimit;
-            _session.QueriesRemaining = check.QueriesRemaining;
-        }
+        // ── cloud preflight ──────────────────────────────────────────────
+        // Auth, quota counting, and the Anthropic key all live behind the ADK
+        // proxy now. The client holds no key and does not pre-count; the proxy
+        // validates the session token, runs the atomic quota count, and returns
+        // the live figures in the response headers (read after the stream below).
 
         if (provider == "local" && images is { Count: > 0 } && !_settings.Current.local_supports_vision)
         {
@@ -256,12 +233,25 @@ public sealed class ChatService
                 var sysPrompt = _systemPrompt;
                 var ki = _knownIssues?.BuildContext(msgClean);
                 if (!string.IsNullOrEmpty(ki)) sysPrompt = (_systemPrompt ?? "") + ki;
-                var client = new AnthropicClient(apiKey!);
-                var usage = await client.StreamMessageAsync(messages, resolvedModel, maxTokens, sysPrompt,
+                var client = new AnthropicClient(_session.Token!);
+                var result = await client.StreamMessageAsync(messages, resolvedModel, maxTokens, sysPrompt,
                     async text => { full.Append(text); await emit(new JsonObject { ["type"] = "token", ["text"] = text }); });
-                inputTokens = usage.InputTokens;
-                outputTokens = usage.OutputTokens;
+                inputTokens = result.InputTokens;
+                outputTokens = result.OutputTokens;
+                if (!string.IsNullOrEmpty(result.Model)) resolvedModel = result.Model!;
+                if (result.QueriesUsed.HasValue)      _session.QueriesUsed = result.QueriesUsed.Value;
+                if (result.QueriesLimit.HasValue)     _session.QueriesLimit = result.QueriesLimit.Value;
+                if (result.QueriesRemaining.HasValue) _session.QueriesRemaining = result.QueriesRemaining.Value;
             }
+        }
+        catch (ProxyException pe)
+        {
+            var detail = pe.Message;
+            if (pe.Status == 429 && tier == "free" && configLen > MaxConfigLenFree)
+                detail += $" This config paste ({configLen:N0} chars) counts as {MaxQueryWeight} queries on the free tier " +
+                          $"(configs over {MaxConfigLenFree:N0} characters). Upgrade to Pro for full config analysis: adkcyber.com/pan-copilot.html";
+            await Error(detail);
+            return;
         }
         catch (Exception ex)
         {
