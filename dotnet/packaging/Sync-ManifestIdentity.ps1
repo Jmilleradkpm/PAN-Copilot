@@ -20,9 +20,23 @@ $versionLine = (Select-String -Path $csproj -Pattern '<Version>([^<]+)</Version>
 if ($versionLine -notmatch '^(\d+)\.(\d+)\.(\d+)$') { throw "Unexpected Version in csproj: $versionLine" }
 $appxVersion = "$versionLine.0"
 
-$content = Get-Content $manifest -Raw
-$content = $content -replace 'Name="[^"]+"', "Name=`"$name`""
-$content = $content -replace 'Publisher="[^"]+"', "Publisher=`"$publisher`""
-$content = $content -replace 'Version="[^"]+"', "Version=`"$appxVersion`""
-Set-Content -Path $manifest -Value $content -Encoding UTF8
+[xml]$doc = Get-Content $manifest
+$ns = New-Object System.Xml.XmlNamespaceManager($doc.NameTable)
+$ns.AddNamespace('m', 'http://schemas.microsoft.com/appx/manifest/foundation/windows10')
+$identity = $doc.SelectSingleNode('//m:Identity', $ns)
+if (-not $identity) { throw 'Identity element not found in Package.appxmanifest' }
+
+$identity.SetAttribute('Name', $name)
+$identity.SetAttribute('Publisher', $publisher)
+$identity.SetAttribute('Version', $appxVersion)
+
+$utf8NoBom = New-Object System.Text.UTF8Encoding $false
+$settings = New-Object System.Xml.XmlWriterSettings
+$settings.Encoding = $utf8NoBom
+$settings.Indent = $true
+$settings.OmitXmlDeclaration = $false
+$writer = [System.Xml.XmlWriter]::Create($manifest, $settings)
+$doc.Save($writer)
+$writer.Close()
+
 Write-Host "Synced manifest identity: $name @ $appxVersion"

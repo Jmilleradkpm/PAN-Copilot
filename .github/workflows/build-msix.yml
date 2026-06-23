@@ -35,7 +35,6 @@ jobs:
         run: |
           $v = "${{ inputs.version }}".TrimStart('v')
           (Get-Content PanCopilot.csproj) -replace '<Version>.*?</Version>', "<Version>$v.0</Version>" | Set-Content PanCopilot.csproj
-          & packaging\Sync-ManifestIdentity.ps1
 
       - name: Write system prompt from secret
         shell: pwsh
