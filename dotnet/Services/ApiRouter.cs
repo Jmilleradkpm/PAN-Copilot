@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.IO;
 using System.IO.Compression;
 using System.Text;
@@ -72,6 +73,8 @@ public sealed class ApiRouter
                 {
                     ["status"] = "ok", ["version"] = AppVersion, ["mode"] = "local",
                     ["authenticated"] = _session.Authenticated,
+                    ["install_dir"] = AppContext.BaseDirectory,
+                    ["install_writable"] = !InstallPathService.IsProtectedInstallPath(AppContext.BaseDirectory),
                 }),
 
                 // ── auth ──────────────────────────────────────────────────
@@ -104,6 +107,8 @@ public sealed class ApiRouter
                 // ── version / update ──────────────────────────────────────
                 ("GET", "/api/version") => Json(200, await _updates.GetVersionInfoAsync(query["force"] == "1")),
                 ("POST", "/api/update") => await InstallUpdate(),
+                ("GET", "/api/support/update-logs") => GetUpdateLogs(),
+                ("POST", "/api/support/open") => OpenSupportPath(body),
 
                 // ── advisories ────────────────────────────────────────────
                 ("GET", "/api/advisories") => await Advisories(query["force"] == "1"),
@@ -510,6 +515,72 @@ public sealed class ApiRouter
         var o = new JsonObject();
         foreach (var kv in counts) o[kv.Key] = kv.Value;
         return o;
+    }
+
+    private static ApiResponse GetUpdateLogs()
+    {
+        var temp = Path.GetTempPath();
+        var entries = new JsonArray();
+        string? latestPath = null;
+        string? latestContent = null;
+        try
+        {
+            var files = Directory.Exists(temp)
+                ? Directory.GetFiles(temp, "adk_update_*.log")
+                    .Select(f => new FileInfo(f))
+                    .OrderByDescending(f => f.LastWriteTimeUtc)
+                    .Take(8)
+                    .ToList()
+                : [];
+            foreach (var f in files)
+            {
+                entries.Add(new JsonObject
+                {
+                    ["path"] = f.FullName,
+                    ["modified"] = f.LastWriteTimeUtc.ToString("o"),
+                    ["size"] = f.Length,
+                });
+            }
+            if (files.Count > 0)
+            {
+                latestPath = files[0].FullName;
+                latestContent = File.ReadAllText(latestPath);
+                const int max = 16_000;
+                if (latestContent.Length > max)
+                    latestContent = latestContent[^max..];
+            }
+        }
+        catch (Exception ex)
+        {
+            return Detail(500, "Could not read update logs: " + ex.Message);
+        }
+
+        return Json(200, new JsonObject
+        {
+            ["temp_dir"] = temp,
+            ["logs"] = entries,
+            ["latest_path"] = latestPath,
+            ["latest_content"] = latestContent ?? "",
+        });
+    }
+
+    private static ApiResponse OpenSupportPath(JsonObject body)
+    {
+        var kind = body["kind"]?.GetValue<string>() ?? "";
+        string? path = kind switch
+        {
+            "temp" => Path.GetTempPath(),
+            "install" => AppContext.BaseDirectory,
+            _ => null,
+        };
+        if (path is null) return Detail(400, "Unknown path kind. Use temp or install.");
+        try
+        {
+            if (!Directory.Exists(path)) return Detail(404, "Path does not exist: " + path);
+            Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
+            return Json(200, new JsonObject { ["ok"] = true, ["path"] = path });
+        }
+        catch (Exception ex) { return Detail(500, "Could not open folder: " + ex.Message); }
     }
 
     // ── helpers ───────────────────────────────────────────────────────────

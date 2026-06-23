@@ -22,6 +22,7 @@ namespace PanCopilot.Services;
 public static class ShortcutService
 {
     private const string DisplayName = "ADK Cyber AI";
+    internal const string DisplayNameForScript = DisplayName;
     private const string ExeName = "PAN Copilot.exe";
     private const string Description = "ADK Cyber AI - PAN-OS troubleshooting assistant";
 
@@ -38,6 +39,36 @@ public static class ShortcutService
         targetExe: Path.Combine(AppContext.BaseDirectory, ExeName),
         desktopDir: Environment.GetFolderPath(Environment.SpecialFolder.Desktop),
         startMenuDir: Environment.GetFolderPath(Environment.SpecialFolder.Programs));
+
+    /// <summary>
+    /// Point Desktop + Start Menu shortcuts at <paramref name="targetExe"/>.
+    /// Overwrites existing ADK Cyber AI shortcuts (used after portable migration
+    /// or update). Never throws.
+    /// </summary>
+    public static void EnsureShortcutsTarget(string targetExe) => EnsureShortcutsTarget(
+        targetExe,
+        Environment.GetFolderPath(Environment.SpecialFolder.Desktop),
+        Environment.GetFolderPath(Environment.SpecialFolder.Programs));
+
+    /// <summary>Test-friendly overload.</summary>
+    public static void EnsureShortcutsTarget(string targetExe, string desktopDir, string startMenuDir)
+    {
+        try
+        {
+            if (!File.Exists(targetExe)) return;
+        }
+        catch { return; }
+
+        foreach (var dir in new[] { desktopDir, startMenuDir })
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(dir) || !Directory.Exists(dir)) continue;
+                CreateShortcut(Path.Combine(dir, DisplayName + ".lnk"), targetExe);
+            }
+            catch { }
+        }
+    }
 
     /// <summary>Test-friendly overload: callers inject every path.</summary>
     public static void EnsureFirstRunShortcuts(

@@ -18,6 +18,14 @@ public partial class MainWindow : Window
 
     private async void OnLoaded(object sender, RoutedEventArgs e)
     {
+        Action exitApp = () => Task.Run(async () =>
+        {
+            await Task.Delay(1500);
+            Dispatcher.Invoke(() => Application.Current.Shutdown());
+        });
+        if (InstallPathService.TryMigrateFromProtectedInstall(exitApp))
+            return;
+
         // WebView2 defaults its user-data folder to next-to-the-exe. When the
         // app is installed to %ProgramFiles%, standard users can't write there,
         // and WebView2 crashes the process with E_ACCESSDENIED at startup
@@ -52,17 +60,6 @@ public partial class MainWindow : Window
         var knownIssues = new KnownIssuesService();
         var chat = new ChatService(session, settings, license, conversations, localLlm, kb, systemPrompt, knownIssues);
         var updates = new UpdateService();
-        // Exit defers ~1.5s so the in-flight /api/update HTTP response can
-        // flush back to the frontend (which then polls /health to detect that
-        // we've actually exited and closes the WebView2 window). Direct
-        // Application.Current.Shutdown() tears the host bridge down before
-        // the response serializes, and the frontend reports "Download failed"
-        // even though the update succeeded.
-        Action exitApp = () => Task.Run(async () =>
-        {
-            await Task.Delay(1500);
-            Dispatcher.Invoke(() => Application.Current.Shutdown());
-        });
         var router = new ApiRouter(session, settings, license, conversations, advisories, localLlm,
             chat, updates, exitApp, systemPrompt);
 

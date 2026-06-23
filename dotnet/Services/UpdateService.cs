@@ -181,6 +181,7 @@ public sealed class UpdateService
         CleanupOldArtifacts(temp, zipPath);
         var bytes = await _http.GetByteArrayAsync(zipUrl);
         await File.WriteAllBytesAsync(zipPath, bytes);
+        var stagedFileVer = "";
 
         try
         {
@@ -212,7 +213,7 @@ public sealed class UpdateService
             // version, which immediately re-detects the update — an endless loop.
             // (A v3.12 manifest pointing at a 3.11 binary produced exactly this.)
             // Refuse rather than loop.
-            var stagedFileVer = System.Diagnostics.FileVersionInfo.GetVersionInfo(stagedExe).FileVersion ?? "";
+            stagedFileVer = System.Diagnostics.FileVersionInfo.GetVersionInfo(stagedExe).FileVersion ?? "";
             if (CompareVersions(stagedFileVer, CurrentVersion) <= 0)
             {
                 // Record this exact artifact (version + hash) as bad and drop the
@@ -231,31 +232,23 @@ public sealed class UpdateService
             throw;
         }
 
-        // 5. Write the swap-and-relaunch helper. Runs as the same user (no
-        //    UAC needed for %LOCALAPPDATA%\Programs\... where portable installs
-        //    live). Waits for this process to exit before touching files.
-        var installDir = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar);
+        // 5. Mirror into the portable dir when running from Program Files
+        //    (non-elevated robocopy cannot write there). Otherwise update in place.
+        var installDir = InstallPathService.ResolveUpdateTargetDir();
         var helperPath = Path.Combine(temp, $"adk_update_{version}.ps1");
         var helperLog = Path.Combine(temp, $"adk_update_{version}.log");
         var pid = Environment.ProcessId;
-        var helperScript = string.Join("\n", new[]
+        var helperScript = InstallPathService.BuildMirrorHelperScript(
+            logPath: helperLog,
+            srcDir: stagingDir,
+            dstDir: installDir,
+            pid: pid,
+            expectedVersion: stagedFileVer,
+            relaunch: true);
+        helperScript += "\n" + string.Join("\n", new[]
         {
-            "$ErrorActionPreference = 'Continue'",
-            $"$log = '{helperLog.Replace("'", "''")}'",
-            $"$src = '{stagingDir.Replace("'", "''")}'",
-            $"$dst = '{installDir.Replace("'", "''")}'",
-            $"$zip = '{zipPath.Replace("'", "''")}'",
-            "\"[$(Get-Date -Format HH:mm:ss)] waiting for old app to exit\" | Out-File $log -Encoding UTF8",
-            $"for ($i=0; $i -lt 60 -and (Get-Process -Id {pid} -ErrorAction SilentlyContinue); $i++) {{ Start-Sleep -Milliseconds 500 }}",
-            $"Get-Process -Id {pid} -ErrorAction SilentlyContinue | Stop-Process -Force",
-            "\"[$(Get-Date -Format HH:mm:ss)] mirroring staged files\" | Out-File $log -Append -Encoding UTF8",
-            "robocopy \"$src\" \"$dst\" /MIR /R:10 /W:1",
-            "if ($LASTEXITCODE -lt 8) { $global:LASTEXITCODE = 0 } else { \"[$(Get-Date -Format HH:mm:ss)] robocopy FAILED code $LASTEXITCODE\" | Out-File $log -Append -Encoding UTF8 }",
-            "\"[$(Get-Date -Format HH:mm:ss)] cleaning up\" | Out-File $log -Append -Encoding UTF8",
-            "Remove-Item -Path $src -Recurse -Force -ErrorAction SilentlyContinue",
-            "Remove-Item -Path $zip -Force -ErrorAction SilentlyContinue",
-            "\"[$(Get-Date -Format HH:mm:ss)] relaunching\" | Out-File $log -Append -Encoding UTF8",
-            "Start-Process -FilePath (Join-Path $dst 'PAN Copilot.exe')",
+            $"Remove-Item -Path '{stagingDir.Replace("'", "''")}' -Recurse -Force -ErrorAction SilentlyContinue",
+            $"Remove-Item -Path '{zipPath.Replace("'", "''")}' -Force -ErrorAction SilentlyContinue",
         });
         await File.WriteAllTextAsync(helperPath, helperScript);
 

@@ -1057,7 +1057,7 @@
     </div>
   </div>
 
-  <div id="local-badge" title="App runs locally · configs go directly to Anthropic's API, never to ADK Cyber">
+  <div id="local-badge" title="App runs locally · credentials redacted on device · relayed through ADK Cyber's gateway (not stored) to Anthropic">
     <div id="local-dot"></div>
     Local · Private
   </div>
@@ -1095,7 +1095,7 @@
     <button id="auth-submit" onclick="submitAuth()">Sign In</button>
 
     <div class="auth-note">
-      🔒 Credentials in your configs are automatically redacted. Config data goes directly from your machine to Anthropic's API for AI inference — ADK Cyber's servers only ever see your email and session token.<br><br>
+      🔒 Credentials in your configs are automatically redacted. On cloud plans, redacted requests are relayed through ADK Cyber's gateway (in transit only — not stored) to Anthropic. ADK Cyber only sees your email, session token, and usage.<br><br>
       Free tier: <strong style="color:var(--text-sub);">10 queries / week</strong> · Upgrade at <a href="https://www.adkcyber.com/adk-cyber-ai.html" target="_blank">adkcyber.com/adk-cyber-ai.html</a>
     </div>
   </div>
@@ -1133,7 +1133,7 @@
 
     <div style="margin-top:20px;font-size:11px;color:var(--text-dim);line-height:1.7;border-top:1px solid var(--border);padding-top:16px;">
       <strong style="color:var(--text-sub);">Data &amp; Privacy</strong><br>
-      Firewall configs go directly from your machine to Anthropic's API — they never touch ADK Cyber's servers. Conversations are stored locally at <code>~/.pan_copilot/conversations.db</code>.
+      Credentials are redacted on your device. On cloud plans, redacted requests pass through ADK Cyber's gateway (not stored) to Anthropic. Conversations are stored locally at <code>~/.pan_copilot/conversations_v3/</code>.
     </div>
 
     <button id="logout-btn" onclick="logout()">Sign Out</button>
@@ -1361,7 +1361,7 @@
         <div class="info-card">
           <div class="info-row info-privacy">
             <span>🔒</span>
-            <span>Credentials auto-redacted · configs go directly to Anthropic's API, never to ADK Cyber</span>
+            <span>Credentials auto-redacted · credentials redacted on device · relayed through ADK Cyber's gateway (not stored) to Anthropic</span>
           </div>
           <div class="info-row info-tip">
             <span>⚠️</span>
@@ -2775,7 +2775,7 @@ function clearMessages() {
       <div class="info-card">
         <div class="info-row info-privacy">
           <span>🔒</span>
-          <span>Credentials auto-redacted · configs go directly to Anthropic's API, never to ADK Cyber</span>
+          <span>Credentials auto-redacted · credentials redacted on device · relayed through ADK Cyber's gateway (not stored) to Anthropic</span>
         </div>
         <div class="info-row info-tip">
           <span>⚠️</span>

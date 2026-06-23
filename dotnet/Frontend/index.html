@@ -812,7 +812,28 @@
     #settings-panel.open { display: flex; }
     #settings-card {
       background: var(--surface); border: 1px solid var(--border);
-      border-radius: 14px; padding: 28px 32px; width: 400px; max-width: 95vw;
+      border-radius: 14px; padding: 28px 32px; width: 440px; max-width: 95vw;
+      max-height: 90vh; overflow-y: auto;
+    }
+    .acct-about-path {
+      font-size: 10px; font-family: var(--mono, monospace); color: var(--text-sub);
+      word-break: break-all; text-align: right; max-width: 58%;
+    }
+    .install-warn { color: var(--yellow, #d29922); }
+    .about-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+    .about-btn {
+      padding: 6px 10px; border-radius: 6px; border: 1px solid var(--border);
+      background: var(--surface2); color: var(--text-sub); font-size: 11px; cursor: pointer;
+    }
+    .about-btn:hover { border-color: var(--accent); color: var(--text); }
+    #update-log-panel {
+      display: none; margin-top: 10px; background: var(--surface2); border: 1px solid var(--border);
+      border-radius: 8px; padding: 10px; max-height: 180px; overflow: auto;
+    }
+    #update-log-panel.open { display: block; }
+    #update-log-content {
+      font-family: var(--mono, monospace); font-size: 10px; line-height: 1.45;
+      color: var(--text-sub); white-space: pre-wrap; word-break: break-all; margin: 0;
     }
     #settings-close {
       float: right; background: none; border: none; color: var(--text-dim);
@@ -1185,9 +1206,9 @@
     </div>
   </div>
 
-  <div id="local-badge" title="App runs locally · configs go directly to Anthropic's API, never to ADK Cyber">
+  <div id="local-badge" title="Local app · secrets redacted on your device before cloud inference">
     <div id="local-dot"></div>
-    Local · Private
+    <span id="local-badge-text">Local · Private</span>
   </div>
 
   <div id="tier-badge" title="Your current plan"></div>
@@ -1223,7 +1244,7 @@
     <button id="auth-submit" onclick="submitAuth()">Sign In</button>
 
     <div class="auth-note">
-      🔒 Credentials in your configs are automatically redacted. Config data goes directly from your machine to Anthropic's API for AI inference — ADK Cyber's servers only ever see your email and session token.<br><br>
+      🔒 Credentials in your configs are automatically redacted on your device. On cloud plans, redacted requests are relayed through ADK Cyber's gateway (in transit only — not stored) to Anthropic for inference. ADK Cyber only sees your email, session token, and usage.<br><br>
       Free tier: <strong style="color:var(--text-sub);">10 queries / week</strong> · Upgrade at <a href="https://www.adkcyber.com/adk-cyber-ai.html" target="_blank">adkcyber.com/adk-cyber-ai.html</a>
     </div>
   </div>
@@ -1233,7 +1254,7 @@
 <div id="settings-panel">
   <div id="settings-card">
     <button id="settings-close" onclick="closeSettings()">✕</button>
-    <div style="font-size:16px;font-weight:700;margin-bottom:20px;">👤 Account</div>
+    <div style="font-size:16px;font-weight:700;margin-bottom:20px;">👤 Account &amp; About</div>
 
     <div class="acct-row">
       <span class="acct-label">Email</span>
@@ -1260,8 +1281,38 @@
     </button>
 
     <div style="margin-top:20px;font-size:11px;color:var(--text-dim);line-height:1.7;border-top:1px solid var(--border);padding-top:16px;">
+      <strong style="color:var(--text-sub);">About</strong>
+    </div>
+    <div class="acct-row">
+      <span class="acct-label">Version</span>
+      <span class="acct-value" id="about-version">—</span>
+    </div>
+    <div class="acct-row">
+      <span class="acct-label">Provider</span>
+      <span class="acct-value" id="about-provider">—</span>
+    </div>
+    <div class="acct-row" style="align-items:flex-start;">
+      <span class="acct-label">Install</span>
+      <span class="acct-about-path" id="about-install">—</span>
+    </div>
+    <div class="acct-row" id="about-writable-row" style="display:none;">
+      <span class="acct-label">Updates</span>
+      <span class="acct-value install-warn" id="about-writable">—</span>
+    </div>
+    <div class="about-actions">
+      <button type="button" class="about-btn" onclick="copyInstallPath(this)">Copy install path</button>
+      <button type="button" class="about-btn" onclick="openSupportPath('temp')">Open logs folder</button>
+      <button type="button" class="about-btn" onclick="toggleUpdateLog()">View update log</button>
+    </div>
+    <div id="update-log-panel">
+      <div id="update-log-meta" style="font-size:10px;color:var(--text-dim);margin-bottom:6px;"></div>
+      <pre id="update-log-content">No update logs found in %TEMP%.</pre>
+    </div>
+
+    <div style="margin-top:16px;font-size:11px;color:var(--text-dim);line-height:1.7;border-top:1px solid var(--border);padding-top:16px;">
       <strong style="color:var(--text-sub);">Data &amp; Privacy</strong><br>
-      Firewall configs go directly from your machine to Anthropic's API — they never touch ADK Cyber's servers. Conversations are stored locally at <code>~/.pan_copilot/conversations.db</code>.
+      <span id="settings-privacy-text">Credentials are redacted on your device. On cloud plans, redacted requests pass through ADK Cyber's gateway (not stored) to Anthropic. Conversations are stored locally at <code>~/.pan_copilot/conversations_v3/</code>.</span>
+      <a href="https://www.adkcyber.com/adk-cyber-ai.html#privacy" target="_blank" rel="noopener" style="color:var(--accent);display:inline-block;margin-top:8px;">Full privacy details →</a>
     </div>
 
     <button id="logout-btn" onclick="logout()">Sign Out</button>
@@ -1489,11 +1540,11 @@
         <div class="info-card">
           <div class="info-row info-privacy">
             <span>🔒</span>
-            <span>Credentials auto-redacted · configs go directly to Anthropic's API, never to ADK Cyber</span>
+            <span class="privacy-short-text">Credentials redacted on device · relayed through ADK Cyber's gateway (not stored) to Anthropic</span>
           </div>
           <div class="info-row info-tip">
             <span>⚠️</span>
-            <div><strong>Best practice:</strong> Paste only the section of config relevant to your question rather than a full <code>show config running</code> export. This limits unnecessary exposure of your network topology to third-party AI infrastructure.</div>
+            <div><strong>Best practice:</strong> Paste only the section of config relevant to your question rather than a full <code>show config running</code> export. Screenshots are not redacted — avoid pasting secrets in images.</div>
           </div>
         </div>
       </div>
@@ -1782,6 +1833,41 @@ let isStreaming          = false;
 let authMode             = 'login'; // 'login' | 'register'
 let currentTier          = 'free';  // updated on login/refresh; drives model & quota UI
 let _kbScrollToTop       = false;   // set by askKb(); clears after done event scrolls to top of response
+let _installWritable     = true;    // from GET /health — false when running from Program Files, etc.
+let _installDir          = '';
+
+const PRIVACY_URL = 'https://www.adkcyber.com/adk-cyber-ai.html#privacy';
+const CONV_STORE_PATH = '~/.pan_copilot/conversations_v3/';
+
+function privacyShortText() {
+  const eff = _providerState.effective_provider || 'cloud';
+  if (eff === 'local') {
+    return 'Local LLM on your machine — nothing you type leaves your PC';
+  }
+  return 'Credentials redacted on device · relayed through ADK Cyber\'s gateway (not stored) to Anthropic';
+}
+
+function privacyBadgeText() {
+  const eff = _providerState.effective_provider || 'cloud';
+  return eff === 'local' ? 'Local LLM · Private' : 'Local app · Private';
+}
+
+function updatePrivacyCopy() {
+  const short = privacyShortText();
+  document.querySelectorAll('.privacy-short-text').forEach(el => { el.textContent = short; });
+  const badge = document.getElementById('local-badge');
+  const badgeText = document.getElementById('local-badge-text');
+  if (badgeText) badgeText.textContent = privacyBadgeText();
+  if (badge) badge.title = short;
+  const stPriv = document.getElementById('settings-privacy-text');
+  if (stPriv) {
+    if ((_providerState.effective_provider || 'cloud') === 'local') {
+      stPriv.innerHTML = 'Local LLM mode: chat and configs stay on your machine. Nothing is sent to ADK Cyber or Anthropic. Conversations are stored locally at <code>' + CONV_STORE_PATH + '</code>.';
+    } else {
+      stPriv.innerHTML = 'Credentials are redacted on your device. On cloud plans, redacted requests pass through ADK Cyber\'s gateway (not stored) to Anthropic. Conversations are stored locally at <code>' + CONV_STORE_PATH + '</code>.';
+    }
+  }
+}
 
 // ── Model selection ───────────────────────────────────────────────
 let selectedModel = 'auto';
@@ -1804,6 +1890,7 @@ function modelLabel(m) {
 // ── Init ─────────────────────────────────────────────────────────
 async function init() {
   applyTheme();
+  await checkInstallHealth();
   await checkAuthStatus();
   checkForUpdate();
   loadAdvisories();
@@ -1850,11 +1937,132 @@ async function checkForUpdate() {
       if (hdrEl) { hdrEl.textContent = verEl.textContent; hdrEl.title = verEl.title; }
     }
     if (data.update_available) {
-      document.getElementById('update-banner-msg').textContent =
-        `Update available: v${data.latest_version} — install and restart automatically.`;
+      setUpdateBannerMessage(data.latest_version);
       showUpdateBanner();
+    } else {
+      hideUpdateBanner();
     }
   } catch (e) { /* silent — app works fine without update check */ }
+}
+
+async function checkInstallHealth() {
+  try {
+    const res = await fetch(`${API}/health`);
+    if (!res.ok) return;
+    const data = await res.json();
+    _installDir = data.install_dir || '';
+    if (typeof data.install_writable === 'boolean') _installWritable = data.install_writable;
+    refreshAboutPanel(data);
+  } catch (e) { /* silent */ }
+}
+
+function setUpdateBannerMessage(latestVersion) {
+  const msg = document.getElementById('update-banner-msg');
+  if (!_installWritable) {
+    msg.innerHTML =
+      `Update v${latestVersion} available, but this install folder is read-only. ` +
+      `Download the ZIP from <a href="https://www.adkcyber.com/adk-cyber-ai.html" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline;">adkcyber.com</a> ` +
+      `and extract to <code style="font-size:11px;">%LOCALAPPDATA%\\Programs\\ADK Cyber AI</code>, or click Update Now to migrate automatically.`;
+    return;
+  }
+  msg.textContent = `Update available: v${latestVersion} — install and restart automatically.`;
+}
+
+function refreshAboutPanel(health) {
+  const ver = document.getElementById('about-version');
+  const prov = document.getElementById('about-provider');
+  const inst = document.getElementById('about-install');
+  const wRow = document.getElementById('about-writable-row');
+  const wEl = document.getElementById('about-writable');
+  if (ver) {
+    const v = (health && health.version) || document.getElementById('app-version')?.textContent?.replace(/^v/, '') || '—';
+    ver.textContent = v.startsWith('v') ? v : 'v' + v;
+  }
+  if (prov) {
+    const eff = _providerState.effective_provider || 'cloud';
+    prov.textContent = eff === 'local'
+      ? `Local · ${(_providerState.settings || {}).local_model || 'LLM'}`
+      : 'Cloud · ADK Cyber AI';
+  }
+  if (inst) inst.textContent = _installDir || (health && health.install_dir) || '—';
+  if (wRow && wEl && typeof (health && health.install_writable) === 'boolean') {
+    if (!health.install_writable) {
+      wRow.style.display = 'flex';
+      wEl.textContent = 'Read-only folder — use portable install for in-app updates';
+    } else {
+      wRow.style.display = 'none';
+    }
+  }
+}
+
+async function loadAboutInfo() {
+  try {
+    const res = await fetch(`${API}/health`);
+    if (!res.ok) return;
+    const data = await res.json();
+    if (typeof data.install_writable === 'boolean') _installWritable = data.install_writable;
+    if (data.install_dir) _installDir = data.install_dir;
+    refreshAboutPanel(data);
+  } catch (e) { /* silent */ }
+}
+
+async function copyInstallPath(btn) {
+  if (!_installDir) await loadAboutInfo();
+  const text = _installDir || document.getElementById('about-install')?.textContent || '';
+  if (!text || text === '—') { alert('Install path not available yet.'); return; }
+  try {
+    await navigator.clipboard.writeText(text);
+    if (btn) { const orig = btn.textContent; btn.textContent = 'Copied!'; setTimeout(() => { btn.textContent = orig; }, 1500); }
+  } catch (e) {
+    alert('Install path:\n' + text);
+  }
+}
+
+async function openSupportPath(kind) {
+  try {
+    const res = await fetch(`${API}/api/support/open`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      alert(err.detail || 'Could not open folder.');
+    }
+  } catch (e) {
+    alert('Could not open folder: ' + e.message);
+  }
+}
+
+let _updateLogLoaded = false;
+async function toggleUpdateLog() {
+  const panel = document.getElementById('update-log-panel');
+  if (!panel) return;
+  const opening = !panel.classList.contains('open');
+  panel.classList.toggle('open', opening);
+  if (opening && !_updateLogLoaded) await loadUpdateLogs();
+}
+
+async function loadUpdateLogs() {
+  const meta = document.getElementById('update-log-meta');
+  const pre = document.getElementById('update-log-content');
+  if (!pre) return;
+  pre.textContent = 'Loading…';
+  try {
+    const res = await fetch(`${API}/api/support/update-logs`);
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || res.statusText);
+    const data = await res.json();
+    _updateLogLoaded = true;
+    if (meta) {
+      meta.textContent = data.latest_path
+        ? `Latest: ${data.latest_path}`
+        : `No adk_update_*.log files in ${data.temp_dir || '%TEMP%'}`;
+    }
+    pre.textContent = data.latest_content
+      || 'No update logs yet. Logs appear here after you click Update Now.';
+  } catch (e) {
+    pre.textContent = 'Failed to load update log: ' + e.message;
+  }
 }
 
 // ── Chat provider settings (cloud vs local LLM) ────────────────────
@@ -2009,6 +2217,8 @@ function renderProviderUI() {
   const cfgWarn = document.getElementById('large-cfg-warn');
   if (cfgWarn) cfgWarn.style.display = (eff === 'local') ? 'none' : cfgWarn.style.display;
   updateLocalContextWarn();
+  updatePrivacyCopy();
+  refreshAboutPanel({ version: document.getElementById('app-version')?.textContent?.replace(/^v/, ''), install_dir: _installDir, install_writable: _installWritable });
 }
 
 function syncLocalModelSelect(modelName) {
@@ -2353,9 +2563,10 @@ async function recheckVersion() {
       if (hdrEl) { hdrEl.textContent = verEl.textContent; hdrEl.title = verEl.title; }
     }
     if (data.update_available) {
-      document.getElementById('update-banner-msg').textContent =
-        `Update available: v${data.latest_version} — install and restart automatically.`;
+      setUpdateBannerMessage(data.latest_version);
       showUpdateBanner();
+    } else {
+      hideUpdateBanner();
     }
   } catch (e) {
     if (verEl) verEl.textContent = 'v?';
@@ -2374,7 +2585,16 @@ async function installUpdate() {
       const err = await r.json().catch(() => ({}));
       btn.textContent = 'Update Now';
       btn.disabled = false;
-      msg.textContent = 'Update failed: ' + (err.detail || r.statusText);
+      const detail = err.detail || r.statusText;
+      if (!_installWritable || /read-only|writable|Program Files/i.test(detail)) {
+        msg.innerHTML =
+          'Update failed — install folder may be read-only. Download the ZIP from ' +
+          '<a href="https://www.adkcyber.com/adk-cyber-ai.html" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline;">adkcyber.com</a> ' +
+          'and extract to <code style="font-size:11px;">%LOCALAPPDATA%\\Programs\\ADK Cyber AI</code>. ' +
+          `(${detail})`;
+      } else {
+        msg.textContent = 'Update failed: ' + detail;
+      }
       return;
     }
     // Backend has verified the download, extracted to a staging dir, and
@@ -2454,6 +2674,7 @@ function onAuthenticated(data) {
   // Show/hide upgrade link
   document.getElementById('upgrade-link').style.display = data.tier === 'free' ? 'inline-block' : 'none';
   loadConversations();
+  showOnboardingIfNeeded();
 }
 
 function tierLabel(tier) {
@@ -2595,6 +2816,28 @@ async function downloadMigrationZip() {
   } catch (e) {
     st.textContent = 'Download failed: ' + e.message;
   }
+}
+
+function maybeWarnScreenshotPaste() {
+  const eff = _providerState.effective_provider || 'cloud';
+  if (eff === 'local') return;
+  if (localStorage.getItem('pcop_screenshot_warn_ack')) return;
+  localStorage.setItem('pcop_screenshot_warn_ack', '1');
+  alert(
+    'Screenshot privacy note:\n\n' +
+    'Text in configs is auto-redacted before sending, but pasted screenshots are NOT redacted. ' +
+    'Crop or blur any passwords, keys, or sensitive hostnames before attaching images.'
+  );
+}
+
+function showOnboardingIfNeeded() {
+  if (localStorage.getItem('pcop_onboard_ack')) return;
+  document.getElementById('onboarding-backdrop').classList.add('open');
+}
+
+function ackOnboarding() {
+  localStorage.setItem('pcop_onboard_ack', '1');
+  document.getElementById('onboarding-backdrop').classList.remove('open');
 }
 
 // ── Data disclosure (one-time acknowledgment) ────────────────────
@@ -2754,6 +2997,7 @@ document.addEventListener('DOMContentLoaded', () => {
 // ── Account panel ─────────────────────────────────────────────────
 function openSettings() {
   document.getElementById('settings-panel').classList.add('open');
+  loadAboutInfo();
 }
 function closeSettings() {
   document.getElementById('settings-panel').classList.remove('open');
@@ -2960,11 +3204,11 @@ function clearMessages() {
       <div class="info-card">
         <div class="info-row info-privacy">
           <span>🔒</span>
-          <span>Credentials auto-redacted · configs go directly to Anthropic's API, never to ADK Cyber</span>
+          <span class="privacy-short-text">${privacyShortText()}</span>
         </div>
         <div class="info-row info-tip">
           <span>⚠️</span>
-          <div><strong>Best practice:</strong> Paste only the section of config relevant to your question rather than a full <code>show config running</code> export. This limits unnecessary exposure of your network topology to third-party AI infrastructure.</div>
+          <div><strong>Best practice:</strong> Paste only the section of config relevant to your question rather than a full <code>show config running</code> export. Screenshots are not redacted — avoid pasting secrets in images.</div>
         </div>
       </div>
     </div>`;
@@ -3130,6 +3374,7 @@ async function handlePasteImages(e) {
   }
   if (!imageFiles.length) return;   // text paste — let the default run
   e.preventDefault();
+  maybeWarnScreenshotPaste();
   if (pendingImages.length + imageFiles.length > MAX_IMAGES_PER_MSG) {
     alert(`You can attach up to ${MAX_IMAGES_PER_MSG} images per message.`);
     return;
@@ -3570,15 +3815,34 @@ function copyCode(btn) {
 }
 </script>
 
+<!-- First-run onboarding (shown once after sign-in) -->
+<div id="onboarding-backdrop" style="display:none;position:fixed;inset:0;z-index:2100;background:rgba(0,0,0,0.78);align-items:center;justify-content:center;">
+  <div id="onboarding-modal" style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:24px 22px;width:420px;max-width:94vw;" onclick="event.stopPropagation()">
+    <h3 style="font-size:14px;font-weight:700;margin-bottom:10px;color:var(--text);">Welcome to ADK Cyber AI</h3>
+    <p style="font-size:12px;color:var(--text-sub);margin-bottom:10px;line-height:1.6;">A few things worth knowing before you paste your first config:</p>
+    <ul class="disclosure-list">
+      <li><strong style="color:var(--text)">Runs locally:</strong> the app lives on your Windows PC; chats are stored at <code>~/.pan_copilot/conversations_v3/</code></li>
+      <li><strong style="color:var(--green)">Redacted on device:</strong> passwords, PSKs, API keys, and private keys are stripped before cloud inference</li>
+      <li><strong style="color:var(--yellow)">Cloud plans:</strong> redacted requests relay through ADK Cyber's gateway (in transit only — not stored) to Anthropic</li>
+      <li><strong style="color:var(--accent)">Local plan:</strong> switch to your own LLM in Settings — nothing leaves your machine</li>
+    </ul>
+    <p style="font-size:11px;color:var(--text-dim);margin-bottom:14px;line-height:1.5;">Screenshots are not redacted. Paste only the config section you need, not a full export.</p>
+    <button id="onboarding-ack-btn" onclick="ackOnboarding()" style="width:100%;padding:10px 16px;border-radius:8px;border:none;background:var(--accent);color:#000;font-weight:600;font-size:13px;cursor:pointer;">Get started</button>
+    <a href="https://www.adkcyber.com/adk-cyber-ai.html#privacy" target="_blank" rel="noopener" style="display:block;text-align:center;margin-top:10px;font-size:11px;color:var(--text-dim);">Full privacy details →</a>
+  </div>
+</div>
+<style>#onboarding-backdrop.open{display:flex!important;}</style>
+
 <!-- Data disclosure modal (shown once before first config submission) -->
 <div id="data-disclosure-backdrop" onclick="closeDataDisclosure(event)">
   <div id="data-disclosure-modal">
     <h3>🔒 What gets sent when you submit a config</h3>
-    <p>Before you send your first config, here's exactly what happens:</p>
+    <p>Before you send your first config or screenshot, here's exactly what happens on cloud plans:</p>
     <ul class="disclosure-list">
       <li><strong style="color:var(--green)">Auto-redacted before sending:</strong> passwords, shared secrets, pre-shared keys, API keys, private keys</li>
-      <li><strong style="color:var(--yellow)">Sent to Anthropic's API:</strong> network topology, IP addresses, zone architecture, management access rules — the AI needs this to diagnose your config</li>
-      <li><strong style="color:var(--text)">Never touches ADK Cyber's servers:</strong> only your email and session token reach ADK Cyber</li>
+      <li><strong style="color:var(--yellow)">Still sent (so the AI can reason):</strong> network topology, IP addresses, zone architecture, rule structure</li>
+      <li><strong style="color:var(--yellow)">Screenshots:</strong> not redacted — crop or blur secrets before attaching</li>
+      <li><strong style="color:var(--text)">ADK Cyber gateway:</strong> redacted requests pass through in transit only (not stored); your account server sees email, session, and usage only</li>
     </ul>
     <p><strong>Recommendation:</strong> paste only the section relevant to your question — a specific policy rule, BGP neighbor config, or IKE profile — rather than a full <code style="font-size:11px;color:#79c0ff;background:var(--code-bg);padding:1px 5px;border-radius:3px;">show config running</code> export.</p>
     <button id="disclosure-ack-btn" onclick="ackDataDisclosure()">Got it — send my message</button>

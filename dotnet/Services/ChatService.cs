@@ -176,8 +176,13 @@ public sealed class ChatService
 
         var messages = new JsonArray();
         foreach (var (role, content) in history)
-            if (role is "user" or "assistant")
-                messages.Add(new JsonObject { ["role"] = role, ["content"] = content });
+        {
+            if (role is not ("user" or "assistant")) continue;
+            // Re-sanitize user turns loaded from disk so secrets typed in an
+            // earlier message cannot leak on follow-up cloud requests.
+            var histContent = role == "user" ? ConfigSanitizer.Sanitize(content).text : content;
+            messages.Add(new JsonObject { ["role"] = role, ["content"] = histContent });
+        }
 
         var userText = msgClean;
         if (!string.IsNullOrWhiteSpace(cfgClean))
@@ -260,7 +265,7 @@ public sealed class ChatService
         }
 
         // ── persist ──────────────────────────────────────────────────────
-        var persistedMsg = message;
+        var (persistedMsg, _) = ConfigSanitizer.Sanitize(message);
         if (nImages > 0)
             persistedMsg = persistedMsg.TrimEnd() + $"\n\n[{nImages} image{(nImages != 1 ? "s" : "")} attached]";
         _conversations.SaveMessages(convId, persistedMsg, full.ToString());
