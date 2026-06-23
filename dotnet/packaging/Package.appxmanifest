@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10" xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10" xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities" xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10" xmlns:uap3="http://schemas.microsoft.com/appx/manifest/uap/windows10/3" IgnorableNamespaces="uap rescap desktop uap3">
-  <Identity Name="ADKCyberLLC.ADKCyberAI" Publisher="CN=ADK Cyber\, LLC" Version="3.17.0.0" ProcessorArchitecture="x64" />
+  <Identity Name="ADKCyberLLC.ADKCyberAI" Publisher="CN=&quot;ADK Cyber, LLC&quot;" Version="3.17.0.0" ProcessorArchitecture="x64" />
   <Properties>
     <DisplayName>ADK Cyber AI</DisplayName>
     <PublisherDisplayName>ADK Cyber, LLC</PublisherDisplayName>

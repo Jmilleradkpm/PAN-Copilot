@@ -6,7 +6,7 @@
 <Project>
   <PropertyGroup>
     <PackageIdentityName>ADKCyberLLC.ADKCyberAI</PackageIdentityName>
-    <!-- Paste the exact Publisher string from Partner Center. Commas inside CN values must be escaped: CN=ADK Cyber\, LLC -->
-    <PackageIdentityPublisher>CN=ADK Cyber\, LLC</PackageIdentityPublisher>
+    <!-- Paste the exact Publisher string from Partner Center (Product identity). Example with comma: CN="ADK Cyber, LLC" -->
+    <PackageIdentityPublisher>CN="ADK Cyber, LLC"</PackageIdentityPublisher>
   </PropertyGroup>
 </Project>
