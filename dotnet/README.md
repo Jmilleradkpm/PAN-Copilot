@@ -111,8 +111,9 @@ host bridge.
   `Frontend/`)
 - [x] MSIX packaging scaffold (`packaging/ADKCyberAI.Package.wapproj`, Store build
   workflow `.github/workflows/build-msix.yml`, Store updater gated)
-- [ ] Microsoft Store submission (align `Package.appxmanifest` identity with Partner
-  Center, upload package flight)
+- [ ] Microsoft Store submission (paste Partner Center identity into
+  `packaging/PartnerCenter.Identity.props`, download MSIX from **Build MSIX (Store)**
+  workflow artifact, upload to package flight)
 - [ ] Auto-update client (download + verify + apply), matching v2.1's
   signature/hash checks
 
