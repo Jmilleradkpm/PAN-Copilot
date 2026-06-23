@@ -50,3 +50,13 @@ pan_copilot.html
 /railway.toml
 CLAUDE.md
 .claude/
+.grok/
+
+# .NET publish / MSIX packaging artifacts
+dotnet/publish/
+dotnet/packaging/AppPackages/
+dotnet/packaging/BundleArtifacts/
+dotnet/packaging/*.pfx
+dotnet/ADK_Cyber_AI_*_Store.msix
+dotnet/Services/PromptKey.cs
+dotnet/Services/system_prompt.bin

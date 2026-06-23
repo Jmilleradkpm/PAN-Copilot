@@ -109,8 +109,10 @@ host bridge.
 - [ ] Full visual parity with `pan_copilot_desktop.html` (the new UI is clean
   and functional but not yet a pixel match — port the styled markup into
   `Frontend/`)
-- [ ] MSIX packaging + Microsoft Store submission (workflow currently ships a
-  signed self-contained zip; MSIX is the next packaging step)
+- [x] MSIX packaging scaffold (`packaging/ADKCyberAI.Package.wapproj`, Store build
+  workflow `.github/workflows/build-msix.yml`, Store updater gated)
+- [ ] Microsoft Store submission (align `Package.appxmanifest` identity with Partner
+  Center, upload package flight)
 - [ ] Auto-update client (download + verify + apply), matching v2.1's
   signature/hash checks
 

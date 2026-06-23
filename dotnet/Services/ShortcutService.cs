@@ -34,21 +34,29 @@ public static class ShortcutService
     /// Create Desktop + Start Menu shortcuts on first launch. No-ops on every
     /// subsequent launch (marker file). Never throws.
     /// </summary>
-    public static void EnsureFirstRunShortcuts() => EnsureFirstRunShortcuts(
-        markerPath: MarkerPath,
-        targetExe: Path.Combine(AppContext.BaseDirectory, ExeName),
-        desktopDir: Environment.GetFolderPath(Environment.SpecialFolder.Desktop),
-        startMenuDir: Environment.GetFolderPath(Environment.SpecialFolder.Programs));
+    public static void EnsureFirstRunShortcuts()
+    {
+        if (DistributionService.IsPackaged) return;
+        EnsureFirstRunShortcuts(
+            markerPath: MarkerPath,
+            targetExe: Path.Combine(AppContext.BaseDirectory, ExeName),
+            desktopDir: Environment.GetFolderPath(Environment.SpecialFolder.Desktop),
+            startMenuDir: Environment.GetFolderPath(Environment.SpecialFolder.Programs));
+    }
 
     /// <summary>
     /// Point Desktop + Start Menu shortcuts at <paramref name="targetExe"/>.
     /// Overwrites existing ADK Cyber AI shortcuts (used after portable migration
     /// or update). Never throws.
     /// </summary>
-    public static void EnsureShortcutsTarget(string targetExe) => EnsureShortcutsTarget(
-        targetExe,
-        Environment.GetFolderPath(Environment.SpecialFolder.Desktop),
-        Environment.GetFolderPath(Environment.SpecialFolder.Programs));
+    public static void EnsureShortcutsTarget(string targetExe)
+    {
+        if (DistributionService.IsPackaged) return;
+        EnsureShortcutsTarget(
+            targetExe,
+            Environment.GetFolderPath(Environment.SpecialFolder.Desktop),
+            Environment.GetFolderPath(Environment.SpecialFolder.Programs));
+    }
 
     /// <summary>Test-friendly overload.</summary>
     public static void EnsureShortcutsTarget(string targetExe, string desktopDir, string startMenuDir)

@@ -73,8 +73,11 @@ public sealed class ApiRouter
                 {
                     ["status"] = "ok", ["version"] = AppVersion, ["mode"] = "local",
                     ["authenticated"] = _session.Authenticated,
+                    ["distribution_channel"] = DistributionService.Channel,
                     ["install_dir"] = AppContext.BaseDirectory,
-                    ["install_writable"] = !InstallPathService.IsProtectedInstallPath(AppContext.BaseDirectory),
+                    ["install_writable"] = DistributionService.IsMicrosoftStore
+                        ? false
+                        : !InstallPathService.IsProtectedInstallPath(AppContext.BaseDirectory),
                 }),
 
                 // ── auth ──────────────────────────────────────────────────

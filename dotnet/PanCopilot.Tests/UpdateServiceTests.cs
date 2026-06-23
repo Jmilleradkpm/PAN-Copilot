@@ -73,6 +73,42 @@ public class UpdateServiceTests
         var url = info["download_url"]?.GetValue<string>() ?? "";
         if (!string.IsNullOrEmpty(url))
             Assert.StartsWith("https://downloads.adkcyber.com/", url);
+        Assert.Equal("direct", info["distribution_channel"]?.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task GetVersionInfo_StoreChannel_DisablesUpdater()
+    {
+        var prior = Environment.GetEnvironmentVariable("ADK_SIMULATE_STORE");
+        try
+        {
+            Environment.SetEnvironmentVariable("ADK_SIMULATE_STORE", "1");
+            var info = await new UpdateService().GetVersionInfoAsync(force: true);
+            Assert.Equal("store", info["distribution_channel"]?.GetValue<string>());
+            Assert.False(info["update_available"]?.GetValue<bool>() ?? true);
+            Assert.Equal("microsoft_store", info["update_managed_by"]?.GetValue<string>());
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("ADK_SIMULATE_STORE", prior);
+        }
+    }
+
+    [Fact]
+    public async Task InstallUpdate_StoreChannel_Refuses()
+    {
+        var prior = Environment.GetEnvironmentVariable("ADK_SIMULATE_STORE");
+        try
+        {
+            Environment.SetEnvironmentVariable("ADK_SIMULATE_STORE", "1");
+            var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+                () => new UpdateService().InstallUpdateAsync(() => { }));
+            Assert.Contains("Microsoft Store", ex.Message);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("ADK_SIMULATE_STORE", prior);
+        }
     }
 
     [Fact]

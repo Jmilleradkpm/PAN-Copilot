@@ -43,6 +43,8 @@ public static class InstallPathService
     public static string ResolveUpdateTargetDir()
     {
         var current = NormalizeDir(AppContext.BaseDirectory);
+        if (DistributionService.IsPackaged)
+            return current;
         return IsProtectedInstallPath(current) ? PortableInstallDir : current;
     }
 
@@ -53,6 +55,9 @@ public static class InstallPathService
     /// </summary>
     public static bool TryMigrateFromProtectedInstall(Action exitApp)
     {
+        if (DistributionService.IsPackaged)
+            return false;
+
         var current = NormalizeDir(AppContext.BaseDirectory);
         if (!IsProtectedInstallPath(current))
             return false;

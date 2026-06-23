@@ -1,0 +1,59 @@
+﻿<?xml Version="3.17.0.0" encoding="utf-8"?>
+<Package
+  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+  xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10"
+  xmlns:uap3="http://schemas.microsoft.com/appx/manifest/uap/windows10/3"
+  IgnorableNamespaces="uap rescap desktop uap3">
+
+  <!-- Version must match PanCopilot.csproj on each release (a.b.c.0). -->
+  <Identity
+    Name="ADKCyberLLC.ADKCyberAI"
+    Publisher="CN=ADK Cyber, LLC"
+    Version="3.17.0.0"
+    ProcessorArchitecture="x64" />
+
+  <Properties>
+    <DisplayName>ADK Cyber AI</DisplayName>
+    <PublisherDisplayName>ADK Cyber, LLC</PublisherDisplayName>
+    <Logo>Images\StoreLogo.png</Logo>
+  </Properties>
+
+  <Dependencies>
+    <TargetDeviceFamily Name="ADKCyberLLC.ADKCyberAI" MinVersion="3.17.0.0" MaxVersionTested="10.0.26100.0" />
+    <PackageDependency
+      Name="ADKCyberLLC.ADKCyberAI"
+      Publisher="CN=ADK Cyber, LLC"
+      MinVersion="3.17.0.0" />
+  </Dependencies>
+
+  <Resources>
+    <Resource Language="en-US" />
+  </Resources>
+
+  <Applications>
+    <Application
+      Id="App"
+      Executable="PAN Copilot.exe"
+      EntryPoint="Windows.FullTrustApplication">
+      <uap:VisualElements
+        DisplayName="ADKCyberLLC.ADKCyberAI"
+        Description="PAN-OS troubleshooting assistant with on-device redaction"
+        BackgroundColor="transparent"
+        Square150x150Logo="Images\Square150x150Logo.png"
+        Square44x44Logo="Images\Square44x44Logo.png">
+        <uap:DefaultTile Wide310x150Logo="Images\Wide310x150Logo.png" />
+      </uap:VisualElements>
+      <Extensions>
+        <desktop:Extension Category="windows.fullTrustProcess" EntryPoint="Windows.FullTrustApplication" />
+      </Extensions>
+    </Application>
+  </Applications>
+
+  <Capabilities>
+    <Capability Name="ADKCyberLLC.ADKCyberAI" />
+    <rescap:Capability Name="ADKCyberLLC.ADKCyberAI" />
+    <rescap:Capability Name="ADKCyberLLC.ADKCyberAI" />
+  </Capabilities>
+</Package>

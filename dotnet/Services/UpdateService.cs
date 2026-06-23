@@ -46,6 +46,9 @@ public sealed class UpdateService
     /// <summary>GET /api/version shape: current/latest/update_available/installer_url.</summary>
     public async Task<JsonObject> GetVersionInfoAsync(bool force)
     {
+        if (DistributionService.IsMicrosoftStore)
+            return StoreManagedVersionInfo();
+
         if (!force && _cache != null && DateTime.UtcNow - _cacheAt < CacheTtl)
             return (JsonObject)JsonNode.Parse(_cache.ToJsonString())!;
         try
@@ -82,6 +85,7 @@ public sealed class UpdateService
                 ["current_version"]   = CurrentVersion,
                 ["latest_version"]    = latest,
                 ["update_available"]  = available,
+                ["distribution_channel"] = DistributionService.Channel,
                 // Portable zip flow (v3.5+ InstallUpdateAsync reads these — they
                 // were missing in v3.5 and v3.7 of GetVersionInfoAsync, which is
                 // why every Update Now click failed with "Invalid update source"
@@ -101,6 +105,7 @@ public sealed class UpdateService
                 ["current_version"]   = CurrentVersion,
                 ["latest_version"]    = CurrentVersion,
                 ["update_available"]  = false,
+                ["distribution_channel"] = DistributionService.Channel,
                 ["download_url"]      = "",
                 ["zip_sha256"]        = "",
                 ["installer_url"]     = "",
@@ -149,6 +154,9 @@ public sealed class UpdateService
     /// </summary>
     public async Task InstallUpdateAsync(Action exitApp)
     {
+        if (DistributionService.IsMicrosoftStore)
+            throw new InvalidOperationException("Updates are managed by the Microsoft Store.");
+
         if (!await _updateGate.WaitAsync(0))
             throw new InvalidOperationException("An update is already in progress.");
         try { await InstallUpdateCoreAsync(exitApp); }
@@ -316,6 +324,19 @@ public sealed class UpdateService
     {
         try { if (File.Exists(SkipMarkerPath)) File.Delete(SkipMarkerPath); } catch { }
     }
+
+    private static JsonObject StoreManagedVersionInfo() => new()
+    {
+        ["current_version"] = CurrentVersion,
+        ["latest_version"] = CurrentVersion,
+        ["update_available"] = false,
+        ["distribution_channel"] = "store",
+        ["update_managed_by"] = "microsoft_store",
+        ["download_url"] = "",
+        ["zip_sha256"] = "",
+        ["installer_url"] = "",
+        ["installer_sha256"] = "",
+    };
 
     /// <summary>Fail-closed integrity check: manifest SHA-256 + Authenticode signer.</summary>
     public static void VerifyInstaller(string path, string expectedSha256)

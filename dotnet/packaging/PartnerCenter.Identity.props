@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Copy Identity Name and Publisher from Partner Center → Product management →
+  Product identity. They must match exactly or Store upload will fail.
+-->
+<Project>
+  <PropertyGroup>
+    <PackageIdentityName>ADKCyberLLC.ADKCyberAI</PackageIdentityName>
+    <PackageIdentityPublisher>CN=ADK Cyber, LLC</PackageIdentityPublisher>
+  </PropertyGroup>
+</Project>

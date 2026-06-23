@@ -1936,7 +1936,9 @@ async function checkForUpdate() {
       const hdrEl = document.getElementById('app-version-hdr');
       if (hdrEl) { hdrEl.textContent = verEl.textContent; hdrEl.title = verEl.title; }
     }
-    if (data.update_available) {
+    if (data.distribution_channel === 'store') {
+      hideUpdateBanner();
+    } else if (data.update_available) {
       setUpdateBannerMessage(data.latest_version);
       showUpdateBanner();
     } else {
@@ -1986,7 +1988,10 @@ function refreshAboutPanel(health) {
   }
   if (inst) inst.textContent = _installDir || (health && health.install_dir) || '—';
   if (wRow && wEl && typeof (health && health.install_writable) === 'boolean') {
-    if (!health.install_writable) {
+    if (health.distribution_channel === 'store') {
+      wRow.style.display = 'flex';
+      wEl.textContent = 'Microsoft Store install — updates via the Store app';
+    } else if (!health.install_writable) {
       wRow.style.display = 'flex';
       wEl.textContent = 'Read-only folder — use portable install for in-app updates';
     } else {
@@ -2562,7 +2567,9 @@ async function recheckVersion() {
       const hdrEl = document.getElementById('app-version-hdr');
       if (hdrEl) { hdrEl.textContent = verEl.textContent; hdrEl.title = verEl.title; }
     }
-    if (data.update_available) {
+    if (data.distribution_channel === 'store') {
+      hideUpdateBanner();
+    } else if (data.update_available) {
       setUpdateBannerMessage(data.latest_version);
       showUpdateBanner();
     } else {
