@@ -30,9 +30,6 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
-      - name: Set up MSBuild
-        uses: microsoft/setup-msbuild@v2
-
       - name: Inject version
         shell: pwsh
         run: |
@@ -117,11 +114,8 @@ jobs:
       - name: Build MSIX
         shell: pwsh
         run: |
-          msbuild packaging\ADKCyberAI.Package.wapproj /p:Configuration=Release /p:Platform=x64 /p:AppxPackageSigningEnabled=false /p:UapAppxPackageBuildMode=StoreUpload
-          $msix = Get-ChildItem packaging\AppPackages -Recurse -Filter *.msix | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-          if (-not $msix) { throw "MSIX not produced under packaging\AppPackages" }
-          Copy-Item $msix.FullName "ADK_Cyber_AI_${{ inputs.version }}_Store.msix"
-          Write-Host "Built $($msix.FullName) ($('{0:N1}' -f ($msix.Length / 1MB)) MB)"
+          $out = "ADK_Cyber_AI_${{ inputs.version }}_Store.msix"
+          & packaging\Build-Msix.ps1 -PublishDir publish -OutputPath $out
 
       - name: Upload MSIX artifact
         uses: actions/upload-artifact@v4
