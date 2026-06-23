@@ -7,6 +7,6 @@
   <PropertyGroup>
     <!-- Package/Identity/Name from Partner Center (usually Publisher.AppName, no spaces). -->
     <PackageIdentityName>ADKCyber.ADKCyberAI</PackageIdentityName>
-    <PackageIdentityPublisher>CN=ADKCyber</PackageIdentityPublisher>
+    <PackageIdentityPublisher>CN=2E570EB4-F656-4F16-AD78-779C9ECF780D</PackageIdentityPublisher>
   </PropertyGroup>
 </Project>
