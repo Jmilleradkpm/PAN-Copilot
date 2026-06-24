@@ -567,6 +567,11 @@
     }
     .copy-btn:hover  { border-color: var(--text-sub); color: var(--text); }
     .copy-btn.copied { border-color: var(--green); color: var(--green); }
+    .report-btn {
+      background: none; border: none; color: var(--text-dim); cursor: pointer;
+      font-size: 10px; padding: 0; margin-top: 6px; text-decoration: underline;
+    }
+    .report-btn:hover { color: var(--text-sub); }
     .code-block pre {
       padding: 12px 14px; overflow-x: auto; margin: 0;
       font-family: 'Consolas','Cascadia Code','Courier New',monospace;
@@ -1245,7 +1250,7 @@
 
     <div class="auth-note">
       🔒 Credentials in your configs are automatically redacted on your device. On cloud plans, redacted requests are relayed through ADK Cyber's gateway (in transit only — not stored) to Anthropic for inference. ADK Cyber only sees your email, session token, and usage.<br><br>
-      Free tier: <strong style="color:var(--text-sub);">10 queries / week</strong> · Upgrade at <a href="https://www.adkcyber.com/adk-cyber-ai.html" target="_blank">adkcyber.com/adk-cyber-ai.html</a>
+      Free tier: <strong style="color:var(--text-sub);">10 queries / week</strong> (Claude Haiku only; large configs count as 3 queries). Paid plans are sold by ADK Cyber via third-party checkout — not Microsoft. Upgrade at <a href="https://www.adkcyber.com/adk-cyber-ai.html" target="_blank">adkcyber.com/adk-cyber-ai.html</a>
     </div>
   </div>
 </div>
@@ -3246,6 +3251,23 @@ function appendUserMessage(text, attachments) {
   scrollBottom();
 }
 
+function reportAiContent(btn) {
+  const bubble = btn.closest('.msg-bubble');
+  const content = bubble ? (bubble.querySelector('.msg-content')?.innerText || '') : '';
+  const snippet = content.slice(0, 2000);
+  const subject = encodeURIComponent('ADK Cyber AI — Report generated content');
+  const body = encodeURIComponent(
+    'I am reporting AI-generated content from ADK Cyber AI.\n\n' +
+    'Reason (required):\n\n\n' +
+    '--- Reported content (excerpt) ---\n' + snippet
+  );
+  window.open(`mailto:jmiller@adkcyber.com?subject=${subject}&body=${body}`, '_blank');
+}
+
+function assistantReportHtml() {
+  return '<button type="button" class="report-btn" onclick="reportAiContent(this)">Report content</button>';
+}
+
 function appendAssistantMessage(text, tokenMeta) {
   hideWelcome();
   const div = document.createElement('div');
@@ -3255,6 +3277,7 @@ function appendAssistantMessage(text, tokenMeta) {
       <div class="msg-label">ADK Cyber AI</div>
       <div class="msg-content">${renderMarkdown(text)}</div>
       ${tokenMeta ? `<div class="token-meta"><span>${tokenMeta.in_tokens} in</span><span>${tokenMeta.out_tokens} out</span></div>` : ''}
+      ${assistantReportHtml()}
     </div>`;
   document.getElementById('messages').appendChild(div);
   scrollBottom();
@@ -3535,7 +3558,9 @@ async function sendMessage() {
             ? '<span class="meta-redacted">✂ config truncated for local context</span>'
             : '';
           meta.innerHTML = `${mLabel ? `<span class="meta-model">${mLabel}</span>` : ''}<span>${data.input_tokens} in</span><span>${data.output_tokens} out</span>${data.redactions > 0 ? `<span class="meta-redacted">🔒 ${data.redactions} credential${data.redactions === 1 ? '' : 's'} auto-redacted</span>` : ''}${truncNote}`;
-          placeholder.querySelector('.msg-bubble').appendChild(meta);
+          const bubble = placeholder.querySelector('.msg-bubble');
+          bubble.appendChild(meta);
+          bubble.insertAdjacentHTML('beforeend', assistantReportHtml());
           // Refresh query counter in header for all tiers
           if (data.queries_used != null) {
             const tier   = data.tier   || 'free';
@@ -3905,6 +3930,7 @@ function copyCode(btn) {
   <div id="upgrade-modal">
     <h3>Upgrade ADK Cyber AI</h3>
     <p>Choose a plan to unlock more queries. Your session will update automatically after payment.</p>
+    <p style="font-size:11px;color:var(--text-dim);margin:-12px 0 14px;line-height:1.5;">Paid subscriptions are processed by ADK Cyber through a secure third-party checkout (not Microsoft). Microsoft is not the seller of Pro or MAX plans.</p>
     <a id="upgrade-pro-btn" class="upgrade-plan-card pro" href="#" target="_blank">
       <div class="plan-name">Pro — $20 / month</div>
       <div class="plan-price">1,000 queries / month</div>
