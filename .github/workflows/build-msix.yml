@@ -110,15 +110,20 @@ jobs:
             throw "Version mismatch: requested $expected but built exe reports $fv"
           }
 
-      - name: Build MSIX
+      - name: Build MSIX + msixupload (Partner Center)
         shell: pwsh
         run: |
           $out = "ADK_Cyber_AI_${{ inputs.version }}_Store.msix"
           & packaging\Build-Msix.ps1 -PublishDir publish -OutputPath $out
+          if (-not (Test-Path ([System.IO.Path]::ChangeExtension($out, '.msixupload')))) {
+            throw "Expected msixupload sibling was not created"
+          }
 
-      - name: Upload MSIX artifact
+      - name: Upload Store package artifacts
         uses: actions/upload-artifact@v4
         with:
           name: ADK_Cyber_AI_${{ inputs.version }}_Store_msix
-          path: dotnet/ADK_Cyber_AI_${{ inputs.version }}_Store.msix
+          path: |
+            dotnet/ADK_Cyber_AI_${{ inputs.version }}_Store.msix
+            dotnet/ADK_Cyber_AI_${{ inputs.version }}_Store.msixupload
           retention-days: 30
