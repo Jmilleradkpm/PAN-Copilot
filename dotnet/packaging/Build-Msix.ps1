@@ -1,7 +1,8 @@
 param(
     [string]$PublishDir = (Join-Path $PSScriptRoot '..\publish'),
     [string]$OutputPath = (Join-Path $PSScriptRoot '..\ADK_Cyber_AI_Store.msix'),
-    [switch]$SkipSign
+    # Partner Center re-signs Store packages; a CI self-signed cert causes upload validation to fail.
+    [switch]$Sign
 )
 
 Set-StrictMode -Version Latest
@@ -24,6 +25,17 @@ try {
     Get-ChildItem $staging -Filter '*.pdb' -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object {
         throw "Failed to remove debug symbol: $($_.FullName)"
     }
+
+    $debugPatterns = @(
+        'createdump.exe',
+        'mscordbi.dll',
+        'mscorrc.dll',
+        'Microsoft.DiaSymReader.Native.*'
+    )
+    foreach ($pattern in $debugPatterns) {
+        Get-ChildItem $staging -Filter $pattern -Recurse -File -ErrorAction SilentlyContinue | Remove-Item -Force
+    }
+    Get-ChildItem $staging -Filter 'mscordaccore*.dll' -Recurse -File -ErrorAction SilentlyContinue | Remove-Item -Force
 
     $storeExe = Join-Path $staging 'ADKCyberAI.exe'
     Copy-Item $srcExe $storeExe -Force
@@ -68,13 +80,26 @@ try {
         if (-not $pkg.GetEntry('resources.pri')) {
             throw "Packed MSIX is missing resources.pri — Partner Center will reject this package"
         }
+        $entryNames = $pkg.Entries | ForEach-Object { $_.FullName }
+        foreach ($blocked in @('createdump.exe', 'mscordbi.dll')) {
+            if ($entryNames -contains $blocked) {
+                throw "Packed MSIX still contains $blocked — remove debug tooling before upload"
+            }
+        }
+        if ($entryNames -match '^mscordaccore') {
+            throw 'Packed MSIX still contains mscordaccore debug DLLs — remove before upload'
+        }
     }
     finally {
         $pkg.Dispose()
     }
 
-    if (-not $SkipSign) {
+    if ($Sign) {
         & (Join-Path $PSScriptRoot 'Sign-StoreMsix.ps1') -PackagePath $OutputPath
+        Write-Warning 'Package is self-signed. Use unsigned packages for Partner Center upload unless you own the publisher private key.'
+    }
+    else {
+        Write-Host 'Leaving MSIX unsigned for Partner Center (Store will re-sign after upload).'
     }
 
     $uploadPath = [System.IO.Path]::ChangeExtension($OutputPath, '.msixupload')
@@ -83,10 +108,11 @@ try {
     New-Item -ItemType Directory -Force -Path $uploadStaging | Out-Null
     try {
         Copy-Item $OutputPath (Join-Path $uploadStaging (Split-Path $OutputPath -Leaf)) -Force
-        $zipPath = "$uploadPath.zip"
-        if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
-        Compress-Archive -Path (Join-Path $uploadStaging '*') -DestinationPath $zipPath -CompressionLevel Optimal
-        Move-Item $zipPath $uploadPath -Force
+        [System.IO.Compression.ZipFile]::CreateFromDirectory(
+            $uploadStaging,
+            $uploadPath,
+            [System.IO.Compression.CompressionLevel]::Optimal,
+            $false)
     }
     finally {
         if (Test-Path $uploadStaging) { Remove-Item $uploadStaging -Recurse -Force -ErrorAction SilentlyContinue }

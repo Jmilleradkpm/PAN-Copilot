@@ -1,7 +1,7 @@
 # ============================================================
 # ADK Cyber AI — MSIX package for Microsoft Store
 # ============================================================
-# Produces an unsigned .msix artifact for Partner Center upload.
+# Produces an unsigned .msix + .msixupload for Partner Center (Store re-signs after upload).
 # Does NOT touch R2 version.json — direct-download releases stay separate.
 # ============================================================
 name: Build MSIX (Store)
