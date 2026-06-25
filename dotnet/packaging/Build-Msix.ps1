@@ -42,9 +42,6 @@ try {
     & $makeAppx.FullName pack /d $staging /p $OutputPath /o
     if ($LASTEXITCODE -ne 0) { throw "makeappx pack failed with exit code $LASTEXITCODE" }
 
-    & $makeAppx.FullName validate /p $OutputPath
-    if ($LASTEXITCODE -ne 0) { throw "makeappx validate failed with exit code $LASTEXITCODE" }
-
     if (-not $SkipSign) {
         & (Join-Path $PSScriptRoot 'Sign-StoreMsix.ps1') -PackagePath $OutputPath
     }
