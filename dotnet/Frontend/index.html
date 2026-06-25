@@ -567,11 +567,61 @@
     }
     .copy-btn:hover  { border-color: var(--text-sub); color: var(--text); }
     .copy-btn.copied { border-color: var(--green); color: var(--green); }
-    .report-btn {
-      background: none; border: none; color: var(--text-dim); cursor: pointer;
-      font-size: 10px; padding: 0; margin-top: 6px; text-decoration: underline;
+    .msg-report-bar {
+      margin-top: 14px;
+      padding: 12px 14px;
+      border-radius: 8px;
+      border: 1px solid rgba(240, 160, 32, 0.55);
+      background: linear-gradient(135deg, rgba(240, 160, 32, 0.14) 0%, rgba(240, 160, 32, 0.06) 100%);
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px 12px;
     }
-    .report-btn:hover { color: var(--text-sub); }
+    .msg-report-note {
+      margin: 0;
+      font-size: 12px;
+      line-height: 1.45;
+      color: var(--text-sub);
+      flex: 1 1 220px;
+    }
+    .msg-report-note strong { color: #f0b429; font-weight: 600; }
+    .report-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      padding: 9px 16px;
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+      border-radius: 7px;
+      border: 1px solid #e3a008;
+      background: #c98a06;
+      color: #1a1200;
+      cursor: pointer;
+      flex-shrink: 0;
+      box-shadow: 0 1px 0 rgba(255, 220, 120, 0.35) inset, 0 2px 8px rgba(0, 0, 0, 0.25);
+      transition: background 0.12s, border-color 0.12s, transform 0.08s;
+    }
+    .report-btn:hover {
+      background: #e3a008;
+      border-color: #f0c040;
+      color: #0a0800;
+    }
+    .report-btn:active { transform: scale(0.98); }
+    .report-btn svg { flex-shrink: 0; }
+    [data-theme="light"] .msg-report-bar {
+      border-color: rgba(180, 110, 0, 0.45);
+      background: linear-gradient(135deg, rgba(255, 193, 70, 0.22) 0%, rgba(255, 193, 70, 0.08) 100%);
+    }
+    [data-theme="light"] .msg-report-note strong { color: #9a6200; }
+    [data-theme="light"] .report-btn {
+      background: #d4920a;
+      border-color: #b87a00;
+      color: #1a1200;
+    }
     .code-block pre {
       padding: 12px 14px; overflow-x: auto; margin: 0;
       font-family: 'Consolas','Cascadia Code','Courier New',monospace;
@@ -3265,7 +3315,13 @@ function reportAiContent(btn) {
 }
 
 function assistantReportHtml() {
-  return '<button type="button" class="report-btn" onclick="reportAiContent(this)">Report content</button>';
+  return `<div class="msg-report-bar" role="group" aria-label="Report AI-generated content">
+    <p class="msg-report-note"><strong>AI-generated response.</strong> Review before applying to production. Something inaccurate or inappropriate?</p>
+    <button type="button" class="report-btn" onclick="reportAiContent(this)" title="Report this AI response via email">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/></svg>
+      Report this response
+    </button>
+  </div>`;
 }
 
 function appendAssistantMessage(text, tokenMeta) {
@@ -3276,8 +3332,8 @@ function appendAssistantMessage(text, tokenMeta) {
     <div class="msg-bubble">
       <div class="msg-label">ADK Cyber AI</div>
       <div class="msg-content">${renderMarkdown(text)}</div>
-      ${tokenMeta ? `<div class="token-meta"><span>${tokenMeta.in_tokens} in</span><span>${tokenMeta.out_tokens} out</span></div>` : ''}
       ${assistantReportHtml()}
+      ${tokenMeta ? `<div class="token-meta"><span>${tokenMeta.in_tokens} in</span><span>${tokenMeta.out_tokens} out</span></div>` : ''}
     </div>`;
   document.getElementById('messages').appendChild(div);
   scrollBottom();
@@ -3559,8 +3615,8 @@ async function sendMessage() {
             : '';
           meta.innerHTML = `${mLabel ? `<span class="meta-model">${mLabel}</span>` : ''}<span>${data.input_tokens} in</span><span>${data.output_tokens} out</span>${data.redactions > 0 ? `<span class="meta-redacted">🔒 ${data.redactions} credential${data.redactions === 1 ? '' : 's'} auto-redacted</span>` : ''}${truncNote}`;
           const bubble = placeholder.querySelector('.msg-bubble');
-          bubble.appendChild(meta);
           bubble.insertAdjacentHTML('beforeend', assistantReportHtml());
+          bubble.appendChild(meta);
           // Refresh query counter in header for all tiers
           if (data.queries_used != null) {
             const tier   = data.tier   || 'free';

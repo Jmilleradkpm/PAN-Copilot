@@ -9,7 +9,7 @@
     <RootNamespace>PanCopilot</RootNamespace>
     <AssemblyName>PAN Copilot</AssemblyName>
     <ApplicationIcon>pan_copilot.ico</ApplicationIcon>
-    <Version>3.18.0</Version>
+    <Version>3.18.1</Version>
     <Company>Adirondack CyberSecurity</Company>
     <Product>ADK Cyber AI</Product>
   </PropertyGroup>
