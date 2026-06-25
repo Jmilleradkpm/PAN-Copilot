@@ -34,13 +34,44 @@ try {
 
     if (-not (Test-Path $storeExe)) { throw "Store entrypoint missing after rename: $storeExe" }
 
-    $makeAppx = Get-ChildItem -Path "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter makeappx.exe -ErrorAction SilentlyContinue |
+    $sdkBin = "${env:ProgramFiles(x86)}\Windows Kits\10\bin"
+    $makeAppx = Get-ChildItem -Path $sdkBin -Recurse -Filter makeappx.exe -ErrorAction SilentlyContinue |
         Sort-Object FullName -Descending | Select-Object -First 1
     if (-not $makeAppx) { throw "makeappx.exe not found. Install Windows 10/11 SDK." }
+
+    $makePri = Get-ChildItem -Path $sdkBin -Recurse -Filter makepri.exe -ErrorAction SilentlyContinue |
+        Sort-Object FullName -Descending | Select-Object -First 1
+    if (-not $makePri) { throw "makepri.exe not found. Install Windows 10/11 SDK." }
+
+    $manifestPath = Join-Path $staging 'AppxManifest.xml'
+    $priConfig = Join-Path $staging 'priconfig.xml'
+    $priOut = Join-Path $staging 'resources.pri'
+    if (Test-Path $priOut) { Remove-Item $priOut -Force }
+
+    & $makePri.FullName createconfig /cf $priConfig /dq en-US /o
+    if ($LASTEXITCODE -ne 0) { throw "makepri createconfig failed with exit code $LASTEXITCODE" }
+
+    & $makePri.FullName new /pr $staging /cf $priConfig /mn $manifestPath /of $priOut /o
+    if ($LASTEXITCODE -ne 0) { throw "makepri new failed with exit code $LASTEXITCODE" }
+
+    if (-not (Test-Path $priOut)) { throw "makepri did not produce resources.pri" }
+    Remove-Item $priConfig -Force -ErrorAction SilentlyContinue
+    Write-Host "Generated resources.pri ($((Get-Item $priOut).Length) bytes)"
 
     if (Test-Path $OutputPath) { Remove-Item $OutputPath -Force }
     & $makeAppx.FullName pack /d $staging /p $OutputPath /o
     if ($LASTEXITCODE -ne 0) { throw "makeappx pack failed with exit code $LASTEXITCODE" }
+
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $pkg = [System.IO.Compression.ZipFile]::OpenRead($OutputPath)
+    try {
+        if (-not $pkg.GetEntry('resources.pri')) {
+            throw "Packed MSIX is missing resources.pri — Partner Center will reject this package"
+        }
+    }
+    finally {
+        $pkg.Dispose()
+    }
 
     if (-not $SkipSign) {
         & (Join-Path $PSScriptRoot 'Sign-StoreMsix.ps1') -PackagePath $OutputPath
