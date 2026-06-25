@@ -17,8 +17,13 @@ $publisher = $propsXml.Project.PropertyGroup.PackageIdentityPublisher
 if (-not $name -or -not $publisher) { throw 'PartnerCenter.Identity.props must define PackageIdentityName and PackageIdentityPublisher' }
 
 $versionLine = (Select-String -Path $csproj -Pattern '<Version>([^<]+)</Version>').Matches[0].Groups[1].Value
-if ($versionLine -notmatch '^(\d+)\.(\d+)\.(\d+)$') { throw "Unexpected Version in csproj: $versionLine" }
-$appxVersion = "$versionLine.0"
+if ($versionLine -match '^(\d+)\.(\d+)\.(\d+)$') {
+    $appxVersion = "$($matches[1]).$($matches[2]).$($matches[3]).0"
+} elseif ($versionLine -match '^(\d+)\.(\d+)\.(\d+)\.(\d+)$') {
+    $appxVersion = $versionLine
+} else {
+    throw "Unexpected Version in csproj: $versionLine"
+}
 
 [xml]$doc = Get-Content $manifest
 $ns = New-Object System.Xml.XmlNamespaceManager($doc.NameTable)
