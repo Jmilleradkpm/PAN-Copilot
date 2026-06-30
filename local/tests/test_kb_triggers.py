@@ -15,7 +15,7 @@ Two assertion shapes:
 Run from the `local/` directory:  pytest tests/test_kb_triggers.py
 """
 
-from app import _kb_match, _kb_relevant_sections
+from app import _kb_match, _kb_relevant_sections, _kb_resolve, _kb_classify_intent
 
 
 # ---------------------------------------------------------------------------
@@ -98,10 +98,21 @@ NEGATIVE_CASES = [
     "Is there a generic escalation checklist for SOC analysts?",
     "How do I open a HAR file in browser devtools?",
 
+    # --- Azure S2S setup (not symptom troubleshoot) must not dump VPN KB ---
+    "How do I configure an Azure site-to-site VPN with BGP on PAN-OS?",
+    "Walk me through Azure S2S VPN integration with BGP — virtual network gateway and AS numbers",
+
     # --- Completely unrelated questions — sanity floor --------------------
     "What's the weather like in Albany today?",
     "Write me a Python script to sort a list of dicts by key",
     "Explain the OSI model in three sentences",
+]
+
+AUGMENT_CASES = [
+    (
+        "How do I configure Azure site-to-site VPN with BGP on PAN-OS including IKE crypto profiles?",
+        "KB-PAN-VPN-001",
+    ),
 ]
 
 
@@ -118,16 +129,11 @@ def _trigger_match(message: str) -> str:
 
 
 def _would_short_circuit(message: str):
-    """Mirror the chat handler: a KB short-circuit fires only when _kb_match
-    returns an entry AND _kb_relevant_sections returns non-None content.
-    Returns the entry on short-circuit, else None.
-    """
-    entry = _kb_match(message)
-    if not entry:
+    """Mirror the chat handler: short-circuit only on route short_circuit."""
+    resolved = _kb_resolve(message)
+    if resolved["route"] != "short_circuit":
         return None
-    if _kb_relevant_sections(entry, message) is None:
-        return None
-    return entry
+    return resolved["entry"]
 
 
 def test_positive_cases_route_to_expected_kb():
@@ -196,6 +202,32 @@ def test_relevant_sections_returns_none_when_signal_is_weak():
     # Only "alpha" appears in the article. Other words are noise.
     # max_score == 1 → must return None.
     assert _kb_relevant_sections(fake_entry, "alpha xylophone zebra") is None
+
+
+def test_specific_azure_bgp_routes_to_augment_not_short_circuit():
+    msg = (
+        "Walk me through Azure S2S VPN integration with BGP on the firewall — "
+        "virtual network gateway, peer AS, and IKE crypto profile."
+    )
+    assert _kb_classify_intent(msg) == "specific"
+    resolved = _kb_resolve(msg)
+    assert resolved["route"] == "augment_llm"
+    assert resolved["entry"]["kb_id"] == "KB-PAN-VPN-001"
+    assert resolved["content"]
+
+
+def test_augment_cases_match_expected_kb():
+    failures = []
+    for question, expected_kb_id in AUGMENT_CASES:
+        resolved = _kb_resolve(question)
+        actual = resolved["entry"]["kb_id"] if resolved["entry"] else None
+        if resolved["route"] != "augment_llm" or actual != expected_kb_id:
+            failures.append(
+                f"  {question!r}\n"
+                f"    expected augment_llm → {expected_kb_id}\n"
+                f"    got: {resolved['route']!r} → {actual}"
+            )
+    assert not failures, "KB augment routing regressions:\n" + "\n".join(failures)
 
 
 def test_relevant_sections_returns_content_on_strong_match():

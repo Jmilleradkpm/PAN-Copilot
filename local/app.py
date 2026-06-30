@@ -2511,6 +2511,37 @@ _STOPWORDS = frozenset({
     "one", "two", "new", "old", "good", "bad", "true", "false",
 })
 
+_KB_INTEGRATION_PHRASES = (
+    "how do i configure", "how to configure", "how do i set up", "how to set up",
+    "how do i integrate", "how to integrate", "how do i deploy", "how to deploy",
+    "step by step", "walk me through", "setup guide", "configuration guide",
+    "design a", "architect a", "implement ", "best practice for setting",
+    "what is the process to", "guide me through",
+)
+_KB_SYMPTOM_PHRASES = (
+    "not working", "isn't working", "isnt working", "won't work", "wont work",
+    "doesn't work", "doesnt work", "failing", "failed", "failure", "broken",
+    "not passing", "no traffic", "tunnel up but", "not established",
+    "troubleshoot", "why is my", "why isn't", "why isnt", "why won't", "why wont",
+    "issue with", "problem with", "error when", "keeps failing",
+)
+_KB_VENDOR_MARKERS = (
+    "azure", "aws", "gcp", "google cloud", "okta", "entra", "azure ad",
+    "cisco", "fortinet", "juniper", "check point", "f5", "zscaler",
+)
+_KB_FEATURE_MARKERS = (
+    "bgp", "ospf", "ipsec", "ikev2", "ikev1", "saml", "ldap", "radius",
+    "proxy id", "proxy-id", "traffic selector", "route-based", "policy-based",
+    "crypto profile", "ike profile", "as number", "autonomous system",
+    "route map", "route-map", "prefix list", "peer group", "virtual network gateway",
+)
+_KB_DISTINCTIVE_TERMS = frozenset({
+    "bgp", "ospf", "saml", "okta", "entra", "ldap", "radius", "ikev2", "ikev1",
+    "prisma", "globalprotect", "decryption", "user-id", "nat", "app-id",
+})
+_KB_AUGMENT_MAX_CHARS = 14000
+_KB_AUGMENT_MAX_SECTIONS = 5
+
 
 def _parse_kb_sections(content: str) -> list:
     """
@@ -2553,60 +2584,140 @@ def _parse_kb_sections(content: str) -> list:
     return sections
 
 
-def _kb_relevant_sections(kb_entry: dict, message: str) -> Optional[str]:
-    """
-    Return only the sections of a KB article that are relevant to the question,
-    or None when there is not enough signal to justify serving the article at all
-    (caller should fall through to the model instead of dumping the full KB).
+def _kb_question_words(message: str) -> frozenset:
+    raw_words = re.findall(r"[a-z][a-z0-9/.-]{2,}", message.lower())
+    return frozenset(w for w in raw_words if w not in _STOPWORDS)
 
-    Algorithm:
-      1. Tokenise the question into meaningful 3-char+ words (minus stopwords).
-      2. Score each ## / ### section by counting how many question words appear
-         in it (case-insensitive substring match — so "cert" matches "certificate").
-      3. Threshold = max(2, 30% of the top section's score).
-      4. Return all sections at or above the threshold.
-      5. Return None (fall through to model) when:
-         - No sections are parsed
-         - No question words could be extracted (very short / single-word query)
-         - max_score ≤ 1 (only one keyword hit — likely a false-positive trigger)
-      6. Return the full article only when the question is clearly broad
-         (≥ 70% of sections qualify after threshold).
-    """
-    # Exclude preamble entries from scoring; keep only ## / ### content sections
+
+def _kb_score_sections(kb_entry: dict, message: str) -> list:
     sections = [s for s in kb_entry.get("sections", []) if s["heading"] != "__preamble__"]
     if not sections:
-        return None
-
-    # Tokenise: lowercase alpha-numeric words ≥ 3 chars, not in stopwords
-    raw_words = re.findall(r"[a-z][a-z0-9/.-]{2,}", message.lower())
-    question_words = frozenset(w for w in raw_words if w not in _STOPWORDS)
+        return []
+    question_words = _kb_question_words(message)
     if not question_words:
-        return None
+        return []
 
-    # Score: count unique question words found anywhere in the section text
     def _score(sec: dict) -> int:
         text = (sec["heading"] + " " + sec["body"]).lower()
         return sum(1 for w in question_words if w in text)
 
-    scored = [(sec, _score(sec)) for sec in sections]
-    max_score = max(s for _, s in scored)
+    return sorted(((sec, _score(sec)) for sec in sections), key=lambda x: x[1], reverse=True)
 
-    # Trigger fired but the question shares little vocabulary with the article —
-    # treat as a false-positive trigger match and let the model answer instead.
+
+def _kb_has_unmatched_distinctive(message: str, relevant: list) -> bool:
+    lower = message.lower()
+    for term in _KB_DISTINCTIVE_TERMS:
+        if term not in lower:
+            continue
+        if not any(term in sec["heading"].lower() for sec in relevant):
+            return True
+    return False
+
+
+def _kb_classify_intent(message: str, kb_entry: Optional[dict] = None) -> str:
+    lower = message.lower()
+    if kb_entry is None:
+        kb_entry = _kb_match(message)
+    if kb_entry and kb_entry.get("kb_id", "").lower() in lower:
+        return "explicit"
+    if any(p in lower for p in _KB_INTEGRATION_PHRASES):
+        return "specific"
+    vendor_hits = sum(1 for v in _KB_VENDOR_MARKERS if v in lower)
+    feature_hits = sum(1 for f in _KB_FEATURE_MARKERS if f in lower)
+    if vendor_hits >= 1 and feature_hits >= 1:
+        return "specific"
+    if len(message) > 120 and feature_hits >= 1:
+        return "specific"
+    if any(p in lower for p in _KB_SYMPTOM_PHRASES):
+        return "symptom"
+    return "general"
+
+
+def _kb_sections_for_augmentation(kb_entry: dict, message: str) -> Optional[str]:
+    scored = _kb_score_sections(kb_entry, message)
+    if not scored:
+        return None
+    picked = [(sec, s) for sec, s in scored if s >= 2][: _KB_AUGMENT_MAX_SECTIONS]
+    if not picked:
+        best_sec, best_score = scored[0]
+        if best_score < 1:
+            return None
+        picked = [(best_sec, best_score)]
+    parts, total = [], 0
+    for sec, _ in picked:
+        chunk = sec["body"]
+        if total + len(chunk) > _KB_AUGMENT_MAX_CHARS:
+            break
+        parts.append(chunk)
+        total += len(chunk)
+    return "\n\n---\n\n".join(parts) if parts else None
+
+
+def _kb_format_augmentation_prompt(kb_entry: dict, excerpts: str, user_question: str) -> str:
+    return (
+        f"📚 *Grounding context from {kb_entry['kb_id']} · {kb_entry['title']}*\n\n"
+        "Use the KB excerpts below as PAN-OS reference material. Answer the user's "
+        "specific scenario directly — synthesize and fill gaps with your expertise; "
+        "do not paste the full article.\n\n"
+        "---\n\n"
+        f"{excerpts}\n\n"
+        "---\n\n"
+        "User question:\n"
+        f"{user_question}"
+    )
+
+
+def _kb_relevant_sections(kb_entry: dict, message: str, allow_full_article: bool = True) -> Optional[str]:
+    lower = message.lower()
+    kb_id = kb_entry.get("kb_id", "")
+    if kb_id and kb_id.lower() in lower:
+        return kb_entry["content"]
+
+    scored = _kb_score_sections(kb_entry, message)
+    if not scored:
+        return None
+    max_score = scored[0][1]
     if max_score <= 1:
         return None
 
     threshold = max(2, int(max_score * 0.30))
     relevant = [sec for sec, s in scored if s >= threshold]
-
-    # Broad question → return the full article
-    if len(relevant) >= len(sections) * 0.70:
-        return kb_entry["content"]
-
     if not relevant:
         return None
 
+    sections = [s for s in kb_entry.get("sections", []) if s["heading"] != "__preamble__"]
+    integration_q = any(p in lower for p in _KB_INTEGRATION_PHRASES) or (
+        sum(1 for v in _KB_VENDOR_MARKERS if v in lower) >= 1
+        and sum(1 for f in _KB_FEATURE_MARKERS if f in lower) >= 1
+    )
+
+    if len(relevant) >= len(sections) * 0.70:
+        if (not allow_full_article or integration_q
+                or _kb_has_unmatched_distinctive(message, relevant)):
+            return "\n\n---\n\n".join(sec["body"] for sec in relevant[:_KB_AUGMENT_MAX_SECTIONS])
+        return kb_entry["content"]
+
     return "\n\n---\n\n".join(sec["body"] for sec in relevant)
+
+
+def _kb_resolve(message: str) -> dict:
+    """Return {route, entry, content} where route is none|short_circuit|augment_llm."""
+    entry = _kb_match(message)
+    if not entry:
+        return {"route": "none", "entry": None, "content": None}
+
+    intent = _kb_classify_intent(message, entry)
+    if intent == "specific":
+        augment = _kb_sections_for_augmentation(entry, message)
+        if not augment:
+            return {"route": "none", "entry": None, "content": None}
+        return {"route": "augment_llm", "entry": entry, "content": augment}
+
+    allow_full = intent in ("explicit", "symptom")
+    content = _kb_relevant_sections(entry, message, allow_full_article=allow_full)
+    if not content:
+        return {"route": "none", "entry": None, "content": None}
+    return {"route": "short_circuit", "entry": entry, "content": content}
 
 
 def _build_kb_index() -> list:
@@ -2641,15 +2752,19 @@ def _build_kb_index() -> list:
 _KB_INDEX: list = _build_kb_index()
 
 
+def _kb_normalize_match_text(text: str) -> str:
+    return text.lower().replace("-", " ").replace("—", " ")
+
+
 def _kb_match(message: str) -> Optional[dict]:
     """
     Return the first KB entry whose trigger phrases appear in the user's message,
     or None if no article matches. Case-insensitive substring search.
     """
-    msg_lower = message.lower()
+    msg_lower = _kb_normalize_match_text(message)
     for entry in _KB_INDEX:
         for phrase in entry["triggers"]:
-            if phrase in msg_lower:
+            if _kb_normalize_match_text(phrase) in msg_lower:
                 return entry
     return None
 
@@ -3703,16 +3818,14 @@ def chat_stream(req: ChatRequest):
             detail="Not logged in. Please sign in to use ADK Cyber AI."
         )
 
-    # ── KB short-circuit ────────────────────────────────────────────────────
-    # If the user's question matches a local KB article AND shares meaningful
-    # vocabulary with it, serve it directly — no Anthropic call, no quota, no
-    # latency. When a trigger fires but the article is a poor match for the
-    # actual question (false-positive trigger), fall through to the model
-    # instead of dumping an unrelated article into the response.
-    # Skip entirely when the user pasted screenshots — text KB can't answer.
-    kb_entry        = None if req.images else _kb_match(req.message)
-    relevant_content = _kb_relevant_sections(kb_entry, req.message) if kb_entry else None
-    if kb_entry and relevant_content:
+    # ── KB routing (short-circuit or LLM augmentation) ─────────────────────
+    kb_resolve = {"route": "none", "entry": None, "content": None}
+    if not req.images:
+        kb_resolve = _kb_resolve(req.message)
+
+    if kb_resolve["route"] == "short_circuit" and kb_resolve["entry"] and kb_resolve["content"]:
+        kb_entry = kb_resolve["entry"]
+        relevant_content = kb_resolve["content"]
         conv_id = get_or_create_conversation(req.conversation_id)
 
         kb_response = (
@@ -3815,6 +3928,12 @@ def chat_stream(req: ChatRequest):
     msg_sanitized, msg_redactions = sanitize_config_text(req.message)
     total_redactions = cfg_redactions + msg_redactions
 
+    message_for_llm = msg_sanitized
+    if (kb_resolve["route"] == "augment_llm" and kb_resolve["entry"]
+            and kb_resolve["content"]):
+        message_for_llm = _kb_format_augmentation_prompt(
+            kb_resolve["entry"], kb_resolve["content"], msg_sanitized)
+
     config_truncated = False
     if provider == "local" and cfg_sanitized and cfg_sanitized.strip():
         cfg_sanitized, config_truncated = _truncate_config_for_local(
@@ -3826,7 +3945,7 @@ def chat_stream(req: ChatRequest):
 
     sanitized_req = req.copy(update={
         "config_text": cfg_sanitized,
-        "message":     msg_sanitized,
+        "message":     message_for_llm,
     })
 
     conv_id    = get_or_create_conversation(req.conversation_id)

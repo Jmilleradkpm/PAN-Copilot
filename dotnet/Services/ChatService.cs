@@ -13,7 +13,8 @@ namespace PanCopilot.Services;
 /// matching the license server's atomic weighted deduction), credential
 /// redaction, auto model routing, history from the conversation store.
 /// Local path: OpenAI-compatible streaming with config truncation.
-/// (KB short-circuit from the Python build is not ported yet.)
+/// KB: symptom questions short-circuit to local articles; specific setup/integration
+/// questions get KB excerpts injected into the LLM prompt (Tier 2).
 /// </summary>
 public sealed class ChatService
 {
@@ -104,36 +105,34 @@ public sealed class ChatService
         var provider = EffectiveProvider();
         var configLen = configText.Length;
 
-        // ── KB short-circuit ─────────────────────────────────────────────
-        // Skip when images are attached (text KB can't answer about screenshots).
+        // ── KB routing (short-circuit or LLM augmentation) ───────────────
+        KbResolveResult kbResult = KbResolveResult.None;
         if (images is null or { Count: 0 })
+            kbResult = _kb.Resolve(message);
+
+        if (kbResult.Route == KbRoute.ShortCircuit && kbResult.Entry != null && kbResult.Content != null)
         {
-            var kbEntry = _kb.Match(message);
-            var kbContent = kbEntry != null ? _kb.RelevantSections(kbEntry, message) : null;
-            if (kbEntry != null && kbContent != null)
+            var kbEntry = kbResult.Entry;
+            var kbConvId = _conversations.GetOrCreate(convIdReq);
+            var response = $"\U0001F4DA *{kbEntry.KbId} · Local knowledge base · 0 tokens used*\n\n---\n\n{kbResult.Content}";
+            await emit(new JsonObject { ["type"] = "token", ["text"] = response });
+            _conversations.SaveMessages(kbConvId, message, response);
+            _conversations.AutoTitle(kbConvId, message);
+            await emit(new JsonObject
             {
-                var kbConvId = _conversations.GetOrCreate(convIdReq);
-                var response = $"\U0001F4DA *{kbEntry.KbId} · Local knowledge base · 0 tokens used*\n\n---\n\n{kbContent}";
-                // Single token so the markdown renderer never sees a mid-row slice.
-                await emit(new JsonObject { ["type"] = "token", ["text"] = response });
-                _conversations.SaveMessages(kbConvId, message, response);
-                _conversations.AutoTitle(kbConvId, message);
-                await emit(new JsonObject
-                {
-                    ["type"] = "done",
-                    ["model"] = "local-kb",
-                    ["input_tokens"] = 0,
-                    ["output_tokens"] = 0,
-                    ["conversation_id"] = kbConvId,
-                    ["queries_used"] = _session.QueriesUsed,
-                    ["queries_limit"] = _session.QueriesLimit,
-                    ["queries_remaining"] = _session.QueriesRemaining,
-                    ["period"] = _session.Period,
-                    ["tier"] = _session.Tier,
-                    ["redactions"] = 0,
-                });
-                return;
-            }
+                ["type"] = "done",
+                ["model"] = "local-kb",
+                ["input_tokens"] = 0,
+                ["output_tokens"] = 0,
+                ["conversation_id"] = kbConvId,
+                ["queries_used"] = _session.QueriesUsed,
+                ["queries_limit"] = _session.QueriesLimit,
+                ["queries_remaining"] = _session.QueriesRemaining,
+                ["period"] = _session.Period,
+                ["tier"] = _session.Tier,
+                ["redactions"] = 0,
+            });
+            return;
         }
 
         // ── cloud preflight ──────────────────────────────────────────────
@@ -185,9 +184,12 @@ public sealed class ChatService
         }
 
         var userText = msgClean;
+        if (kbResult.Route == KbRoute.AugmentLlm && kbResult.Entry != null && kbResult.Content != null)
+            userText = KbService.FormatAugmentationPrompt(kbResult.Entry, kbResult.Content, msgClean);
+
         if (!string.IsNullOrWhiteSpace(cfgClean))
             userText = "I am pasting the following PAN-OS configuration or CLI output for you to analyze:\n\n" +
-                       $"```\n{cfgClean.Trim()}\n```\n\n{msgClean}";
+                       $"```\n{cfgClean.Trim()}\n```\n\n{userText}";
 
         int nImages = images?.Count ?? 0;
         if (nImages > 0)
