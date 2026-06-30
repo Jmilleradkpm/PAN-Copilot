@@ -1,7 +1,7 @@
 using System.IO;
-using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using PanCopilot.Platform;
 
 namespace PanCopilot.Services;
 
@@ -133,26 +133,7 @@ public sealed class SettingsStore
 
     public bool FirewallConnected => !string.IsNullOrEmpty(Current.fw_host) && !string.IsNullOrEmpty(Current.fw_api_key);
 
-    private static string? Protect(string? plain)
-    {
-        if (string.IsNullOrEmpty(plain)) return null;
-        try
-        {
-            var enc = ProtectedData.Protect(Encoding.UTF8.GetBytes(plain), null, DataProtectionScope.CurrentUser);
-            return "dpapi:" + Convert.ToBase64String(enc);
-        }
-        catch { return plain; }
-    }
+    private static string? Protect(string? plain) => PlatformRuntime.Host.ProtectSecret(plain);
 
-    private static string? Unprotect(string? stored)
-    {
-        if (string.IsNullOrEmpty(stored)) return null;
-        if (!stored.StartsWith("dpapi:")) return stored;
-        try
-        {
-            var dec = ProtectedData.Unprotect(Convert.FromBase64String(stored[6..]), null, DataProtectionScope.CurrentUser);
-            return Encoding.UTF8.GetString(dec);
-        }
-        catch { return null; }
-    }
+    private static string? Unprotect(string? stored) => PlatformRuntime.Host.UnprotectSecret(stored);
 }

@@ -10,7 +10,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\PanCopilot.csproj" />
+    <ProjectReference Include="..\PanCopilot.Core\PanCopilot.Core.csproj" />
   </ItemGroup>
 
   <ItemGroup>

@@ -23,6 +23,7 @@ namespace PanCopilot.Services;
 public static class SystemPromptLoader
 {
     private const string EmbeddedResourceName = "PanCopilot.Services.system_prompt.bin";
+    private static Assembly CoreAssembly => typeof(SystemPromptLoader).Assembly;
     private const string FallbackFilename = "PAN_Copilot_Master_System_Prompt.md";
 
     public static string? Load()
@@ -30,7 +31,7 @@ public static class SystemPromptLoader
         // Production path: encrypted embedded resource decrypted in memory.
         if (!string.IsNullOrEmpty(PromptKey.KeyB64))
         {
-            var asm = Assembly.GetExecutingAssembly();
+            var asm = CoreAssembly;
             using var stream = asm.GetManifestResourceStream(EmbeddedResourceName);
             if (stream != null)
             {

@@ -45,8 +45,45 @@
       if (!isAppPath(path)) return realFetch(input, init);
 
       const method = ((init && init.method) || (typeof input !== 'string' && input.method) || 'GET').toUpperCase();
+
+      // file upload → handled entirely client-side (bridge or localhost)
+      if (path === '/upload' && method === 'POST') {
+        try {
+          const fd = init && init.body;
+          const file = fd && fd.get && fd.get('file');
+          if (!file) return jsonResp(400, { detail: 'No file provided.' });
+          const allowed = ['.txt', '.xml', '.log', '.cfg', '.conf'];
+          const dot = file.name.lastIndexOf('.');
+          const ext = dot >= 0 ? file.name.slice(dot).toLowerCase() : '';
+          if (!allowed.includes(ext))
+            return jsonResp(400, { detail: `Unsupported file type '${ext}'. Allowed: ${allowed.join(', ')}` });
+          if (file.size > 500000) return jsonResp(413, { detail: 'File too large. Max 500 KB.' });
+          const text = await file.text();
+          return jsonResp(200, { filename: file.name, size: file.size, text });
+        } catch (e) { return jsonResp(400, { detail: String(e) }); }
+      }
+
+      // migration multipart → JSON (localhost server expects JSON body)
+      if ((path === '/api/migrate' || path === '/api/migrate/preview') && method === 'POST' && init && init.body && init.body.get) {
+        try {
+          const fd = init.body;
+          const cfg = fd.get('cisco_config');
+          if (!cfg) return jsonResp(400, { detail: 'No source config file.' });
+          const baseXmlFile = fd.get('base_xml');
+          const payload = {
+            config_text: await cfg.text(),
+            base_xml: baseXmlFile ? await baseXmlFile.text() : '',
+            vsys: fd.get('vsys') || 'vsys1',
+            mode: fd.get('mode') || 'firewall',
+            device_group: fd.get('device_group') || '',
+            source_vendor: fd.get('source_vendor') || 'auto',
+          };
+          return realFetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+        } catch (e) { return jsonResp(500, { detail: String(e) }); }
+      }
+
       const host = hostObj();
-      if (!host) return jsonResp(503, { detail: 'Host bridge unavailable.' });
+      if (!host) return realFetch(input, init);
 
       // chat stream → SSE synthesized from host postMessage events
       if (path === '/chat/stream') {
@@ -69,24 +106,7 @@
         return new Response(stream, { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
       }
 
-      // file upload → handled entirely client-side
-      if (path === '/upload' && method === 'POST') {
-        try {
-          const fd = init && init.body;
-          const file = fd && fd.get && fd.get('file');
-          if (!file) return jsonResp(400, { detail: 'No file provided.' });
-          const allowed = ['.txt', '.xml', '.log', '.cfg', '.conf'];
-          const dot = file.name.lastIndexOf('.');
-          const ext = dot >= 0 ? file.name.slice(dot).toLowerCase() : '';
-          if (!allowed.includes(ext))
-            return jsonResp(400, { detail: `Unsupported file type '${ext}'. Allowed: ${allowed.join(', ')}` });
-          if (file.size > 500000) return jsonResp(413, { detail: 'File too large. Max 500 KB.' });
-          const text = await file.text();
-          return jsonResp(200, { filename: file.name, size: file.size, text });
-        } catch (e) { return jsonResp(400, { detail: String(e) }); }
-      }
-
-      // migration: multipart FormData → JSON bridge (files read as text here)
+      // migration via WebView2 bridge (multipart → JSON)
       if (path === '/api/migrate' || path === '/api/migrate/preview') {
         try {
           const fd = init && init.body;
@@ -106,7 +126,6 @@
           const wrapped = JSON.parse(raw);
           if (path === '/api/migrate/preview' || wrapped.status !== 200)
             return new Response(wrapped.body, { status: wrapped.status, headers: { 'Content-Type': 'application/json' } });
-          // download: server returned {zip_base64} → rebuild a ZIP Blob
           const b64 = JSON.parse(wrapped.body).zip_base64 || '';
           const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
           return new Response(new Blob([bytes], { type: 'application/zip' }), { status: 200 });

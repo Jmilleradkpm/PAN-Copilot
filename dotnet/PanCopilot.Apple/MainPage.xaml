@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             x:Class="PanCopilot.Apple.MainPage"
+             BackgroundColor="#0d1117">
+    <Grid>
+        <WebView x:Name="AppWebView"
+                 HorizontalOptions="Fill"
+                 VerticalOptions="Fill" />
+        <VerticalStackLayout x:Name="LoadingPanel"
+                             IsVisible="True"
+                             VerticalOptions="Center"
+                             HorizontalOptions="Center"
+                             Spacing="12">
+            <ActivityIndicator IsRunning="True" Color="#3b82f6" />
+            <Label Text="Starting ADK Cyber AI…"
+                   TextColor="#94a3b8"
+                   FontSize="14"
+                   HorizontalTextAlignment="Center" />
+        </VerticalStackLayout>
+    </Grid>
+</ContentPage>

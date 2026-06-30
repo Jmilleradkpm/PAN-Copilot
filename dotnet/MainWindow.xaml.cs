@@ -2,6 +2,7 @@ using System.IO;
 using System.Windows;
 using Microsoft.Web.WebView2.Core;
 using PanCopilot.Bridge;
+using PanCopilot.Platform;
 using PanCopilot.Services;
 
 namespace PanCopilot;
@@ -12,6 +13,7 @@ public partial class MainWindow : Window
 
     public MainWindow()
     {
+        PlatformRuntime.Host = new WindowsPlatformHost();
         InitializeComponent();
         Loaded += OnLoaded;
     }

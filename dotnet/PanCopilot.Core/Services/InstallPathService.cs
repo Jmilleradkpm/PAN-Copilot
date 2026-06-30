@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.IO;
+using PanCopilot.Platform;
 
 namespace PanCopilot.Services;
 
@@ -55,6 +56,9 @@ public static class InstallPathService
     /// </summary>
     public static bool TryMigrateFromProtectedInstall(Action exitApp)
     {
+        if (!OperatingSystem.IsWindows())
+            return PlatformRuntime.Host.TryMigrateFromProtectedInstall(exitApp);
+
         if (DistributionService.IsPackaged)
             return false;
 

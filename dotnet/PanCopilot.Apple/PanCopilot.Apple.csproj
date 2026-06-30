@@ -1,0 +1,57 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>net8.0-ios;net8.0-maccatalyst</TargetFrameworks>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>PanCopilot.Apple</RootNamespace>
+    <AssemblyName>ADK Cyber AI</AssemblyName>
+    <UseMaui>true</UseMaui>
+    <SingleProject>true</SingleProject>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+
+    <ApplicationTitle>ADK Cyber AI</ApplicationTitle>
+    <ApplicationId>com.adkcyber.pancopilot</ApplicationId>
+    <ApplicationDisplayVersion>3.20.0</ApplicationDisplayVersion>
+    <ApplicationVersion>320</ApplicationVersion>
+
+    <SupportedOSPlatformVersion Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'ios'">15.0</SupportedOSPlatformVersion>
+    <SupportedOSPlatformVersion Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'maccatalyst'">15.0</SupportedOSPlatformVersion>
+
+    <Company>Adirondack CyberSecurity</Company>
+    <Product>ADK Cyber AI</Product>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <MauiIcon Include="Resources\AppIcon\appicon.svg" ForegroundFile="Resources\AppIcon\appiconfg.svg" Color="#1e3a5f" />
+    <MauiSplashScreen Include="Resources\Splash\splash.svg" Color="#0d1117" BaseSize="128,128" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Maui.Controls" Version="8.0.100" />
+    <PackageReference Include="Microsoft.Maui.Controls.Compatibility" Version="8.0.100" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\PanCopilot.Core\PanCopilot.Core.csproj" />
+  </ItemGroup>
+
+  <!-- Shared web UI + KB articles (same bundle as Windows build). -->
+  <ItemGroup>
+    <Content Include="..\Frontend\**\*.*">
+      <Link>Frontend\%(RecursiveDir)%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+  <ItemGroup Condition="Exists('..\PAN_Copilot_Master_System_Prompt.md')">
+    <Content Include="..\PAN_Copilot_Master_System_Prompt.md">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+</Project>

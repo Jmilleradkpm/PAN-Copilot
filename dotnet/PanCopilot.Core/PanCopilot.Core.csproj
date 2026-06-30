@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>PanCopilot</RootNamespace>
+    <AssemblyName>PanCopilot.Core</AssemblyName>
+    <Version>3.20.0</Version>
+    <Company>Adirondack CyberSecurity</Company>
+    <Product>ADK Cyber AI</Product>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.Web.HttpUtility" Version="4.3.0" />
+  </ItemGroup>
+
+  <ItemGroup Condition="Exists('Services\system_prompt.bin')">
+    <EmbeddedResource Include="Services\system_prompt.bin" />
+  </ItemGroup>
+
+  <ItemGroup Condition="Exists('known_issues.json') Or Exists('..\known_issues.json')">
+    <Content Include="known_issues.json" Condition="Exists('known_issues.json')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="..\known_issues.json" Condition="Exists('..\known_issues.json')">
+      <Link>known_issues.json</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+</Project>

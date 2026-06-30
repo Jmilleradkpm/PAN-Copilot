@@ -4,6 +4,7 @@ using System.IO.Compression;
 using System.Text;
 using System.Text.Json.Nodes;
 using System.Web;
+using PanCopilot.Platform;
 using PanCopilot.Services.Migration;
 
 namespace PanCopilot.Services;
@@ -74,10 +75,8 @@ public sealed class ApiRouter
                     ["status"] = "ok", ["version"] = AppVersion, ["mode"] = "local",
                     ["authenticated"] = _session.Authenticated,
                     ["distribution_channel"] = DistributionService.Channel,
-                    ["install_dir"] = AppContext.BaseDirectory,
-                    ["install_writable"] = DistributionService.IsMicrosoftStore
-                        ? false
-                        : !InstallPathService.IsProtectedInstallPath(AppContext.BaseDirectory),
+                    ["install_dir"] = PlatformRuntime.Host.InstallDirectory,
+                    ["install_writable"] = PlatformRuntime.Host.IsInstallWritable,
                 }),
 
                 // ── auth ──────────────────────────────────────────────────

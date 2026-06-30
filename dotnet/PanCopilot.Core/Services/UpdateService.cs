@@ -1,10 +1,10 @@
 using System.Diagnostics;
 using System.IO;
 using System.Net.Http;
-using System.Reflection;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using PanCopilot.Platform;
 
 namespace PanCopilot.Services;
 
@@ -34,14 +34,7 @@ public sealed class UpdateService
     private DateTime _cacheAt = DateTime.MinValue;
     private static readonly TimeSpan CacheTtl = TimeSpan.FromHours(1);
 
-    public static string CurrentVersion
-    {
-        get
-        {
-            var v = Assembly.GetExecutingAssembly().GetName().Version;
-            return v == null ? "3.0.0" : $"{v.Major}.{v.Minor}" + (v.Build > 0 ? $".{v.Build}" : "");
-        }
-    }
+    public static string CurrentVersion => PlatformRuntime.AppVersion;
 
     /// <summary>GET /api/version shape: current/latest/update_available/installer_url.</summary>
     public async Task<JsonObject> GetVersionInfoAsync(bool force)

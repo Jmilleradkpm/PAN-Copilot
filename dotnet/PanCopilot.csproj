@@ -9,7 +9,7 @@
     <RootNamespace>PanCopilot</RootNamespace>
     <AssemblyName>PAN Copilot</AssemblyName>
     <ApplicationIcon>pan_copilot.ico</ApplicationIcon>
-    <Version>3.19.3</Version>
+    <Version>3.20.0</Version>
     <Company>Adirondack CyberSecurity</Company>
     <Product>ADK Cyber AI</Product>
   </PropertyGroup>
@@ -19,30 +19,37 @@
     <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="10.0.9" />
   </ItemGroup>
 
-  <!-- The test project lives in a subfolder; keep its sources out of the app. -->
   <ItemGroup>
-    <Compile Remove="PanCopilot.Tests\**" />
-    <Content Remove="PanCopilot.Tests\**" />
-    <None Remove="PanCopilot.Tests\**" />
-    <EmbeddedResource Remove="PanCopilot.Tests\**" />
+    <ProjectReference Include="PanCopilot.Core\PanCopilot.Core.csproj" />
   </ItemGroup>
 
-  <!-- Copy the HTML/JS/CSS frontend next to the .exe so WebView2 can load it. -->
+  <ItemGroup>
+    <Compile Remove="PanCopilot.Tests\**" />
+    <Compile Remove="PanCopilot.Core\**" />
+    <Compile Remove="PanCopilot.Apple\**" />
+    <Content Remove="PanCopilot.Tests\**" />
+    <Content Remove="PanCopilot.Core\**" />
+    <Content Remove="PanCopilot.Apple\**" />
+    <None Remove="PanCopilot.Tests\**" />
+    <None Remove="PanCopilot.Core\**" />
+    <None Remove="PanCopilot.Apple\**" />
+    <EmbeddedResource Remove="PanCopilot.Tests\**" />
+    <EmbeddedResource Remove="PanCopilot.Core\**" />
+    <EmbeddedResource Remove="PanCopilot.Apple\**" />
+  </ItemGroup>
+
   <ItemGroup>
     <Content Include="Frontend\**\*.*">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
   </ItemGroup>
 
-  <!-- AES-GCM-encrypted master system prompt. CI's "Encrypt system prompt"
-       step writes this file before build; locally absent, in which case
-       SystemPromptLoader falls back to a plaintext .md next to the exe. -->
-  <ItemGroup Condition="Exists('Services\system_prompt.bin')">
-    <EmbeddedResource Include="Services\system_prompt.bin" />
+  <ItemGroup Condition="Exists('PAN_Copilot_Master_System_Prompt.md')">
+    <Content Include="PAN_Copilot_Master_System_Prompt.md">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
   </ItemGroup>
 
-  <!-- Version-aware known-issues corpus, fetched in CI from R2 /data/ and
-       bundled next to the exe. Absent in dev/source -> lookup is inert. -->
   <ItemGroup Condition="Exists('known_issues.json')">
     <Content Include="known_issues.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>

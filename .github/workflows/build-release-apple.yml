@@ -1,0 +1,108 @@
+# ============================================================
+# ADK Cyber AI — Mac Catalyst + iOS (.NET MAUI)
+# ============================================================
+# Builds PanCopilot.Apple from PanCopilot.Core + shared Frontend.
+# Requires macOS + Xcode for signing. Produces unsigned artifacts
+# on PR/manual runs; wire signing secrets for App Store distribution.
+# ============================================================
+name: Build Apple (.NET MAUI)
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version (e.g. v3.20)'
+        required: true
+
+jobs:
+  build-apple:
+    runs-on: macos-14
+    defaults:
+      run:
+        working-directory: dotnet
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Install MAUI workload
+        run: dotnet workload install maui
+
+      - name: Write system prompt from secret
+        shell: bash
+        env:
+          PROMPT: ${{ secrets.PAN_COPILOT_SYSTEM_PROMPT }}
+        run: |
+          if [ -z "$PROMPT" ]; then echo "PAN_COPILOT_SYSTEM_PROMPT secret is empty"; exit 1; fi
+          printf '%s' "$PROMPT" > PAN_Copilot_Master_System_Prompt.md
+
+      - name: Encrypt system prompt
+        shell: pwsh
+        env:
+          KEY_B64: ${{ secrets.PAN_COPILOT_PROMPT_AES_KEY }}
+        run: |
+          if (-not $env:KEY_B64) { throw "PAN_COPILOT_PROMPT_AES_KEY secret not set" }
+          $key = [Convert]::FromBase64String($env:KEY_B64)
+          $pt = [System.IO.File]::ReadAllBytes("PAN_Copilot_Master_System_Prompt.md")
+          $nonce = [byte[]]::new(12)
+          [System.Security.Cryptography.RandomNumberGenerator]::Fill($nonce)
+          $ct = [byte[]]::new($pt.Length)
+          $tag = [byte[]]::new(16)
+          $aes = [System.Security.Cryptography.AesGcm]::new($key, 16)
+          $aes.Encrypt($nonce, $pt, $ct, $tag, $null)
+          $aes.Dispose()
+          $blob = New-Object byte[] (12 + $pt.Length + 16)
+          [Array]::Copy($nonce, 0, $blob, 0, 12)
+          [Array]::Copy($ct, 0, $blob, 12, $pt.Length)
+          [Array]::Copy($tag, 0, $blob, 12 + $pt.Length, 16)
+          [System.IO.File]::WriteAllBytes("PanCopilot.Core/Services/system_prompt.bin", $blob)
+          $lines = @(
+            'namespace PanCopilot.Services;'
+            'internal static class PromptKey {'
+            "    public const string KeyB64 = `"$($env:KEY_B64)`";"
+            '}'
+          )
+          Set-Content -Path "PanCopilot.Core/Services/PromptKey.cs" -Value $lines -Encoding UTF8
+          Remove-Item "PAN_Copilot_Master_System_Prompt.md" -Force
+
+      - name: Inject version
+        shell: pwsh
+        run: |
+          $v = "${{ inputs.version }}".TrimStart('v')
+          foreach ($proj in @('PanCopilot.Core/PanCopilot.Core.csproj', 'PanCopilot.Apple/PanCopilot.Apple.csproj')) {
+            (Get-Content $proj) -replace '<Version>.*?</Version>', "<Version>$v.0</Version>" | Set-Content $proj
+            (Get-Content $proj) -replace '<ApplicationDisplayVersion>.*?</ApplicationDisplayVersion>', "<ApplicationDisplayVersion>$v</ApplicationDisplayVersion>" | Set-Content $proj
+          }
+
+      - name: Restore + test Core
+        run: |
+          dotnet restore PanCopilot.sln
+          dotnet test PanCopilot.Tests/PanCopilot.Tests.csproj --configuration Release
+
+      - name: Build Mac Catalyst
+        run: |
+          dotnet publish PanCopilot.Apple/PanCopilot.Apple.csproj \
+            -f net8.0-maccatalyst \
+            -c Release \
+            -p:CreatePackage=true \
+            -o publish/maccatalyst
+
+      - name: Build iOS (device)
+        run: |
+          dotnet publish PanCopilot.Apple/PanCopilot.Apple.csproj \
+            -f net8.0-ios \
+            -c Release \
+            -p:ArchiveOnBuild=true \
+            -p:RuntimeIdentifier=ios-arm64 \
+            -o publish/ios
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ADK_Cyber_AI_${{ inputs.version }}_Apple
+          path: |
+            dotnet/publish/maccatalyst/**
+            dotnet/publish/ios/**

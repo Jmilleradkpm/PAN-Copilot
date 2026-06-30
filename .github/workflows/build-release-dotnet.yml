@@ -75,7 +75,7 @@ jobs:
           [Array]::Copy($nonce, 0, $blob, 0, 12)
           [Array]::Copy($ct,    0, $blob, 12, $pt.Length)
           [Array]::Copy($tag,   0, $blob, 12 + $pt.Length, 16)
-          [System.IO.File]::WriteAllBytes("Services/system_prompt.bin", $blob)
+          [System.IO.File]::WriteAllBytes("PanCopilot.Core/Services/system_prompt.bin", $blob)
           Write-Host "Encrypted prompt: $($pt.Length) -> $($blob.Length) bytes"
 
           # Build PromptKey.cs as an array of lines so the whole block stays
@@ -89,10 +89,10 @@ jobs:
             "    public const string KeyB64 = `"$($env:KEY_B64)`";"
             '}'
           )
-          Set-Content -Path "Services/PromptKey.cs" -Value $lines -Encoding UTF8
+          Set-Content -Path "PanCopilot.Core/Services/PromptKey.cs" -Value $lines -Encoding UTF8
 
           Remove-Item "PAN_Copilot_Master_System_Prompt.md" -Force
-          Write-Host "Plaintext deleted; only Services/system_prompt.bin remains"
+          Write-Host "Plaintext deleted; only PanCopilot.Core/Services/system_prompt.bin remains"
 
       - name: Restore + test
         run: |
@@ -103,7 +103,10 @@ jobs:
         shell: pwsh
         run: |
           $v = "${{ inputs.version }}".TrimStart('v')
-          (Get-Content PanCopilot.csproj) -replace '<Version>.*?</Version>', "<Version>$v.0</Version>" | Set-Content PanCopilot.csproj
+          foreach ($proj in @('PanCopilot.csproj', 'PanCopilot.Core/PanCopilot.Core.csproj', 'PanCopilot.Apple/PanCopilot.Apple.csproj')) {
+            (Get-Content $proj) -replace '<Version>.*?</Version>', "<Version>$v.0</Version>" | Set-Content $proj
+            (Get-Content $proj) -replace '<ApplicationDisplayVersion>.*?</ApplicationDisplayVersion>', "<ApplicationDisplayVersion>$v</ApplicationDisplayVersion>" | Set-Content $proj
+          }
 
       # Version-aware known-issues corpus, published by the refresh-known-issues
       # workflow to R2 /data/. The csproj bundles it next to the exe when present.

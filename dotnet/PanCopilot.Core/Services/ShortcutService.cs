@@ -1,6 +1,7 @@
 using System.IO;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using PanCopilot.Platform;
 
 namespace PanCopilot.Services;
 
@@ -36,6 +37,11 @@ public static class ShortcutService
     /// </summary>
     public static void EnsureFirstRunShortcuts()
     {
+        if (!OperatingSystem.IsWindows())
+        {
+            PlatformRuntime.Host.EnsureFirstRunShortcuts();
+            return;
+        }
         if (DistributionService.IsPackaged) return;
         EnsureFirstRunShortcuts(
             markerPath: MarkerPath,
