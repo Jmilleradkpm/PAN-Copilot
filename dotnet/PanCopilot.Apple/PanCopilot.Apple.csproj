@@ -41,6 +41,10 @@
   <PropertyGroup Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'ios'">
     <CodesignEntitlements>Platforms/iOS/Entitlements.plist</CodesignEntitlements>
     <BuildIpa Condition="'$(BuildIpa)' == ''">false</BuildIpa>
+    <CollectBundleResourcesDependsOn>
+      $(CollectBundleResourcesDependsOn);
+      CompileIosAppIconAssets;
+    </CollectBundleResourcesDependsOn>
   </PropertyGroup>
 
   <ItemGroup>
@@ -51,6 +55,28 @@
   <ItemGroup Condition="'$(TargetPlatformIdentifier)' == 'maccatalyst'">
     <BundleResource Include="Resources\AppIcon\appicon.icns" LogicalName="appicon.icns" />
   </ItemGroup>
+
+  <Target Name="CompileIosAppIconAssets"
+          DependsOnTargets="ResizetizeImages"
+          Condition="'$(TargetPlatformIdentifier)' == 'ios'">
+    <PropertyGroup>
+      <_IosAssetsCatalog>$([System.IO.Path]::GetFullPath('$(_MauiIntermediateImages)Assets.xcassets'))</_IosAssetsCatalog>
+      <_IosActoolOutput>$(DeviceSpecificIntermediateOutputPath)ios-appicon-actool/</_IosActoolOutput>
+      <_IosActoolPartial>$(DeviceSpecificIntermediateOutputPath)ios-appicon-actool/partial.plist</_IosActoolPartial>
+    </PropertyGroup>
+    <Exec Command="bash &quot;$(MSBuildProjectDirectory)/scripts/compile-ios-appicon.sh&quot; &quot;$(_IosAssetsCatalog)&quot; &quot;$(_IosActoolOutput)&quot; &quot;$(_IosActoolPartial)&quot;" />
+    <ItemGroup>
+      <BundleResource Include="$(_IosActoolOutput)Assets.car">
+        <LogicalName>Assets.car</LogicalName>
+      </BundleResource>
+      <BundleResource Include="$(_IosActoolOutput)appicon60x60@2x.png">
+        <LogicalName>appicon60x60@2x.png</LogicalName>
+      </BundleResource>
+      <BundleResource Include="$(_IosActoolOutput)appicon76x76@2x~ipad.png">
+        <LogicalName>appicon76x76@2x~ipad.png</LogicalName>
+      </BundleResource>
+    </ItemGroup>
+  </Target>
 
   <Target Name="PatchMacCatalystAppIcon"
           AfterTargets="ResizetizeImages"
