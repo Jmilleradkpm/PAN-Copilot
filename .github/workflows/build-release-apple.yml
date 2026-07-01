@@ -8,6 +8,8 @@
 name: Build Apple (.NET MAUI)
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
     inputs:
       version:
@@ -15,7 +17,33 @@ on:
         required: true
 
 jobs:
+  validate:
+    name: Validate Apple MAUI workflow
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Parse workflow YAML
+        run: |
+          python3 - <<'PY'
+          import glob
+          import sys
+
+          try:
+              import yaml
+          except ImportError:
+              import subprocess
+              subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "pyyaml"])
+              import yaml
+
+          with open(".github/workflows/build-release-apple.yml", encoding="utf-8") as handle:
+              yaml.safe_load(handle)
+          print("OK: build-release-apple.yml")
+          PY
+
   build-apple:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: macos-14
     defaults:
       run:
