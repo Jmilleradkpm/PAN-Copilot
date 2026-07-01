@@ -14,6 +14,19 @@ fi
 mkdir -p "$OUTPUT_DIR"
 rm -f "$OUTPUT_DIR/Assets.car" "$OUTPUT_DIR"/*.png "$PARTIAL_PLIST"
 
+# App Store rejects marketing icons that contain an alpha channel.
+python3 - "$ASSETS_CATALOG" <<'PY'
+import sys
+from pathlib import Path
+from PIL import Image
+
+catalog = Path(sys.argv[1])
+for png in catalog.rglob("*.png"):
+    img = Image.open(png).convert("RGBA")
+    bg = Image.new("RGBA", img.size, (10, 22, 40, 255))
+    Image.alpha_composite(bg, img).convert("RGB").save(png, "PNG")
+PY
+
 xcrun actool --output-partial-info-plist "$PARTIAL_PLIST" \
   --app-icon appicon \
   --compress-pngs \

@@ -10,6 +10,15 @@ mkdir -p "$ICON_DIR"
 sips -s format png "$ICON_SRC" --out /tmp/pan_icon_256.png >/dev/null
 sips -z 1024 1024 /tmp/pan_icon_256.png --out "$ICON_DIR/appicon.png" >/dev/null
 
+# App Store requires the 1024 marketing icon to have no alpha channel.
+python3 - <<'PY'
+from PIL import Image
+path = "$ICON_DIR/appicon.png"
+img = Image.open(path).convert("RGBA")
+bg = Image.new("RGBA", img.size, (10, 22, 40, 255))  # #0a1628
+Image.alpha_composite(bg, img).convert("RGB").save(path, "PNG")
+PY
+
 ICONSET="/tmp/AppIcon.iconset"
 rm -rf "$ICONSET" && mkdir -p "$ICONSET"
 SRC="$ICON_DIR/appicon.png"
