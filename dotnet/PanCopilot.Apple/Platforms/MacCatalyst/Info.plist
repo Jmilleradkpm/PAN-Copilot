@@ -6,6 +6,11 @@
     <string>appicon</string>
     <key>CFBundleIconName</key>
     <string>appicon</string>
+    <!-- Mac App Store requires a valid UIDeviceFamily (2=iPad). Empty or iPhone (1) values fail validation. -->
+    <key>UIDeviceFamily</key>
+    <array>
+        <integer>2</integer>
+    </array>
     <key>LSApplicationCategoryType</key>
     <string>public.app-category.developer-tools</string>
     <key>ITSAppUsesNonExemptEncryption</key>

@@ -11,16 +11,43 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-MAC_PKG=$(ls -t "$ROOT/publish/appstore/maccatalyst"/*.pkg 2>/dev/null | head -1)
+TARGET="${1:-all}"
+
+pick_mac_pkg() {
+  local signed unsigned
+  signed=$(ls -t "$ROOT/publish/appstore/maccatalyst"/*-signed.pkg 2>/dev/null | head -1)
+  if [[ -n "${signed:-}" ]]; then
+    echo "$signed"
+    return
+  fi
+  unsigned=$(ls -t "$ROOT/publish/appstore/maccatalyst"/*.pkg 2>/dev/null | grep -v -- '-signed\.pkg$' | head -1)
+  echo "${unsigned:-}"
+}
+
+MAC_PKG="$(pick_mac_pkg)"
 IOS_IPA=$(ls -t "$ROOT/publish/appstore/ios"/*.ipa 2>/dev/null | head -1)
 
-if [[ -z "${MAC_PKG:-}" || -z "${IOS_IPA:-}" ]]; then
-  echo "Missing artifacts. Run ./scripts/build-appstore-apple.sh 3.20 first."
-  exit 1
+if [[ "$TARGET" == "mac" || "$TARGET" == "macos" ]]; then
+  [[ -n "${MAC_PKG:-}" ]] || { echo "Missing Mac .pkg. Run ./scripts/build-appstore-apple.sh 3.20 first."; exit 1; }
+elif [[ "$TARGET" == "ios" ]]; then
+  [[ -n "${IOS_IPA:-}" ]] || { echo "Missing iOS .ipa. Run ./scripts/build-appstore-apple.sh 3.20 first."; exit 1; }
+else
+  if [[ -z "${MAC_PKG:-}" || -z "${IOS_IPA:-}" ]]; then
+    echo "Missing artifacts. Run ./scripts/build-appstore-apple.sh 3.20 first."
+    exit 1
+  fi
 fi
 
-echo "Mac:  $MAC_PKG"
-echo "iOS:  $IOS_IPA"
+if [[ -n "${MAC_PKG:-}" ]]; then
+  echo "Mac:  $MAC_PKG"
+  if ! pkgutil --check-signature "$MAC_PKG" 2>/dev/null | grep -q "Status: signed"; then
+    echo "ERROR: Mac .pkg is not installer-signed."
+    echo "Create Mac Installer Distribution in Xcode, then run:"
+    echo "  ./scripts/sign-mac-appstore-pkg.sh \"$MAC_PKG\""
+    exit 1
+  fi
+fi
+[[ -n "${IOS_IPA:-}" ]] && echo "iOS:  $IOS_IPA"
 echo ""
 
 upload_one() {
@@ -47,8 +74,14 @@ upload_one() {
 }
 
 FAIL=0
-upload_one "$IOS_IPA" ios || FAIL=1
-upload_one "$MAC_PKG" macos || FAIL=1
+if [[ "$TARGET" == "ios" ]]; then
+  upload_one "$IOS_IPA" ios || FAIL=1
+elif [[ "$TARGET" == "mac" || "$TARGET" == "macos" ]]; then
+  upload_one "$MAC_PKG" macos || FAIL=1
+else
+  upload_one "$IOS_IPA" ios || FAIL=1
+  upload_one "$MAC_PKG" macos || FAIL=1
+fi
 
 if [[ "$FAIL" -eq 0 ]]; then
   echo ""

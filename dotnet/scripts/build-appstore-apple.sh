@@ -49,6 +49,13 @@ if [[ ! -f PanCopilot.Core/Services/system_prompt.bin ]]; then
   fi
 fi
 
+# Store builds must be clean: incremental builds can package a .dll from one
+# compilation with .aotdata from another, and mismatched AOT images abort the
+# Mono runtime at launch on device (SIGABRT in load_aot_module, AOT-only mode).
+# This is exactly what shipped in build 3204 — never skip this step.
+echo "==> Cleaning bin/obj for a reproducible store build"
+rm -rf PanCopilot.Apple/bin PanCopilot.Apple/obj PanCopilot.Core/bin PanCopilot.Core/obj
+
 dotnet restore PanCopilot.Apple/PanCopilot.Apple.csproj
 
 mkdir -p "$OUT/maccatalyst" "$OUT/ios"
@@ -66,6 +73,18 @@ dotnet publish PanCopilot.Apple/PanCopilot.Apple.csproj \
   -p:CodesignProvision="$APPLE_CODESIGN_PROVISION_MAC" \
   -o "$OUT/maccatalyst"
 
+MAC_PKG=$(ls -t "$OUT/maccatalyst"/*.pkg 2>/dev/null | grep -v -- '-signed\.pkg$' | head -1)
+if [[ -n "${MAC_PKG:-}" ]]; then
+  if bash "$ROOT/scripts/sign-mac-appstore-pkg.sh" "$MAC_PKG"; then
+    SIGNED_PKG="${MAC_PKG%.pkg}-signed.pkg"
+    cp -f "$SIGNED_PKG" "$OUT/maccatalyst/ADK Cyber AI-${DISPLAY_VERSION}.pkg"
+    echo "==> Mac App Store package signed: $OUT/maccatalyst/ADK Cyber AI-${DISPLAY_VERSION}.pkg"
+  else
+    echo "WARN: Mac .pkg is unsigned. Create a Mac Installer Distribution cert, then run:"
+    echo "  ./scripts/sign-mac-appstore-pkg.sh \"$MAC_PKG\""
+  fi
+fi
+
 echo "==> iOS App Store IPA"
 APPLE_CODESIGN_PROVISION="$APPLE_CODESIGN_PROVISION_IOS" \
 dotnet publish PanCopilot.Apple/PanCopilot.Apple.csproj \
@@ -82,7 +101,7 @@ dotnet publish PanCopilot.Apple/PanCopilot.Apple.csproj \
 
 echo ""
 echo "Done. Upload artifacts from:"
-echo "  Mac:  $OUT/maccatalyst/*.pkg"
+echo "  Mac:  $OUT/maccatalyst/ADK Cyber AI-${DISPLAY_VERSION}.pkg (must be installer-signed)"
 echo "  iOS:  $OUT/ios/*.ipa"
 echo ""
 echo "Next: Transporter app or 'xcrun altool --upload-app' to App Store Connect."
