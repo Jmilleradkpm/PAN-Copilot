@@ -1,6 +1,7 @@
 using Microsoft.Maui.ApplicationModel;
 using PanCopilot.Apple.Bridge;
 using PanCopilot.Apple.Platform;
+using PanCopilot.Platform;
 using PanCopilot.Services;
 using WebKit;
 
@@ -27,12 +28,14 @@ public partial class MainPage : ContentPage
 
         try
         {
+            AppleStartupLog.Write("startup begin");
             var frontendRoot = await AppleBundlePaths.EnsureFrontendReadyAsync();
+            AppleStartupLog.Write($"frontend ready: {frontendRoot}");
             var indexPath = Path.Combine(frontendRoot, "index.html");
             var kbDir = Path.Combine(frontendRoot, "kb");
-            if (!File.Exists(indexPath))
+            if (!SafeIO.FileExists(indexPath))
                 throw new FileNotFoundException("Frontend index.html missing after extract.", indexPath);
-            if (!Directory.Exists(kbDir) || !File.Exists(Path.Combine(kbDir, "kb_triggers.json")))
+            if (!SafeIO.DirectoryExists(kbDir) || !SafeIO.FileExists(Path.Combine(kbDir, "kb_triggers.json")))
                 throw new DirectoryNotFoundException($"KB articles missing from frontend bundle: {kbDir}");
 
             var promptPath = AppleBundlePaths.ResolveMasterPromptPath();
@@ -60,9 +63,11 @@ public partial class MainPage : ContentPage
             AppleBridgeSession.Chat = chat;
             AppleBridgeSession.NavigationFinished = OnNativeNavigationFinished;
             AppleBridgeSession.LoadFrontend(indexPath, frontendRoot);
+            AppleStartupLog.Write("frontend loaded");
         }
         catch (Exception ex)
         {
+            AppleStartupLog.Write(ex, "startup failed");
             LoadingPanel.IsVisible = false;
             await DisplayAlert("Startup failed", ex.Message, "OK");
             _started = false;

@@ -13,9 +13,8 @@ namespace PanCopilot.Services;
 /// </summary>
 public sealed class SettingsStore
 {
-    private static readonly string Dir =
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".pan_copilot");
-    private static readonly string FilePath = Path.Combine(Dir, "settings_v3.json");
+    private static string Dir => PlatformRuntime.Host.DataDirectory;
+    private static string FilePath => Path.Combine(Dir, "settings_v3.json");
 
     public sealed class Settings
     {
@@ -49,8 +48,9 @@ public sealed class SettingsStore
     {
         try
         {
-            if (File.Exists(FilePath))
-                return JsonSerializer.Deserialize<Settings>(File.ReadAllText(FilePath)) ?? new Settings();
+            var text = SafeIO.ReadAllText(FilePath);
+            if (!string.IsNullOrEmpty(text))
+                return JsonSerializer.Deserialize<Settings>(text) ?? new Settings();
         }
         catch { /* corrupt file → defaults */ }
         return new Settings();

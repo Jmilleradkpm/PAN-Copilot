@@ -2,6 +2,7 @@ using System.IO;
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
+using PanCopilot.Platform;
 
 namespace PanCopilot.Services;
 
@@ -49,29 +50,55 @@ public static class SystemPromptLoader
             }
         }
 
-        // Dev fallback: plaintext file next to the exe or bundle Resources folder.
+        // Dev fallback: plaintext prompt file in known bundle/app directories.
         foreach (var dir in EnumeratePromptDirectories(searchDirectories))
         {
             var path = Path.Combine(dir, FallbackFilename);
-            if (File.Exists(path))
-                return File.ReadAllText(path);
+            var text = SafeIO.ReadAllText(path);
+            if (!string.IsNullOrEmpty(text))
+                return text;
         }
         return null;
     }
 
     private static IEnumerable<string> EnumeratePromptDirectories(IEnumerable<string>? searchDirectories)
     {
-        yield return AppContext.BaseDirectory;
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        string? TryAdd(string? dir)
+        {
+            if (string.IsNullOrWhiteSpace(dir))
+                return null;
+            try
+            {
+                dir = Path.GetFullPath(dir);
+            }
+            catch
+            {
+                return null;
+            }
+            return seen.Add(dir) ? dir : null;
+        }
+
+        var added = TryAdd(AppContext.BaseDirectory);
+        if (added is not null)
+            yield return added;
+
         if (searchDirectories != null)
         {
             foreach (var dir in searchDirectories)
             {
-                if (!string.IsNullOrWhiteSpace(dir))
-                    yield return dir;
+                added = TryAdd(dir);
+                if (added is not null)
+                    yield return added;
             }
         }
-        var resources = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "Resources"));
-        yield return resources;
+
+#if !IOS && !MACCATALYST
+        added = TryAdd(Path.Combine(AppContext.BaseDirectory, "..", "Resources"));
+        if (added is not null)
+            yield return added;
+#endif
     }
 
     /// <summary>

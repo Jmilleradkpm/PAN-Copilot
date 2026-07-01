@@ -1,6 +1,7 @@
 using System.IO;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using PanCopilot.Platform;
 
 namespace PanCopilot.Services;
 
@@ -12,8 +13,7 @@ namespace PanCopilot.Services;
 /// </summary>
 public sealed class ConversationStore
 {
-    private static readonly string Dir = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".pan_copilot", "conversations_v3");
+    private static string Dir => Path.Combine(PlatformRuntime.Host.DataDirectory, "conversations_v3");
 
     private static string PathFor(string id) => Path.Combine(Dir, id + ".json");
     private static string NowIso() => DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.ffffffK");

@@ -44,6 +44,8 @@ public sealed class ApplePlatformHost : IPlatformHost
 
     public string InstallDirectory => FileSystem.AppDataDirectory;
 
+    public string DataDirectory => Path.Combine(FileSystem.AppDataDirectory, "pan_copilot");
+
     public bool IsInstallWritable => !IsStoreManaged;
 
     public string? ProtectSecret(string? plain)

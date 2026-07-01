@@ -1,5 +1,6 @@
 using System.IO;
 using System.Net.Http;
+using PanCopilot.Platform;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
@@ -16,8 +17,7 @@ namespace PanCopilot.Services;
 public sealed class AdvisoryService
 {
     private const string RssUrl = "https://security.paloaltonetworks.com/rss.xml";
-    private static readonly string StatePath = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".pan_copilot", "advisories_v3.json");
+    private static string StatePath => Path.Combine(PlatformRuntime.Host.DataDirectory, "advisories_v3.json");
 
     private static readonly Regex SeverityRe = new(@"\(Severity:\s*(CRITICAL|HIGH|MEDIUM|LOW|NONE)\)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private static readonly Regex CveRe = new(@"(CVE-\d{4}-\d+)", RegexOptions.Compiled);
@@ -46,8 +46,9 @@ public sealed class AdvisoryService
     {
         try
         {
-            if (File.Exists(StatePath))
-                return JsonSerializer.Deserialize<State>(File.ReadAllText(StatePath)) ?? new State();
+            var text = SafeIO.ReadAllText(StatePath);
+            if (!string.IsNullOrEmpty(text))
+                return JsonSerializer.Deserialize<State>(text) ?? new State();
         }
         catch { }
         return new State();

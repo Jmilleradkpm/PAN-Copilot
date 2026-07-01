@@ -1,5 +1,6 @@
 using System.IO;
 using System.Text;
+using PanCopilot.Platform;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
@@ -65,8 +66,9 @@ public sealed class KnownIssuesService
     {
         try
         {
-            if (!File.Exists(path)) return new List<Issue>();
-            return JsonSerializer.Deserialize<List<Issue>>(File.ReadAllText(path)) ?? new List<Issue>();
+            var text = SafeIO.ReadAllText(path);
+            if (string.IsNullOrEmpty(text)) return new List<Issue>();
+            return JsonSerializer.Deserialize<List<Issue>>(text) ?? new List<Issue>();
         }
         catch
         {

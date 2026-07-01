@@ -22,6 +22,9 @@ public sealed class WindowsPlatformHost : IPlatformHost
 
     public string InstallDirectory => AppContext.BaseDirectory;
 
+    public string DataDirectory => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".pan_copilot");
+
     public bool IsInstallWritable =>
         !IsStoreManaged && !InstallPathService.IsProtectedInstallPath(AppContext.BaseDirectory);
 

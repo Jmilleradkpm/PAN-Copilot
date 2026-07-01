@@ -17,6 +17,9 @@ public interface IPlatformHost
 
     string InstallDirectory { get; }
 
+    /// <summary>Writable app data root (e.g. ~/.pan_copilot on Windows, Library on iOS).</summary>
+    string DataDirectory { get; }
+
     bool IsInstallWritable { get; }
 
     /// <summary>DPAPI on Windows, Keychain-backed AES on Apple.</summary>

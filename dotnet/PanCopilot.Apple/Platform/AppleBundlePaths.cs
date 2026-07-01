@@ -1,4 +1,6 @@
+using Foundation;
 using Microsoft.Maui.Storage;
+using PanCopilot.Platform;
 
 namespace PanCopilot.Apple.Platform;
 
@@ -20,13 +22,13 @@ internal static class AppleBundlePaths
         }
 
         var sourceIndex = Path.Combine(source, "index.html");
-        var cacheFresh = File.Exists(indexPath)
-            && File.Exists(sourceIndex)
-            && File.GetLastWriteTimeUtc(sourceIndex) <= File.GetLastWriteTimeUtc(indexPath);
+        var cacheFresh = SafeIO.FileExists(indexPath)
+            && SafeIO.FileExists(sourceIndex)
+            && TryGetLastWriteTimeUtc(sourceIndex) <= TryGetLastWriteTimeUtc(indexPath);
         if (cacheFresh)
             return cacheDir;
 
-        if (Directory.Exists(cacheDir))
+        if (SafeIO.DirectoryExists(cacheDir))
             Directory.Delete(cacheDir, recursive: true);
 
         Directory.CreateDirectory(cacheDir);
@@ -35,26 +37,33 @@ internal static class AppleBundlePaths
         var prompt = FindMasterPromptFile();
         if (prompt is not null)
         {
-            var destPrompt = Path.Combine(cacheDir, "..", "PAN_Copilot_Master_System_Prompt.md");
-            destPrompt = Path.GetFullPath(destPrompt);
-            if (!File.Exists(destPrompt))
+            var destPrompt = Path.Combine(FileSystem.CacheDirectory, "PAN_Copilot_Master_System_Prompt.md");
+            if (!SafeIO.FileExists(destPrompt))
                 File.Copy(prompt, destPrompt, overwrite: true);
         }
 
-        if (!File.Exists(indexPath))
+        if (!SafeIO.FileExists(indexPath))
             throw new FileNotFoundException("Frontend copy failed; index.html missing after extract.", indexPath);
 
         await Task.CompletedTask;
         return cacheDir;
     }
 
-    public static string? ResolveMasterPromptPath() => FindMasterPromptFile();
+    public static string? ResolveMasterPromptPath()
+    {
+        var bundled = FindMasterPromptFile();
+        if (bundled is not null)
+            return bundled;
+
+        var cached = Path.Combine(FileSystem.CacheDirectory, "PAN_Copilot_Master_System_Prompt.md");
+        return SafeIO.FileExists(cached) ? cached : null;
+    }
 
     private static string? FindFrontendSourceDirectory()
     {
         foreach (var dir in CandidateFrontendDirectories())
         {
-            if (Directory.Exists(dir) && File.Exists(Path.Combine(dir, "index.html")))
+            if (SafeIO.DirectoryExists(dir) && SafeIO.FileExists(Path.Combine(dir, "index.html")))
                 return dir;
         }
         return null;
@@ -64,7 +73,7 @@ internal static class AppleBundlePaths
     {
         foreach (var path in CandidatePromptFiles())
         {
-            if (File.Exists(path))
+            if (SafeIO.FileExists(path))
                 return path;
         }
         return null;
@@ -105,8 +114,26 @@ internal static class AppleBundlePaths
     private static IEnumerable<string> BundleRootDirectories()
     {
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var cursor = AppContext.BaseDirectory;
 
+#if IOS || MACCATALYST
+        var bundlePath = NSBundle.MainBundle.BundlePath;
+        if (!string.IsNullOrEmpty(bundlePath))
+        {
+            var fullBundle = Path.GetFullPath(bundlePath);
+            if (seen.Add(fullBundle))
+                yield return fullBundle;
+
+            var resourcePath = NSBundle.MainBundle.ResourcePath;
+            if (!string.IsNullOrEmpty(resourcePath))
+            {
+                var fullResource = Path.GetFullPath(resourcePath);
+                if (seen.Add(fullResource))
+                    yield return fullResource;
+            }
+        }
+        yield break;
+#else
+        var cursor = AppContext.BaseDirectory;
         for (var depth = 0; depth < 8 && !string.IsNullOrEmpty(cursor); depth++)
         {
             cursor = Path.GetFullPath(cursor);
@@ -117,17 +144,37 @@ internal static class AppleBundlePaths
                 break;
             cursor = parent;
         }
+#endif
+    }
+
+    private static DateTime TryGetLastWriteTimeUtc(string path)
+    {
+        try
+        {
+            return File.GetLastWriteTimeUtc(path);
+        }
+        catch
+        {
+            return DateTime.MinValue;
+        }
     }
 
     private static void CopyDirectory(string sourceDir, string destDir)
     {
         Directory.CreateDirectory(destDir);
-        foreach (var file in Directory.EnumerateFiles(sourceDir, "*", SearchOption.AllDirectories))
+        foreach (var file in SafeIO.EnumerateFiles(sourceDir, "*", SearchOption.AllDirectories))
         {
-            var relative = Path.GetRelativePath(sourceDir, file);
-            var target = Path.Combine(destDir, relative);
-            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-            File.Copy(file, target, overwrite: true);
+            try
+            {
+                var relative = Path.GetRelativePath(sourceDir, file);
+                var target = Path.Combine(destDir, relative);
+                Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+                File.Copy(file, target, overwrite: true);
+            }
+            catch
+            {
+                // Skip unreadable bundle entries instead of aborting startup.
+            }
         }
     }
 }

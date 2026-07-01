@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Foundation;
+using Microsoft.Maui.ApplicationModel;
 using PanCopilot.Services;
 using WebKit;
 
@@ -92,6 +93,12 @@ internal static class AppleBridgeSession
         webView.ScrollView.ContentInsetAdjustmentBehavior = UIKit.UIScrollViewContentInsetAdjustmentBehavior.Never;
         webView.NavigationDelegate = NavigationDelegate;
 
+        // Allow file:// UI to load bundled JS/CSS from the extracted Frontend folder.
+        webView.Configuration.Preferences.SetValueForKey(
+            NSNumber.FromBoolean(true), new NSString("allowFileAccessFromFileURLs"));
+        webView.Configuration.SetValueForKey(
+            NSNumber.FromBoolean(true), new NSString("allowUniversalAccessFromFileURLs"));
+
         var key = webView.Handle;
         if (!ConfiguredWebViews.Add(key))
             return;
@@ -117,7 +124,7 @@ internal static class AppleBridgeSession
         var chat = Chat;
         if (router is null || chat is null)
         {
-            await ResolveAsync(id, null, "App services not ready").ConfigureAwait(false);
+            await ResolveAsync(id, null, "App services not ready");
             return;
         }
 
@@ -126,16 +133,16 @@ internal static class AppleBridgeSession
             var result = method switch
             {
                 "Ready" => "ok",
-                "Api" => await HandleApiAsync(router, argsObj).ConfigureAwait(false),
-                "StreamChat" => await HandleStreamChatAsync(chat, argsObj).ConfigureAwait(false),
+                "Api" => await HandleApiAsync(router, argsObj),
+                "StreamChat" => await HandleStreamChatAsync(chat, argsObj),
                 _ => throw new InvalidOperationException($"Unknown bridge method: {method}"),
             };
 
-            await ResolveAsync(id, result, null).ConfigureAwait(false);
+            await ResolveAsync(id, result, null);
         }
         catch (Exception ex)
         {
-            await ResolveAsync(id, null, ex.Message).ConfigureAwait(false);
+            await ResolveAsync(id, null, ex.Message);
         }
     }
 
@@ -145,7 +152,7 @@ internal static class AppleBridgeSession
         var method = args.Length > 0 ? args[0] ?? "GET" : "GET";
         var path = args.Length > 1 ? args[1] ?? "/" : "/";
         var body = args.Length > 2 ? args[2] : null;
-        var resp = await router.HandleAsync(method, path, body).ConfigureAwait(false);
+        var resp = await router.HandleAsync(method, path, body);
         return new JsonObject { ["status"] = resp.Status, ["body"] = resp.Body }.ToJsonString();
     }
 
@@ -158,8 +165,8 @@ internal static class AppleBridgeSession
         {
             ["streamId"] = streamId,
             ["event"] = ev,
-        })).ConfigureAwait(false);
-        await DeliverMessageAsync(new JsonObject { ["streamId"] = streamId, ["eos"] = true }).ConfigureAwait(false);
+        }));
+        await DeliverMessageAsync(new JsonObject { ["streamId"] = streamId, ["eos"] = true });
         return "ok";
     }
 
@@ -182,7 +189,7 @@ internal static class AppleBridgeSession
         var resultJson = result is null ? "null" : JsonSerializer.Serialize(result);
         var errorJson = error is null ? "null" : JsonSerializer.Serialize(error);
         var js = $"window.__panCopilotResolve({JsonSerializer.Serialize(id)}, {resultJson}, {errorJson});";
-        return ActiveWebView.EvaluateJavaScriptAsync(js);
+        return RunOnWebViewThreadAsync(() => ActiveWebView!.EvaluateJavaScriptAsync(js));
     }
 
     private static Task DeliverMessageAsync(JsonObject obj)
@@ -191,7 +198,15 @@ internal static class AppleBridgeSession
             return Task.CompletedTask;
 
         var js = $"window.__panCopilotDeliverMessage({obj.ToJsonString()});";
-        return ActiveWebView.EvaluateJavaScriptAsync(js);
+        return RunOnWebViewThreadAsync(() => ActiveWebView!.EvaluateJavaScriptAsync(js));
+    }
+
+    private static Task RunOnWebViewThreadAsync(Func<Task> action)
+    {
+        if (MainThread.IsMainThread)
+            return action();
+
+        return MainThread.InvokeOnMainThreadAsync(action);
     }
 
     private sealed class PanCopilotScriptHandler : NSObject, IWKScriptMessageHandler
@@ -203,7 +218,9 @@ internal static class AppleBridgeSession
 
             var id = dict["id"]?.ToString() ?? "";
             var method = dict["method"]?.ToString() ?? "";
-            _ = HandleMessageAsync(id, method, dict["args"] as NSObject);
+            _ = HandleMessageAsync(id, method, dict["args"] as NSObject).ContinueWith(
+                t => { if (t.IsFaulted) System.Diagnostics.Debug.WriteLine(t.Exception); },
+                TaskContinuationOptions.OnlyOnFaulted);
         }
     }
 }

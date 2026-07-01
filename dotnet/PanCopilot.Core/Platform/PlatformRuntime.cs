@@ -35,6 +35,8 @@ internal sealed class DefaultPlatformHost : IPlatformHost
         && !string.Equals(Environment.GetEnvironmentVariable("ADK_FORCE_DIRECT_UPDATES"), "1", StringComparison.Ordinal);
     public bool IsPackaged => false;
     public string InstallDirectory => AppContext.BaseDirectory;
+    public string DataDirectory => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".pan_copilot");
     public bool IsInstallWritable => true;
     public string? ProtectSecret(string? plain) => plain;
     public string? UnprotectSecret(string? stored) => stored;
