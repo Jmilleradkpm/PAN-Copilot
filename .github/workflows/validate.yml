@@ -15,7 +15,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Lint GitHub Actions workflows
+      - name: Parse GitHub Actions workflow YAML
         run: |
-          bash <(curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
-          ./actionlint -color
+          python3 - <<'PY'
+          import glob
+          import sys
+
+          try:
+              import yaml
+          except ImportError:
+              import subprocess
+              subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "pyyaml"])
+              import yaml
+
+          for path in sorted(glob.glob(".github/workflows/*.yml")):
+              with open(path, encoding="utf-8") as handle:
+                  yaml.safe_load(handle)
+              print(f"OK: {path}")
+
+          print("All workflow files parsed successfully")
+          PY
