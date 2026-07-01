@@ -13,7 +13,9 @@ if [[ -f "$ROOT/scripts/apple-store.env" ]]; then
 fi
 
 VERSION="${1:-3.20}"
-VERSION_TAG="v${VERSION#v}"
+VERSION="${VERSION#v}"
+VERSION_TAG="$VERSION"
+BUILD_NUMBER="${VERSION//./}"
 BUILD_CONFIG="${BUILD_CONFIG:-Release}"
 OUT="$ROOT/publish/appstore"
 
@@ -27,10 +29,16 @@ export PATH="${HOME}/.dotnet:${PATH}"
 echo "==> Version ${VERSION_TAG}"
 echo "==> Team ${APPLE_TEAM_ID}"
 
-for proj in PanCopilot.Core/PanCopilot.Core.csproj PanCopilot.Apple/PanCopilot.Apple.csproj; do
-  sed -i '' "s/<ApplicationDisplayVersion>.*<\/ApplicationDisplayVersion>/<ApplicationDisplayVersion>${VERSION_TAG}<\/ApplicationDisplayVersion>/" "$proj" 2>/dev/null \
-    || sed -i "s/<ApplicationDisplayVersion>.*<\/ApplicationDisplayVersion>/<ApplicationDisplayVersion>${VERSION_TAG}<\/ApplicationDisplayVersion>/" "$proj"
-done
+DISPLAY_VERSION="${VERSION}.0"
+[[ "$VERSION" == *.*.* ]] && DISPLAY_VERSION="$VERSION"
+sed -i '' "s/<Version>.*<\/Version>/<Version>${DISPLAY_VERSION}<\/Version>/" PanCopilot.Core/PanCopilot.Core.csproj 2>/dev/null \
+  || sed -i "s/<Version>.*<\/Version>/<Version>${DISPLAY_VERSION}<\/Version>/" PanCopilot.Core/PanCopilot.Core.csproj
+sed -i '' "s/<ApplicationDisplayVersion>.*<\/ApplicationDisplayVersion>/<ApplicationDisplayVersion>${DISPLAY_VERSION}<\/ApplicationDisplayVersion>/" PanCopilot.Apple/PanCopilot.Apple.csproj 2>/dev/null \
+  || sed -i "s/<ApplicationDisplayVersion>.*<\/ApplicationDisplayVersion>/<ApplicationDisplayVersion>${DISPLAY_VERSION}<\/ApplicationDisplayVersion>/" PanCopilot.Apple/PanCopilot.Apple.csproj
+# CFBundleVersion build number (e.g. 3.20.0 -> 3200)
+BUILD_INT=$(echo "$DISPLAY_VERSION" | tr -d '.')
+sed -i '' "s/<ApplicationVersion>.*<\/ApplicationVersion>/<ApplicationVersion>${BUILD_INT}<\/ApplicationVersion>/" PanCopilot.Apple/PanCopilot.Apple.csproj 2>/dev/null \
+  || sed -i "s/<ApplicationVersion>.*<\/ApplicationVersion>/<ApplicationVersion>${BUILD_INT}<\/ApplicationVersion>/" PanCopilot.Apple/PanCopilot.Apple.csproj
 
 if [[ ! -f PanCopilot.Core/Services/system_prompt.bin ]]; then
   if [[ -f PAN_Copilot_Master_System_Prompt.md ]]; then
@@ -41,7 +49,7 @@ if [[ ! -f PanCopilot.Core/Services/system_prompt.bin ]]; then
   fi
 fi
 
-dotnet restore PanCopilot.sln
+dotnet restore PanCopilot.Apple/PanCopilot.Apple.csproj
 
 mkdir -p "$OUT/maccatalyst" "$OUT/ios"
 

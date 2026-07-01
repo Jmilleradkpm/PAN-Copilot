@@ -13,7 +13,7 @@
     <ApplicationTitle>ADK Cyber AI</ApplicationTitle>
     <ApplicationId>com.adkcyber.pancopilot</ApplicationId>
     <ApplicationDisplayVersion>3.20.0</ApplicationDisplayVersion>
-    <ApplicationVersion>320</ApplicationVersion>
+    <ApplicationVersion>3200</ApplicationVersion>
 
     <SupportedOSPlatformVersion Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'ios'">15.0</SupportedOSPlatformVersion>
     <SupportedOSPlatformVersion Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'maccatalyst'">15.0</SupportedOSPlatformVersion>
