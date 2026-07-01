@@ -321,13 +321,30 @@
     }
     html.platform-touch #kb-dropdown-wrap {
       display: flex !important;
+      flex-direction: column;
       width: 100%;
       position: relative;
+      overflow: visible;
     }
     html.platform-touch #kb-dropdown-btn {
       width: 100%;
       justify-content: center;
       box-sizing: border-box;
+    }
+    html.platform-touch #kb-dropdown-menu {
+      position: static;
+      display: none;
+      width: 100%;
+      min-width: 0;
+      margin-top: 6px;
+      max-height: 50vh;
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.35);
+      z-index: 400;
+    }
+    html.platform-touch #kb-dropdown-menu.open {
+      display: block;
     }
     html.platform-touch #context-chips {
       flex-wrap: wrap;
@@ -341,13 +358,15 @@
     html.platform-touch #app,
     html.platform-touch #center,
     html.platform-touch #messages,
-    html.platform-touch #context-bar,
     html.platform-touch #input-bar {
       max-width: 100%;
       overflow-x: hidden;
       box-sizing: border-box;
     }
     html.platform-touch #context-bar {
+      overflow: visible;
+      max-width: 100%;
+      box-sizing: border-box;
       padding-left: max(12px, env(safe-area-inset-left, 0px));
       padding-right: max(12px, env(safe-area-inset-right, 0px));
     }
@@ -1791,7 +1810,7 @@
         <span id="context-desc" class="desktop-context-line">· Select a product from the left to focus the chat, or ask anything below.</span>
         <span class="kb-hdr-sep desktop-context-line">|</span>
         <div id="kb-dropdown-wrap">
-          <button id="kb-dropdown-btn" onclick="toggleKbDropdown()">📚 Palo KB Articles <span id="kb-dropdown-caret">▾</span></button>
+          <button id="kb-dropdown-btn" onclick="toggleKbDropdown(event)">📚 Palo KB Articles <span id="kb-dropdown-caret">▾</span></button>
           <div id="kb-dropdown-menu">
             <button class="kb-dd-item" onclick="askKb('kb-gp-prelogon-001'); closeKbDropdown()">
               <span class="kb-dd-icon">🔒</span>
@@ -3547,12 +3566,17 @@ document.addEventListener('keydown', function (e) {
 });
 
 // ── KB header dropdown ────────────────────────────────────────────
-function toggleKbDropdown() {
+function toggleKbDropdown(e) {
+  if (e) e.stopPropagation();
   const btn  = document.getElementById('kb-dropdown-btn');
   const menu = document.getElementById('kb-dropdown-menu');
   const open = menu.classList.contains('open');
   if (open) { menu.classList.remove('open'); btn.classList.remove('open'); }
-  else       { menu.classList.add('open');    btn.classList.add('open');   }
+  else {
+    closeHistoryDrop();
+    menu.classList.add('open');
+    btn.classList.add('open');
+  }
 }
 function closeKbDropdown() {
   document.getElementById('kb-dropdown-menu').classList.remove('open');
