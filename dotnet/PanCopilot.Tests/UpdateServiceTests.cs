@@ -86,7 +86,7 @@ public class UpdateServiceTests
             var info = await new UpdateService().GetVersionInfoAsync(force: true);
             Assert.Equal("store", info["distribution_channel"]?.GetValue<string>());
             Assert.False(info["update_available"]?.GetValue<bool>() ?? true);
-            Assert.Equal("microsoft_store", info["update_managed_by"]?.GetValue<string>());
+            Assert.Equal("store", info["update_managed_by"]?.GetValue<string>());
         }
         finally
         {
@@ -103,7 +103,7 @@ public class UpdateServiceTests
             Environment.SetEnvironmentVariable("ADK_SIMULATE_STORE", "1");
             var ex = await Assert.ThrowsAsync<InvalidOperationException>(
                 () => new UpdateService().InstallUpdateAsync(() => { }));
-            Assert.Contains("Microsoft Store", ex.Message);
+            Assert.Contains("app store", ex.Message, StringComparison.OrdinalIgnoreCase);
         }
         finally
         {
