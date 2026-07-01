@@ -83,7 +83,11 @@ public sealed class KbService
         "prisma", "globalprotect", "decryption", "user-id", "nat", "app-id",
     };
 
-    private const int AugmentMaxChars = 14_000;
+    // ~1,500 tokens of excerpts per augmented message. This text bills at full
+    // input price every time augmentation fires (and is replayed in history),
+    // and the prompt already tells the model to synthesize rather than quote —
+    // 2-3 focused sections carry the value.
+    private const int AugmentMaxChars = 6_000;
     private const int AugmentMaxSections = 5;
 
     public List<Entry> Index { get; }

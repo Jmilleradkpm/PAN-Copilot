@@ -180,7 +180,7 @@ public sealed class ChatService
         // ── conversation + messages ──────────────────────────────────────
         var convId = _conversations.GetOrCreate(convIdReq);
         var historyLimit = provider == "local" ? _settings.Current.local_history_turns : 40;
-        var history = _conversations.History(convId, historyLimit);
+        var history = _conversations.History(convId, historyLimit, stablePrefix: provider != "local");
 
         var messages = new JsonArray();
         foreach (var (role, content) in history)
@@ -340,7 +340,13 @@ public sealed class ChatService
         var (persistedMsg, _) = ConfigSanitizer.Sanitize(message);
         if (nImages > 0)
             persistedMsg = persistedMsg.TrimEnd() + $"\n\n[{nImages} image{(nImages != 1 ? "s" : "")} attached]";
-        _conversations.SaveMessages(convId, persistedMsg, full.ToString());
+        // Record the sent form (config paste / KB excerpts) when it differs from
+        // the display form, so follow-up turns replay the full context: the model
+        // keeps seeing the config, and the request prefix matches what the
+        // Anthropic cache stored on this turn. Image blocks are not persisted —
+        // an image turn still takes a one-time cache miss on the next message.
+        _conversations.SaveMessages(convId, persistedMsg, full.ToString(),
+            userSent: userText != persistedMsg ? userText : null);
         _conversations.AutoTitle(convId, persistedMsg);
 
         await emit(new JsonObject

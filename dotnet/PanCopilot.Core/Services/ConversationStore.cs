@@ -34,6 +34,12 @@ public sealed class ConversationStore
     {
         public string role { get; set; } = "user";
         public string content { get; set; } = "";
+        // What was actually sent to the model when it differs from the display
+        // content (config paste blocks, KB augmentation excerpts). History()
+        // replays this form so follow-up turns keep the full context AND the
+        // request prefix matches what the Anthropic cache stored last turn.
+        // Null = content was sent verbatim.
+        public string? sent { get; set; }
         public string created_at { get; set; } = "";
     }
 
@@ -108,12 +114,31 @@ public sealed class ConversationStore
         return c.id;
     }
 
-    /// <summary>Recent history as chronological {role,content} pairs (default cap 40 like the Python build).</summary>
-    public List<(string Role, string Content)> History(string id, int limit = 40)
+    /// <summary>Recent history as chronological {role,content} pairs (default cap 40 like the
+    /// Python build). Replays the sent form of each turn when one was recorded.
+    /// With <paramref name="stablePrefix"/> (cloud provider), trimming happens in fixed
+    /// 12-message chunks instead of a sliding window: TakeLast would shift the window
+    /// forward every turn once the cap is hit, changing the prompt prefix from the front
+    /// and busting the Anthropic prompt cache on every message. A stepped start index
+    /// keeps the prefix stable for ~6 turns between trims (window may exceed the cap by
+    /// up to 11 messages). Local models keep the exact sliding cap — they have hard
+    /// context budgets and no prompt cache.</summary>
+    public List<(string Role, string Content)> History(string id, int limit = 40, bool stablePrefix = false)
     {
         var c = Load(id);
         if (c == null) return new();
-        return c.messages.TakeLast(Math.Max(0, limit)).Select(m => (m.role, m.content)).ToList();
+        IEnumerable<Msg> window;
+        if (stablePrefix)
+        {
+            const int TrimChunk = 12;   // even, so the window always starts on a user turn
+            var rawStart = Math.Max(0, c.messages.Count - Math.Max(0, limit));
+            window = c.messages.Skip(rawStart / TrimChunk * TrimChunk);
+        }
+        else
+        {
+            window = c.messages.TakeLast(Math.Max(0, limit));
+        }
+        return window.Select(m => (m.role, m.sent ?? m.content)).ToList();
     }
 
     /// <summary>Model pinned to this conversation by a previous cloud turn, or null.</summary>
@@ -128,11 +153,11 @@ public sealed class ConversationStore
         Store(c);
     }
 
-    public void SaveMessages(string id, string userMsg, string assistantMsg)
+    public void SaveMessages(string id, string userMsg, string assistantMsg, string? userSent = null)
     {
         var c = Load(id) ?? new Conv { id = SanitizeId(id), created_at = NowIso() };
         var ts = NowIso();
-        c.messages.Add(new Msg { role = "user", content = userMsg, created_at = ts });
+        c.messages.Add(new Msg { role = "user", content = userMsg, sent = userSent, created_at = ts });
         c.messages.Add(new Msg { role = "assistant", content = assistantMsg, created_at = ts });
         c.updated_at = ts;
         Store(c);
