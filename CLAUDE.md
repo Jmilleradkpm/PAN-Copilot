@@ -202,6 +202,7 @@ Workflow does, in order:
 | Producer/consumer mismatch on version-info | InstallUpdateAsync read `download_url` from a cache GetVersionInfoAsync never wrote it into. Both halves' unit tests passed; the chain didn't. | When adding a field, grep both writer and reader. Add an end-to-end test. |
 | Bitdefender ATC flags Inno Setup installer activity | Behavioral heuristic on `setup.tmp` / `unins000.exe` / `.lnk` creation, regardless of code-signing. | Portable zip distribution. Threat-name exclusion `Atc4.Detection` for jmill's own machine only. |
 | `Application.Current.Shutdown()` inside an HTTP await chain | Synchronously tears down the dispatcher before the response can flush. Frontend reports "Download failed" on a successful update. | Defer via `Task.Run` with a small delay; let the bridge serialize first. |
+| LM Studio answers unknown routes with HTTP 200 + `{"error":...}` | A local-LLM base URL missing `/v1` makes chat, test, and model-list all "succeed" while streaming nothing: empty bubbles, `0 in 0 out`, green connection test. | `LocalLlmService.NormalizeBaseUrl` appends `/v1` to bare host:port URLs; 2xx responses carrying an `error` body are surfaced as real errors. |
 
 ---
 

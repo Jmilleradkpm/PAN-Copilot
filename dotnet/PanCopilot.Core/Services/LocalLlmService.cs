@@ -19,10 +19,27 @@ public sealed class LocalLlmService
 
     public sealed record Httpish(int Status, JsonObject Body);
 
+    /// <summary>
+    /// LM Studio, Ollama, and vLLM all serve the OpenAI API under /v1, and a
+    /// bare host:port (the most common paste) answers HTTP 200 with a JSON
+    /// error body for unknown routes — so requests "succeed" while streaming
+    /// nothing. Append /v1 when the URL has no path to head that off.
+    /// </summary>
+    public static string NormalizeBaseUrl(string? baseUrl)
+    {
+        var trimmed = (baseUrl ?? "").Trim().TrimEnd('/');
+        if (trimmed.Length == 0) return trimmed;
+        if (Uri.TryCreate(trimmed, UriKind.Absolute, out var uri)
+            && uri.Scheme is "http" or "https"
+            && (uri.AbsolutePath.Length == 0 || uri.AbsolutePath == "/"))
+            return trimmed + "/v1";
+        return trimmed;
+    }
+
     /// <summary>POST /api/local_llm/test — one-token ping, returns latency.</summary>
     public async Task<Httpish> TestAsync(string baseUrl, string model, string? apiKey)
     {
-        var baseTrim = (baseUrl ?? "").TrimEnd('/');
+        var baseTrim = NormalizeBaseUrl(baseUrl);
         if (string.IsNullOrEmpty(baseTrim))
             return new(400, Err("Base URL is required."));
         var url = baseTrim + "/chat/completions";
@@ -45,18 +62,22 @@ public sealed class LocalLlmService
         catch (HttpRequestException) { return new(503, Err($"Cannot reach {url}. Is your local LLM server running? Try 'ollama serve' or enable the server toggle in LM Studio.")); }
         catch (Exception e) { return new(500, Err($"Connection failed: {e.Message}")); }
         var latency = Environment.TickCount64 - started;
+        var respText = await resp.Content.ReadAsStringAsync();
         if ((int)resp.StatusCode >= 400)
-        {
-            var text = await resp.Content.ReadAsStringAsync();
-            return new((int)resp.StatusCode, Err($"Server returned HTTP {(int)resp.StatusCode}: {Truncate(text, 300)}"));
-        }
+            return new((int)resp.StatusCode, Err($"Server returned HTTP {(int)resp.StatusCode}: {Truncate(respText, 300)}"));
+        // LM Studio answers unknown routes with HTTP 200 + {"error": ...}, so a
+        // status check alone reports success against a wrong Base URL.
+        var serverError = ExtractServerError(respText);
+        if (serverError != null)
+            return new(502, Err($"Server reported an error: {Truncate(serverError, 300)} — " +
+                "check that the Base URL points at the OpenAI-compatible API root (it usually ends in /v1)."));
         return new(200, new JsonObject { ["ok"] = true, ["latency_ms"] = latency, ["model"] = model });
     }
 
     /// <summary>GET /api/local_llm/models — {models:[ids], count}.</summary>
     public async Task<Httpish> ListModelsAsync(string baseUrl, string? apiKey)
     {
-        var baseTrim = (baseUrl ?? "").TrimEnd('/');
+        var baseTrim = NormalizeBaseUrl(baseUrl);
         if (string.IsNullOrEmpty(baseTrim)) return new(400, Err("base_url is required."));
         var url = baseTrim + "/models";
         HttpResponseMessage resp;
@@ -70,6 +91,10 @@ public sealed class LocalLlmService
         var text = await resp.Content.ReadAsStringAsync();
         if ((int)resp.StatusCode >= 400)
             return new((int)resp.StatusCode, Err($"Server returned HTTP {(int)resp.StatusCode}: {Truncate(text, 300)}"));
+        var listError = ExtractServerError(text);
+        if (listError != null)
+            return new(502, Err($"Server reported an error: {Truncate(listError, 300)} — " +
+                "check that the Base URL points at the OpenAI-compatible API root (it usually ends in /v1)."));
         try
         {
             using var doc = JsonDocument.Parse(text);
@@ -128,15 +153,21 @@ public sealed class LocalLlmService
         };
     }
 
-    /// <summary>Stream chat from the local OpenAI-compatible server. Returns output token estimate.</summary>
+    /// <summary>
+    /// Stream chat from the local OpenAI-compatible server. Returns output token
+    /// estimate. <paramref name="onThinking"/> fires with true when the model
+    /// enters a hidden reasoning phase (delta.reasoning_content) and false when
+    /// visible content starts, so the UI can show progress instead of dead air.
+    /// </summary>
     public async Task<int> StreamChatAsync(
         SettingsStore.Settings st,
         JsonArray messages,
         string? system,
         Func<string, Task> onDelta,
+        Func<bool, Task>? onThinking = null,
         CancellationToken ct = default)
     {
-        var url = st.local_base_url.TrimEnd('/') + "/chat/completions";
+        var url = NormalizeBaseUrl(st.local_base_url) + "/chat/completions";
         var msgs = new JsonArray();
         if (!string.IsNullOrEmpty(system))
             msgs.Add(new JsonObject { ["role"] = "system", ["content"] = system });
@@ -162,31 +193,104 @@ public sealed class LocalLlmService
         }
 
         int chars = 0;
+        var reasoning = false;     // currently inside a hidden reasoning phase
+        var sawReasoning = false;
+        string? serverError = null;
+        var stray = new StringBuilder();  // non-SSE body lines, kept for diagnostics
         await using var stream = await resp.Content.ReadAsStreamAsync(ct);
         using var reader = new StreamReader(stream, Encoding.UTF8);
         while (!reader.EndOfStream)
         {
             var line = await reader.ReadLineAsync(ct);
             if (line is null) break;
-            if (!line.StartsWith("data: ", StringComparison.Ordinal)) continue;
+            if (!line.StartsWith("data: ", StringComparison.Ordinal))
+            {
+                // A well-formed SSE stream only has data:/blank lines. LM Studio
+                // answers unknown routes with HTTP 200 + a bare JSON error body,
+                // so keep anything else for the empty-stream diagnostic below.
+                if (line.Length > 0 && stray.Length < 500) stray.Append(line);
+                continue;
+            }
             var payload = line.Substring(6);
             if (payload == "[DONE]") break;
             try
             {
                 using var doc = JsonDocument.Parse(payload);
+                serverError = ExtractServerError(doc.RootElement);
+                if (serverError != null) break;
                 if (doc.RootElement.TryGetProperty("choices", out var ch) && ch.GetArrayLength() > 0)
                 {
                     var c0 = ch[0];
-                    if (c0.TryGetProperty("delta", out var d) && d.TryGetProperty("content", out var content))
+                    if (c0.TryGetProperty("delta", out var d))
                     {
-                        var text = content.GetString();
-                        if (!string.IsNullOrEmpty(text)) { chars += text.Length; await onDelta(text); }
+                        if (!reasoning && chars == 0 && d.TryGetProperty("reasoning_content", out _))
+                        {
+                            reasoning = true;
+                            sawReasoning = true;
+                            if (onThinking != null) await onThinking(true);
+                        }
+                        if (d.TryGetProperty("content", out var content))
+                        {
+                            var text = content.GetString();
+                            if (!string.IsNullOrEmpty(text))
+                            {
+                                if (reasoning)
+                                {
+                                    reasoning = false;
+                                    if (onThinking != null) await onThinking(false);
+                                }
+                                chars += text.Length;
+                                await onDelta(text);
+                            }
+                        }
                     }
                 }
             }
             catch (JsonException) { }
         }
+
+        serverError ??= ExtractServerError(stray.ToString());
+        if (serverError != null)
+            throw new HttpRequestException($"Local LLM error: {Truncate(serverError, 300)} — " +
+                "check that the Base URL points at the OpenAI-compatible API root (it usually ends in /v1), " +
+                "e.g. http://localhost:1234/v1 for LM Studio.");
+        if (chars == 0 && sawReasoning)
+            throw new HttpRequestException("The model spent its entire response on hidden reasoning and never " +
+                "produced an answer. Raise 'Max output tokens' in Settings → My local LLM, or pick a non-reasoning model.");
+        if (chars == 0)
+            throw new HttpRequestException("The local LLM returned an empty response." +
+                (stray.Length > 0 ? $" Server said: {Truncate(stray.ToString(), 300)}" : ""));
         return chars / 4;
+    }
+
+    /// <summary>
+    /// Pull a human-readable message out of an OpenAI-style error body —
+    /// {"error":"..."} or {"error":{"message":"..."}} — or null when the JSON
+    /// has no error (or isn't JSON at all).
+    /// </summary>
+    private static string? ExtractServerError(string body)
+    {
+        if (string.IsNullOrWhiteSpace(body)) return null;
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            return ExtractServerError(doc.RootElement);
+        }
+        catch (JsonException) { return null; }
+    }
+
+    private static string? ExtractServerError(JsonElement root)
+    {
+        if (root.ValueKind != JsonValueKind.Object || !root.TryGetProperty("error", out var err))
+            return null;
+        return err.ValueKind switch
+        {
+            JsonValueKind.String => err.GetString(),
+            JsonValueKind.Object => err.TryGetProperty("message", out var m) && m.ValueKind == JsonValueKind.String
+                ? m.GetString() : err.GetRawText(),
+            JsonValueKind.Null => null,
+            _ => err.GetRawText(),
+        };
     }
 
     // ─── Auto-detect a local OpenAI-compatible server on first launch ──────

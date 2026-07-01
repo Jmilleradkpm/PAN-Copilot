@@ -35,8 +35,10 @@ sed -i '' "s/<Version>.*<\/Version>/<Version>${DISPLAY_VERSION}<\/Version>/" Pan
   || sed -i "s/<Version>.*<\/Version>/<Version>${DISPLAY_VERSION}<\/Version>/" PanCopilot.Core/PanCopilot.Core.csproj
 sed -i '' "s/<ApplicationDisplayVersion>.*<\/ApplicationDisplayVersion>/<ApplicationDisplayVersion>${DISPLAY_VERSION}<\/ApplicationDisplayVersion>/" PanCopilot.Apple/PanCopilot.Apple.csproj 2>/dev/null \
   || sed -i "s/<ApplicationDisplayVersion>.*<\/ApplicationDisplayVersion>/<ApplicationDisplayVersion>${DISPLAY_VERSION}<\/ApplicationDisplayVersion>/" PanCopilot.Apple/PanCopilot.Apple.csproj
-# CFBundleVersion build number (e.g. 3.20.0 -> 3200)
-BUILD_INT=$(echo "$DISPLAY_VERSION" | tr -d '.')
+# CFBundleVersion build number (e.g. 3.20.0 -> 3200). App Store Connect
+# requires ascending build numbers, so once iterations push past the derived
+# value (3.20.0 shipped as 3207), override with APPLE_BUILD_NUMBER.
+BUILD_INT="${APPLE_BUILD_NUMBER:-$(echo "$DISPLAY_VERSION" | tr -d '.')}"
 sed -i '' "s/<ApplicationVersion>.*<\/ApplicationVersion>/<ApplicationVersion>${BUILD_INT}<\/ApplicationVersion>/" PanCopilot.Apple/PanCopilot.Apple.csproj 2>/dev/null \
   || sed -i "s/<ApplicationVersion>.*<\/ApplicationVersion>/<ApplicationVersion>${BUILD_INT}<\/ApplicationVersion>/" PanCopilot.Apple/PanCopilot.Apple.csproj
 

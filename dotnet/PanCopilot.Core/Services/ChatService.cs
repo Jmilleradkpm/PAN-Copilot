@@ -242,7 +242,8 @@ public sealed class ChatService
             {
                 resolvedModel = _settings.Current.local_model;
                 outputTokens = await _localLlm.StreamChatAsync(_settings.Current, messages, _systemPrompt,
-                    async text => { full.Append(text); await emit(new JsonObject { ["type"] = "token", ["text"] = text }); });
+                    async text => { full.Append(text); await emit(new JsonObject { ["type"] = "token", ["text"] = text }); },
+                    async thinking => await emit(new JsonObject { ["type"] = thinking ? "thinking_start" : "thinking_end" }));
             }
             else
             {
