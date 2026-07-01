@@ -27,6 +27,9 @@
     <Compile Remove="PanCopilot.Tests\**" />
     <Compile Remove="PanCopilot.Core\**" />
     <Compile Remove="PanCopilot.Apple\**" />
+    <Page Remove="PanCopilot.Tests\**" />
+    <Page Remove="PanCopilot.Core\**" />
+    <Page Remove="PanCopilot.Apple\**" />
     <Content Remove="PanCopilot.Tests\**" />
     <Content Remove="PanCopilot.Core\**" />
     <Content Remove="PanCopilot.Apple\**" />
