@@ -44,9 +44,26 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <MauiIcon Include="Resources\AppIcon\appicon.svg" ForegroundFile="Resources\AppIcon\appiconfg.svg" Color="#1e3a5f" />
-    <MauiSplashScreen Include="Resources\Splash\splash.svg" Color="#0d1117" BaseSize="128,128" />
+    <MauiIcon Include="Resources\AppIcon\appicon.png" />
+    <MauiSplashScreen Include="Resources\AppIcon\appicon.png" Color="#0a1628" BaseSize="128,128" />
   </ItemGroup>
+
+  <ItemGroup Condition="'$(TargetPlatformIdentifier)' == 'maccatalyst'">
+    <BundleResource Include="Resources\AppIcon\appicon.icns" LogicalName="appicon.icns" />
+  </ItemGroup>
+
+  <Target Name="PatchMacCatalystAppIcon"
+          AfterTargets="ResizetizeImages"
+          BeforeTargets="_CoreCompileImageAssets"
+          Condition="'$(TargetPlatformIdentifier)' == 'maccatalyst'">
+    <PropertyGroup>
+      <_MacAppIconSet>$([System.IO.Path]::GetFullPath('$(_MauiIntermediateImages)Assets.xcassets/appicon.appiconset'))</_MacAppIconSet>
+    </PropertyGroup>
+    <Exec Command="bash &quot;$(MSBuildProjectDirectory)/scripts/patch-maccatalyst-appicon.sh&quot; &quot;$(_MacAppIconSet)&quot;" />
+    <RemoveDir Directories="$(DeviceSpecificIntermediateOutputPath)actool" Condition="Exists('$(DeviceSpecificIntermediateOutputPath)actool')" />
+    <Delete Files="$(DeviceSpecificIntermediateOutputPath)actool\_PartialAppManifest.items;$(DeviceSpecificIntermediateOutputPath)actool\_BundleResourceWithLogicalName.items"
+            Condition="Exists('$(DeviceSpecificIntermediateOutputPath)actool\_PartialAppManifest.items')" />
+  </Target>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Maui.Controls" Version="8.0.100" />
