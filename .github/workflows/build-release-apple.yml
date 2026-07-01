@@ -3,7 +3,7 @@
 # ============================================================
 # Builds PanCopilot.Apple from PanCopilot.Core + shared Frontend.
 # Requires macOS + Xcode for signing. Produces unsigned artifacts
-# on PR/manual runs; wire signing secrets for App Store distribution.
+# on manual runs; wire signing secrets for App Store distribution.
 # ============================================================
 name: Build Apple (.NET MAUI)
 
