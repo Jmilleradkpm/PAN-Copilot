@@ -19,9 +19,11 @@ internal static class AppleBridgeSession
   window.__panCopilotBridgeInstalled = true;
   document.documentElement.classList.add('platform-apple');
   const ua = navigator.userAgent || '';
-  if (/iPhone|iPad|iPod/i.test(ua))
-    document.documentElement.classList.add('platform-touch');
-  else if (window.matchMedia('(pointer: coarse)').matches)
+  const platform = navigator.platform || '';
+  const isIos = /iPhone|iPad|iPod/i.test(ua)
+    || /iPhone|iPad|iPod/i.test(platform)
+    || (navigator.maxTouchPoints > 1 && /Mac/i.test(platform) && window.innerWidth < 500);
+  if (isIos || window.matchMedia('(pointer: coarse)').matches || window.innerWidth < 500)
     document.documentElement.classList.add('platform-touch');
 
   const pending = new Map();
@@ -85,6 +87,9 @@ internal static class AppleBridgeSession
         webView.Opaque = false;
         webView.BackgroundColor = UIKit.UIColor.Clear;
         webView.ScrollView.BackgroundColor = UIKit.UIColor.Clear;
+        webView.ScrollView.ShowsHorizontalScrollIndicator = false;
+        webView.ScrollView.AlwaysBounceHorizontal = false;
+        webView.ScrollView.ContentInsetAdjustmentBehavior = UIKit.UIScrollViewContentInsetAdjustmentBehavior.Never;
         webView.NavigationDelegate = NavigationDelegate;
 
         var key = webView.Handle;
