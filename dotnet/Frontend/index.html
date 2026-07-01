@@ -266,11 +266,56 @@
     html.platform-touch #header .h-ver { display: none; }
     html.platform-touch #header .h-sub { display: none !important; }
     html.platform-touch #header .h-spacer { display: none; }
-    html.platform-touch #history-wrap { flex-shrink: 0; }
+    html.platform-touch #history-wrap {
+      display: block !important;
+      flex-shrink: 0;
+      position: relative;
+    }
+    html.platform-touch #header .header-icon-btn {
+      flex-shrink: 0;
+      background: var(--surface2);
+      border: 1px solid var(--border-dim);
+      border-radius: 20px;
+      color: var(--text-sub);
+      cursor: pointer;
+      font-size: 16px;
+      line-height: 1;
+      padding: 5px 9px;
+      font-family: inherit;
+      transition: border-color 0.15s, color 0.15s;
+    }
+    html.platform-touch #header .header-icon-btn:hover,
+    html.platform-touch #header .header-icon-btn.open {
+      border-color: var(--accent);
+      color: var(--text);
+    }
+    html.platform-touch #mobile-new-chat-btn {
+      font-size: 18px;
+      font-weight: 700;
+      padding: 4px 10px;
+    }
     html.platform-touch #history-btn {
-      padding: 5px 8px; font-size: 11px;
+      padding: 5px 8px;
+      font-size: 16px;
+      background: var(--surface2);
+      border: 1px solid var(--border-dim);
+      border-radius: 20px;
+      color: var(--text-sub);
+      cursor: pointer;
+      font-family: inherit;
+      line-height: 1;
+    }
+    html.platform-touch #history-btn.open {
+      border-color: var(--accent);
+      color: var(--text);
     }
     html.platform-touch #history-btn .history-btn-label { display: none; }
+    html.platform-touch #mobile-header-actions {
+      display: flex !important;
+      align-items: center;
+      gap: 6px;
+      flex-shrink: 0;
+    }
     html.platform-touch #local-badge { display: none !important; }
     html.platform-touch #tier-badge { display: none !important; }
     html.platform-touch #theme-toggle { display: none !important; }
@@ -411,10 +456,19 @@
       min-width: 0;
       max-width: 100%;
     }
+    html.platform-touch #header {
+      overflow: visible;
+    }
     html.platform-touch #history-drop {
-      width: min(290px, calc(100vw - 24px));
-      max-width: calc(100vw - 24px);
-      right: max(0px, env(safe-area-inset-right, 0px));
+      position: fixed;
+      top: calc(var(--header-h) + 4px);
+      left: max(10px, env(safe-area-inset-left, 0px));
+      right: max(10px, env(safe-area-inset-right, 0px));
+      width: auto;
+      max-width: none;
+      max-height: min(60vh, 420px);
+      z-index: 500;
+      box-shadow: 0 12px 32px rgba(0,0,0,0.45);
     }
 
     ::-webkit-scrollbar { width: 5px; height: 5px; }
@@ -591,10 +645,18 @@
         min-width: 0;
       }
       #header .h-sub,
-      #history-wrap,
       #kb-dropdown-wrap,
       #local-badge {
         display: none !important;
+      }
+      #history-wrap {
+        display: none !important;
+      }
+      html.platform-touch #history-wrap {
+        display: block !important;
+      }
+      html.platform-touch #mobile-header-actions {
+        display: flex !important;
       }
       #header {
         gap: 6px;
@@ -1556,8 +1618,12 @@
   </div>
   <div class="h-spacer"></div>
 
+  <div id="mobile-header-actions" class="touch-only">
+    <button id="mobile-new-chat-btn" class="header-icon-btn" onclick="newChat()" title="New chat" aria-label="New chat">+</button>
+  </div>
+
   <div id="history-wrap">
-    <button id="history-btn" onclick="toggleHistoryDrop()" title="Chat history">
+    <button id="history-btn" onclick="toggleHistoryDrop(event)" title="Chat history" aria-label="Chat history">
       🕐 <span class="history-btn-label">History</span>
     </button>
     <div id="history-drop">
@@ -3500,10 +3566,15 @@ async function deleteConv(e, id) {
 }
 
 // ── History header dropdown ───────────────────────────────────────
-function toggleHistoryDrop() {
+function toggleHistoryDrop(e) {
+  if (e) e.stopPropagation();
   const drop = document.getElementById('history-drop');
   const isOpen = drop.classList.contains('open');
-  if (isOpen) { closeHistoryDrop(); } else { openHistoryDrop(); }
+  if (isOpen) { closeHistoryDrop(); }
+  else {
+    closeKbDropdown();
+    openHistoryDrop();
+  }
 }
 
 function openHistoryDrop() {
@@ -3595,6 +3666,8 @@ function askKb(trigger) {
 }
 
 function newChat() {
+  closeHistoryDrop();
+  closeKbDropdown();
   currentConvId = null;
   clearMessages();
   document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
