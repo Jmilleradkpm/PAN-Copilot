@@ -224,6 +224,7 @@ jobs:
             zip_sha256       = $zipSha
             installer_url    = "https://downloads.adkcyber.com/releases/$v/ADK_Cyber_AI_Setup_$v.exe"
             installer_sha256 = $instSha
+            store_url        = "https://apps.microsoft.com/detail/9N96MGRCG0JK"
             min_app_version  = "1.0.0"
             runtime          = "dotnet-self-contained"
           } | ConvertTo-Json -Depth 3

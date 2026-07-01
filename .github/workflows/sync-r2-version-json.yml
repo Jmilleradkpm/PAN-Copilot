@@ -1,0 +1,53 @@
+# Merge version label + store_url into R2 /version.json without a full release build.
+name: Sync R2 version.json
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version label (e.g. v3.19.4)'
+        required: true
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Merge store_url into version.json and upload
+        shell: bash
+        env:
+          R2_ENDPOINT: https://${{ secrets.CF_R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
+          BUCKET: ${{ secrets.CF_R2_BUCKET }}
+          VERSION: ${{ inputs.version }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.CF_R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.CF_R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+        run: |
+          set -euo pipefail
+          MANIFEST=version.json
+          aws s3 cp "s3://${BUCKET}/version.json" "$MANIFEST" --endpoint-url "$R2_ENDPOINT" || true
+          python3 <<'PY'
+          import json, os
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          path = Path("version.json")
+          if path.exists():
+              data = json.loads(path.read_text(encoding="utf-8"))
+          else:
+              data = {
+                  "min_app_version": "1.0.0",
+                  "runtime": "dotnet-self-contained",
+              }
+
+          data["version"] = os.environ["VERSION"]
+          data["released_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+          data["store_url"] = "https://apps.microsoft.com/detail/9N96MGRCG0JK"
+
+          text = json.dumps(data, indent=2) + "\n"
+          path.write_text(text, encoding="utf-8")
+          print(text)
+          PY
+          aws s3 cp "$MANIFEST" "s3://${BUCKET}/version.json" \
+            --endpoint-url "$R2_ENDPOINT" \
+            --content-type "application/json" \
+            --cache-control "no-cache"

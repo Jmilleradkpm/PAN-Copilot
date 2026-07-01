@@ -2,7 +2,7 @@
 # ADK Cyber AI — MSIX package for Microsoft Store
 # ============================================================
 # Produces an unsigned .msix + .msixupload for Partner Center (Store re-signs after upload).
-# Does NOT touch R2 version.json — direct-download releases stay separate.
+# Also merges version + store_url into R2 /version.json (preserves zip fields for legacy clients).
 # ============================================================
 name: Build MSIX (Store)
 
@@ -66,7 +66,7 @@ jobs:
           [Array]::Copy($nonce, 0, $blob, 0, 12)
           [Array]::Copy($ct,    0, $blob, 12, $pt.Length)
           [Array]::Copy($tag,   0, $blob, 12 + $pt.Length, 16)
-          [System.IO.File]::WriteAllBytes("Services/system_prompt.bin", $blob)
+          [System.IO.File]::WriteAllBytes("PanCopilot.Core/Services/system_prompt.bin", $blob)
 
           $lines = @(
             'namespace PanCopilot.Services;'
@@ -76,7 +76,7 @@ jobs:
             "    public const string KeyB64 = `"$($env:KEY_B64)`";"
             '}'
           )
-          Set-Content -Path "Services/PromptKey.cs" -Value $lines -Encoding UTF8
+          Set-Content -Path "PanCopilot.Core/Services/PromptKey.cs" -Value $lines -Encoding UTF8
           Remove-Item "PAN_Copilot_Master_System_Prompt.md" -Force
 
       - name: Fetch known-issues corpus
@@ -118,6 +118,46 @@ jobs:
           if (-not (Test-Path ([System.IO.Path]::ChangeExtension($out, '.msixupload')))) {
             throw "Expected msixupload sibling was not created"
           }
+
+      - name: Update R2 version.json (version label + store_url)
+        shell: pwsh
+        env:
+          R2_ENDPOINT: "https://${{ secrets.CF_R2_ACCOUNT_ID }}.r2.cloudflarestorage.com"
+          BUCKET: ${{ secrets.CF_R2_BUCKET }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          aws configure set aws_access_key_id     "${{ secrets.CF_R2_ACCESS_KEY_ID }}"
+          aws configure set aws_secret_access_key "${{ secrets.CF_R2_SECRET_ACCESS_KEY }}"
+          aws configure set default.region        "auto"
+
+          $manifestPath = "version.json"
+          $hadExisting = $false
+          try {
+            aws s3 cp "s3://${env:BUCKET}/version.json" $manifestPath --endpoint-url $env:R2_ENDPOINT
+            if ($LASTEXITCODE -eq 0) { $hadExisting = $true }
+          } catch {
+            Write-Warning "No existing version.json on R2; creating a minimal manifest."
+          }
+
+          if ($hadExisting -and (Test-Path $manifestPath)) {
+            $manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json
+          } else {
+            $manifest = [ordered]@{
+              min_app_version = "1.0.0"
+              runtime         = "dotnet-self-contained"
+            }
+          }
+
+          $manifest.version     = $env:VERSION
+          $manifest.released_at = (Get-Date -Format "yyyy-MM-ddTHH:mm:ssZ")
+          $manifest.store_url   = "https://apps.microsoft.com/detail/9N96MGRCG0JK"
+
+          $json = $manifest | ConvertTo-Json -Depth 5
+          Set-Content -Path $manifestPath -Value $json -Encoding UTF8
+          Write-Host $json
+
+          aws s3 cp $manifestPath "s3://${env:BUCKET}/version.json" `
+            --endpoint-url $env:R2_ENDPOINT --content-type "application/json" --cache-control "no-cache"
 
       - name: Upload Store package artifacts
         uses: actions/upload-artifact@v4
