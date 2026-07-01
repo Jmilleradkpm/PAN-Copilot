@@ -2002,7 +2002,7 @@
         <button class="model-pill active" data-model="auto"                    onclick="setModel('auto')">⚡ Auto</button>
         <button class="model-pill"        data-model="claude-haiku-4-5-20251001" onclick="setModel('claude-haiku-4-5-20251001')">Haiku</button>
         <button class="model-pill"        data-model="claude-sonnet-4-6"         onclick="setModel('claude-sonnet-4-6')">Sonnet</button>
-        <button class="model-pill"        data-model="claude-opus-4-7"           onclick="setModel('claude-opus-4-7')">Opus</button>
+        <button class="model-pill"        data-model="claude-opus-4-8"           onclick="setModel('claude-opus-4-8')">Opus</button>
         <span id="provider-mode-pill" onclick="toggleProvider()"></span>
       </div>
       <div id="input-hint">
@@ -3804,6 +3804,10 @@ function prefillInput(text) {
 const MAX_IMAGES_PER_MSG = 4;
 const MAX_IMAGE_BYTES    = 5 * 1024 * 1024;
 const ALLOWED_IMAGE_TYPES = new Set(['image/png','image/jpeg','image/gif','image/webp']);
+// Anthropic bills roughly (width x height) / 750 tokens per image; a full-res
+// screenshot costs ~3x what a 1092px one does with no practical quality loss
+// for firewall-UI reading. Downscale before base64-encoding.
+const MAX_IMAGE_EDGE = 1092;
 let pendingImages = [];  // [{ media_type, data (b64), dataUrl, sizeBytes }]
 
 function fmtKB(n) {
@@ -3858,18 +3862,47 @@ function readImageFile(file) {
     }
     const reader = new FileReader();
     reader.onerror = () => reject(new Error('Could not read pasted image.'));
-    reader.onload = () => {
-      const dataUrl = reader.result;  // "data:image/png;base64,AAAA..."
+    reader.onload = async () => {
+      let dataUrl   = reader.result;  // "data:image/png;base64,AAAA..."
+      let mediaType = file.type;
+      // Downscale before sending (skip GIFs — canvas would flatten animation).
+      // Falls back to the original on any decode failure.
+      if (file.type !== 'image/gif') {
+        const scaled = await downscaleImage(dataUrl);
+        if (scaled) { dataUrl = scaled; mediaType = 'image/jpeg'; }
+      }
       const comma = dataUrl.indexOf(',');
       const b64   = comma >= 0 ? dataUrl.slice(comma + 1) : '';
       resolve({
-        media_type: file.type,
+        media_type: mediaType,
         data:       b64,
         dataUrl:    dataUrl,
-        sizeBytes:  file.size,
+        sizeBytes:  Math.round(b64.length * 3 / 4),
       });
     };
     reader.readAsDataURL(file);
+  });
+}
+
+// Resolve a resized JPEG data-URL when the image exceeds MAX_IMAGE_EDGE on its
+// long side, or null to keep the original (already small, or decode failed).
+function downscaleImage(dataUrl) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onerror = () => resolve(null);
+    img.onload = () => {
+      try {
+        const long = Math.max(img.width, img.height);
+        if (!long || long <= MAX_IMAGE_EDGE) { resolve(null); return; }
+        const scale  = MAX_IMAGE_EDGE / long;
+        const canvas = document.createElement('canvas');
+        canvas.width  = Math.round(img.width * scale);
+        canvas.height = Math.round(img.height * scale);
+        canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+        resolve(canvas.toDataURL('image/jpeg', 0.85));
+      } catch { resolve(null); }
+    };
+    img.src = dataUrl;
   });
 }
 

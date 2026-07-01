@@ -28,6 +28,10 @@ public sealed class KnownIssuesService
 
     private const int MaxMatches = 8;
     private const int MaxDescChars = 300;
+    // Hard cap on the whole injected block. It sits AFTER the prompt-cache
+    // breakpoint, so it bills at full input price on every message it fires —
+    // ~2,000 chars ≈ 500 tokens keeps that tax bounded.
+    private const int MaxContextChars = 2000;
 
     // major.feature.maintenance with optional -hN hotfix and optional "PAN-OS "
     // prefix. Boundaries reject a version embedded in a longer dotted number so an
@@ -130,6 +134,7 @@ public sealed class KnownIssuesService
         sb.Append("issues beyond this list or across other trains.\n\n");
         foreach (var i in matches)
         {
+            if (sb.Length >= MaxContextChars) break;
             var desc = string.Join(' ', i.Description.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
             if (desc.Length > MaxDescChars) desc = desc[..MaxDescChars].TrimEnd() + "…";
             var comp = string.IsNullOrEmpty(i.Component) ? "" : $" [{i.Component}]";

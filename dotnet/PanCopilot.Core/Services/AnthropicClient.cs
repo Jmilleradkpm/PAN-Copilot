@@ -53,7 +53,7 @@ public sealed class AnthropicClient
         JsonArray messages,
         string model,
         int maxTokens,
-        string? system,
+        JsonNode? system,
         Func<string, Task> onDelta,
         CancellationToken ct = default)
     {
@@ -64,7 +64,9 @@ public sealed class AnthropicClient
             ["stream"] = true,
             ["messages"] = messages,
         };
-        if (!string.IsNullOrEmpty(system)) body["system"] = system;
+        // Plain string or an array of text blocks carrying cache_control
+        // breakpoints — the Anthropic API accepts both shapes.
+        if (system != null) body["system"] = system;
 
         using var req = new HttpRequestMessage(HttpMethod.Post, _url);
         req.Headers.TryAddWithoutValidation("Authorization", $"Bearer {_sessionToken}");

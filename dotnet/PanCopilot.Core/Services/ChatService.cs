@@ -30,7 +30,16 @@ public sealed class ChatService
     };
 
     private static readonly HashSet<string> AllowedModels = new()
-    { "auto", "claude-haiku-4-5-20251001", "claude-sonnet-4-6", "claude-opus-4-7" };
+    { "auto", "claude-haiku-4-5-20251001", "claude-sonnet-4-6", "claude-opus-4-7", "claude-opus-4-8" };
+
+    // Appended as a cached system block. Output tokens are the largest marginal
+    // cost per message (~$15/MTok on Sonnet); this trims reply length without
+    // touching the CI-managed master prompt.
+    private const string BrevityInstruction =
+        "Style: answer directly and concisely. Skip preamble and closing summaries. " +
+        "Keep answers to simple questions under 150 words. Full-length detail is " +
+        "warranted only for config analysis, migrations, audits, or when the user " +
+        "explicitly asks for depth.";
 
     private readonly SessionState _session;
     private readonly SettingsStore _settings;
@@ -61,8 +70,8 @@ public sealed class ChatService
         var configLen = configText.Length;
         var msgLower = message.ToLowerInvariant();
         var hasKeyword = ComplexKeywords.Any(msgLower.Contains);
-        if (configLen > 5000) return "claude-opus-4-7";
-        if (configLen > 0 && hasKeyword) return "claude-opus-4-7";
+        if (configLen > 5000) return "claude-opus-4-8";
+        if (configLen > 0 && hasKeyword) return "claude-opus-4-8";
         if (configLen > 0) return "claude-sonnet-4-6";
         if (hasKeyword || message.Length > 200) return "claude-sonnet-4-6";
         return "claude-haiku-4-5-20251001";
@@ -87,7 +96,7 @@ public sealed class ChatService
         }
 
         // ── parse request ────────────────────────────────────────────────
-        string message, configText, model; string? convIdReq; JsonArray? images; int maxTokens;
+        string message, configText, model; string? convIdReq; JsonArray? images; int? maxTokensReq;
         try
         {
             var req = JsonNode.Parse(payloadJson)!.AsObject();
@@ -97,7 +106,7 @@ public sealed class ChatService
             if (!AllowedModels.Contains(model)) model = "auto";
             convIdReq = req["conversation_id"]?.GetValue<string>();
             images = req["images"] as JsonArray;
-            maxTokens = req["max_tokens"]?.GetValue<int>() ?? 2048;
+            maxTokensReq = req["max_tokens"]?.GetValue<int>();
         }
         catch (Exception ex) { await Error("Invalid request: " + ex.Message); return; }
 
@@ -216,6 +225,12 @@ public sealed class ChatService
             messages.Add(new JsonObject { ["role"] = "user", ["content"] = userText });
         }
 
+        // Output-token budget: replies are the biggest marginal cost per message,
+        // so default low for plain questions and higher only when there is a
+        // config or screenshots to analyze. An explicit client value always wins
+        // (the proxy hard-caps at 8192).
+        var maxTokens = maxTokensReq ?? (configLen > 0 || nImages > 0 ? 4096 : 1024);
+
         // ── stream from the provider ─────────────────────────────────────
         var full = new System.Text.StringBuilder();
         int inputTokens = 0, outputTokens = 0;
@@ -231,17 +246,71 @@ public sealed class ChatService
             }
             else
             {
-                resolvedModel = model == "auto" ? SelectModel(msgClean, cfgClean, tier) : model;
+                if (model == "auto")
+                {
+                    // Pin the model for the life of the conversation: Anthropic
+                    // prompt caches are per-model, so per-message auto-routing
+                    // would invalidate the cached prefix on every switch. Free
+                    // tier stays hard-locked to Haiku via SelectModel.
+                    var pinned = tier == "free" ? null : _conversations.GetPinnedModel(convId);
+                    resolvedModel = pinned != null && pinned != "auto" && AllowedModels.Contains(pinned)
+                        ? pinned
+                        : SelectModel(msgClean, cfgClean, tier);
+                }
+                else
+                {
+                    resolvedModel = model;
+                }
                 if (nImages > 0 && resolvedModel == "claude-haiku-4-5-20251001")
                     resolvedModel = "claude-sonnet-4-6";
+
                 // Augment (cloud only) with version-aware known issues when the user
                 // names a running PAN-OS version + symptom. Fail-safe: "" when nothing
                 // applies, so the prompt is unchanged.
-                var sysPrompt = _systemPrompt;
+                //
+                // Prompt caching: the master prompt + brevity instruction are
+                // constant per build, so the cache_control breakpoint sits on the
+                // brevity block and covers both — repeat requests read them at
+                // ~0.1x input price. The 1h TTL (2x write vs 1.25x for 5m) keeps
+                // the org-wide shared prefix warm across sparse traffic; this
+                // prefix is identical for every user, so any user's request
+                // refreshes it for all. The known-issues text sits in a block
+                // AFTER the breakpoint — it can change per message without
+                // invalidating the cached prefix.
                 var ki = _knownIssues?.BuildContext(msgClean);
-                if (!string.IsNullOrEmpty(ki)) sysPrompt = (_systemPrompt ?? "") + ki;
+                var sysBlocks = new JsonArray();
+                if (!string.IsNullOrEmpty(_systemPrompt))
+                    sysBlocks.Add(new JsonObject { ["type"] = "text", ["text"] = _systemPrompt });
+                sysBlocks.Add(new JsonObject
+                {
+                    ["type"] = "text",
+                    ["text"] = BrevityInstruction,
+                    ["cache_control"] = new JsonObject { ["type"] = "ephemeral", ["ttl"] = "1h" },
+                });
+                if (!string.IsNullOrEmpty(ki))
+                    sysBlocks.Add(new JsonObject { ["type"] = "text", ["text"] = ki });
+                JsonNode? sysNode = sysBlocks;
+
+                // Second breakpoint on the newest user turn: the next request
+                // in this conversation reads the entire prior history from
+                // cache and only pays full price for the new turn. Cloud only —
+                // the local OpenAI-compatible path must not see cache_control.
+                if (messages.Count > 0 && messages[^1] is JsonObject lastMsg)
+                {
+                    if (lastMsg["content"] is JsonArray lastBlocks && lastBlocks.Count > 0
+                        && lastBlocks[^1] is JsonObject lastBlock)
+                        lastBlock["cache_control"] = new JsonObject { ["type"] = "ephemeral" };
+                    else if (lastMsg["content"] is JsonValue val && val.TryGetValue<string>(out var lastText))
+                        lastMsg["content"] = new JsonArray(new JsonObject
+                        {
+                            ["type"] = "text",
+                            ["text"] = lastText,
+                            ["cache_control"] = new JsonObject { ["type"] = "ephemeral" },
+                        });
+                }
+
                 var client = new AnthropicClient(_session.Token!);
-                var result = await client.StreamMessageAsync(messages, resolvedModel, maxTokens, sysPrompt,
+                var result = await client.StreamMessageAsync(messages, resolvedModel, maxTokens, sysNode,
                     async text => { full.Append(text); await emit(new JsonObject { ["type"] = "token", ["text"] = text }); });
                 inputTokens = result.InputTokens;
                 outputTokens = result.OutputTokens;
@@ -249,6 +318,7 @@ public sealed class ChatService
                 if (result.QueriesUsed.HasValue)      _session.QueriesUsed = result.QueriesUsed.Value;
                 if (result.QueriesLimit.HasValue)     _session.QueriesLimit = result.QueriesLimit.Value;
                 if (result.QueriesRemaining.HasValue) _session.QueriesRemaining = result.QueriesRemaining.Value;
+                _conversations.PinModel(convId, resolvedModel);
             }
         }
         catch (ProxyException pe)

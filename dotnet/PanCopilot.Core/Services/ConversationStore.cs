@@ -24,6 +24,9 @@ public sealed class ConversationStore
         public string title { get; set; } = "New conversation";
         public string created_at { get; set; } = "";
         public string updated_at { get; set; } = "";
+        // Cloud model pinned to this conversation. Anthropic prompt caches are
+        // per-model, so auto-routing must not flip models mid-conversation.
+        public string? model { get; set; }
         public List<Msg> messages { get; set; } = new();
     }
 
@@ -111,6 +114,18 @@ public sealed class ConversationStore
         var c = Load(id);
         if (c == null) return new();
         return c.messages.TakeLast(Math.Max(0, limit)).Select(m => (m.role, m.content)).ToList();
+    }
+
+    /// <summary>Model pinned to this conversation by a previous cloud turn, or null.</summary>
+    public string? GetPinnedModel(string id) => Load(id)?.model;
+
+    /// <summary>Pin the cloud model for the life of the conversation (no-op if unchanged).</summary>
+    public void PinModel(string id, string model)
+    {
+        var c = Load(id);
+        if (c == null || c.model == model) return;
+        c.model = model;
+        Store(c);
     }
 
     public void SaveMessages(string id, string userMsg, string assistantMsg)
