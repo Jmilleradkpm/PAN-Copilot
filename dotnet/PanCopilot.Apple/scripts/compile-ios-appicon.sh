@@ -29,7 +29,6 @@ PY
 
 xcrun actool --output-partial-info-plist "$PARTIAL_PLIST" \
   --app-icon appicon \
-  --compress-pngs \
   --platform iphoneos \
   --minimum-deployment-target 15.0 \
   --compile "$OUTPUT_DIR" \
