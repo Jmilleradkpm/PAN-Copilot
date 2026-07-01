@@ -7,6 +7,11 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
+if [[ -f "$ROOT/scripts/apple-store.env" ]]; then
+  # shellcheck source=/dev/null
+  source "$ROOT/scripts/apple-store.env"
+fi
+
 VERSION="${1:-3.20}"
 VERSION_TAG="v${VERSION#v}"
 BUILD_CONFIG="${BUILD_CONFIG:-Release}"
