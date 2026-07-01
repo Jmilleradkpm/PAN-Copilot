@@ -48,12 +48,14 @@ try {
 
     $sdkBin = "${env:ProgramFiles(x86)}\Windows Kits\10\bin"
     $makeAppx = Get-ChildItem -Path $sdkBin -Recurse -Filter makeappx.exe -ErrorAction SilentlyContinue |
+        Where-Object { $_.FullName -match '\\x64\\' } |
         Sort-Object FullName -Descending | Select-Object -First 1
-    if (-not $makeAppx) { throw "makeappx.exe not found. Install Windows 10/11 SDK." }
+    if (-not $makeAppx) { throw "makeappx.exe (x64) not found. Install Windows 10/11 SDK." }
 
     $makePri = Get-ChildItem -Path $sdkBin -Recurse -Filter makepri.exe -ErrorAction SilentlyContinue |
+        Where-Object { $_.FullName -match '\\x64\\' } |
         Sort-Object FullName -Descending | Select-Object -First 1
-    if (-not $makePri) { throw "makepri.exe not found. Install Windows 10/11 SDK." }
+    if (-not $makePri) { throw "makepri.exe (x64) not found. Install Windows 10/11 SDK." }
 
     $manifestPath = Join-Path $staging 'AppxManifest.xml'
     $priConfig = Join-Path $staging 'priconfig.xml'
@@ -67,7 +69,8 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "makepri new failed with exit code $LASTEXITCODE" }
 
     if (-not (Test-Path $priOut)) { throw "makepri did not produce resources.pri" }
-    Remove-Item $priConfig -Force -ErrorAction SilentlyContinue
+    Remove-Item $priConfig -Force
+    if (Test-Path $priConfig) { throw "Failed to remove priconfig.xml before packing: $priConfig" }
     Write-Host "Generated resources.pri ($((Get-Item $priOut).Length) bytes)"
 
     if (Test-Path $OutputPath) { Remove-Item $OutputPath -Force }
@@ -78,7 +81,7 @@ try {
     $pkg = [System.IO.Compression.ZipFile]::OpenRead($OutputPath)
     try {
         if (-not $pkg.GetEntry('resources.pri')) {
-            throw "Packed MSIX is missing resources.pri — Partner Center will reject this package"
+            throw "Packed MSIX is missing resources.pri - Partner Center will reject this package"
         }
         $entryNames = $pkg.Entries | ForEach-Object { $_.FullName }
         foreach ($blocked in @('createdump.exe', 'mscordbi.dll')) {
@@ -120,8 +123,9 @@ try {
 
     $sizeMb = (Get-Item $OutputPath).Length / 1MB
     $uploadMb = (Get-Item $uploadPath).Length / 1MB
-    Write-Host "Built $OutputPath ($([math]::Round($sizeMb, 1)) MB)"
-    Write-Host "Built $uploadPath ($([math]::Round($uploadMb, 1)) MB) for Partner Center upload"
+    $msixNote = if ($Sign) { 'self-signed, for local sideload testing only' } else { 'unsigned' }
+    Write-Host "Built $OutputPath ($([math]::Round($sizeMb, 1)) MB) - $msixNote"
+    Write-Host "Built $uploadPath ($([math]::Round($uploadMb, 1)) MB) - UNSIGNED; upload THIS to Partner Center"
 }
 finally {
     if (Test-Path $staging) { Remove-Item $staging -Recurse -Force -ErrorAction SilentlyContinue }
