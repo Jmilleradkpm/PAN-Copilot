@@ -26,7 +26,12 @@ public static class SystemPromptLoader
     private static Assembly CoreAssembly => typeof(SystemPromptLoader).Assembly;
     private const string FallbackFilename = "PAN_Copilot_Master_System_Prompt.md";
 
-    public static string? Load()
+    public static string? Load(string? extraSearchDirectory = null) =>
+        LoadFromPaths(extraSearchDirectory is null
+            ? Array.Empty<string>()
+            : new[] { extraSearchDirectory });
+
+    public static string? LoadFromPaths(IEnumerable<string>? searchDirectories = null)
     {
         // Production path: encrypted embedded resource decrypted in memory.
         if (!string.IsNullOrEmpty(PromptKey.KeyB64))
@@ -44,9 +49,29 @@ public static class SystemPromptLoader
             }
         }
 
-        // Dev fallback: plaintext file next to the exe.
-        var path = Path.Combine(AppContext.BaseDirectory, FallbackFilename);
-        return File.Exists(path) ? File.ReadAllText(path) : null;
+        // Dev fallback: plaintext file next to the exe or bundle Resources folder.
+        foreach (var dir in EnumeratePromptDirectories(searchDirectories))
+        {
+            var path = Path.Combine(dir, FallbackFilename);
+            if (File.Exists(path))
+                return File.ReadAllText(path);
+        }
+        return null;
+    }
+
+    private static IEnumerable<string> EnumeratePromptDirectories(IEnumerable<string>? searchDirectories)
+    {
+        yield return AppContext.BaseDirectory;
+        if (searchDirectories != null)
+        {
+            foreach (var dir in searchDirectories)
+            {
+                if (!string.IsNullOrWhiteSpace(dir))
+                    yield return dir;
+            }
+        }
+        var resources = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "Resources"));
+        yield return resources;
     }
 
     /// <summary>

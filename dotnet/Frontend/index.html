@@ -2,7 +2,7 @@
 <html lang="en" data-theme="dark">
 <head>
   <meta charset="UTF-8"/>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover"/>
   <title>ADK Cyber AI — Local Desktop</title>
   <script>
   /* ── .NET bridge shim ────────────────────────────────────────────────
@@ -210,9 +210,119 @@
     [data-theme="light"] .nav-group-label  { color: #57606a; }
 
     html, body {
-      height: 100%; background: var(--bg); color: var(--text);
+      height: 100%;
+      min-height: 100dvh;
+      min-height: -webkit-fill-available;
+      background: var(--bg); color: var(--text);
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
       font-size: 14px; line-height: 1.6; overflow: hidden;
+    }
+
+    html.platform-apple {
+      --header-h: calc(52px + env(safe-area-inset-top, 0px));
+    }
+    html.platform-apple #header {
+      padding-top: env(safe-area-inset-top, 0px);
+      padding-left: max(16px, env(safe-area-inset-left, 0px));
+      padding-right: max(16px, env(safe-area-inset-right, 0px));
+    }
+    html.platform-apple #input-bar {
+      padding-bottom: max(12px, env(safe-area-inset-bottom, 0px));
+    }
+
+    .touch-only { display: none; }
+    html.platform-touch { --header-h: calc(46px + env(safe-area-inset-top, 0px)); }
+    html.platform-touch .touch-only { display: flex; }
+    html.platform-touch .desktop-only { display: none !important; }
+
+    html.platform-touch #header {
+      display: flex;
+      flex-wrap: nowrap;
+      align-items: center;
+      gap: 6px;
+      padding: env(safe-area-inset-top, 0px) 10px 6px;
+      height: var(--header-h);
+    }
+    html.platform-touch #header .h-logo {
+      width: 26px; height: 26px; flex-shrink: 0;
+    }
+    html.platform-touch #header .h-text-stack {
+      flex: 1; min-width: 0; gap: 0;
+    }
+    html.platform-touch #header .h-eyebrow {
+      font-size: 10px; letter-spacing: 0.08em;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    html.platform-touch #header .h-beta { font-size: 7px; padding: 1px 4px; }
+    html.platform-touch #header .h-ver { display: none; }
+    html.platform-touch #header .h-sub { display: none !important; }
+    html.platform-touch #header .h-spacer { display: none; }
+    html.platform-touch #history-wrap { flex-shrink: 0; }
+    html.platform-touch #history-btn {
+      padding: 5px 8px; font-size: 11px;
+    }
+    html.platform-touch #history-btn .history-btn-label { display: none; }
+    html.platform-touch #local-badge { display: none !important; }
+    html.platform-touch #tier-badge { display: none !important; }
+    html.platform-touch #theme-toggle { display: none !important; }
+    html.platform-touch #settings-btn {
+      flex-shrink: 0; padding: 5px 9px; font-size: 16px; line-height: 1;
+    }
+    html.platform-touch #settings-btn .settings-btn-text { display: none; }
+
+    #mobile-product-row {
+      display: none;
+      flex-direction: column;
+      gap: 6px;
+      width: 100%;
+      margin-bottom: 8px;
+    }
+    html.platform-touch #mobile-product-row { display: flex; }
+    .mobile-product-label {
+      font-size: 10px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.08em; color: var(--text-dim);
+    }
+    #mobile-product-select {
+      width: 100%;
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      font-size: 13px;
+      padding: 10px 12px;
+      appearance: none;
+      -webkit-appearance: none;
+      background-image: linear-gradient(45deg, transparent 50%, var(--text-sub) 50%),
+                        linear-gradient(135deg, var(--text-sub) 50%, transparent 50%);
+      background-position: calc(100% - 18px) calc(50% + 2px),
+                           calc(100% - 12px) calc(50% + 2px);
+      background-size: 6px 6px, 6px 6px;
+      background-repeat: no-repeat;
+    }
+    #mobile-product-select:focus { outline: none; border-color: var(--accent); }
+    html.platform-touch #context-bar { padding: 10px 12px; }
+    html.platform-touch #context-product {
+      flex-direction: column;
+      align-items: stretch;
+      gap: 8px;
+      width: 100%;
+    }
+    html.platform-touch #context-product .desktop-context-line {
+      display: none !important;
+    }
+    html.platform-touch #kb-dropdown-wrap {
+      display: flex !important;
+      width: 100%;
+      position: relative;
+    }
+    html.platform-touch #kb-dropdown-btn {
+      width: 100%;
+      justify-content: center;
+      box-sizing: border-box;
+    }
+    html.platform-touch #context-chips {
+      flex-wrap: wrap;
+      gap: 6px;
     }
 
     ::-webkit-scrollbar { width: 5px; height: 5px; }
@@ -347,6 +457,91 @@
       display: flex;
       margin-top: var(--header-h);
       height: calc(100vh - var(--header-h));
+      height: calc(100dvh - var(--header-h));
+    }
+
+    /* iOS / touch: always single-column */
+    html.platform-touch #left-nav,
+    html.platform-touch #right-sidebar {
+      display: none !important;
+    }
+    html.platform-touch #center {
+      width: 100%;
+      min-width: 0;
+      flex: 1 1 auto;
+    }
+    html.platform-touch #app {
+      width: 100%;
+      min-width: 0;
+    }
+    html.platform-touch #local-badge {
+      display: none !important;
+    }
+    html.platform-touch #welcome .example-grid {
+      grid-template-columns: 1fr !important;
+    }
+
+    /* Narrow desktop / tablet WebView */
+    @media (max-width: 1200px) {
+      #left-nav,
+      #right-sidebar {
+        display: none !important;
+      }
+      #center {
+        width: 100%;
+        min-width: 0;
+        flex: 1 1 auto;
+      }
+      #app {
+        width: 100%;
+        min-width: 0;
+      }
+      #header .h-sub,
+      #history-wrap,
+      #kb-dropdown-wrap,
+      #local-badge {
+        display: none !important;
+      }
+      #header {
+        gap: 6px;
+        padding-left: max(10px, env(safe-area-inset-left, 0px));
+        padding-right: max(10px, env(safe-area-inset-right, 0px));
+      }
+      #header .h-text-stack {
+        min-width: 0;
+        flex: 1;
+      }
+      #header .h-sub {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      #messages {
+        padding: 12px 0;
+      }
+      #input-bar {
+        padding: 10px 12px 14px;
+      }
+      #input-wrap,
+      #user-input {
+        width: 100%;
+        min-width: 0;
+      }
+      #model-picker {
+        flex-wrap: wrap;
+        gap: 6px;
+      }
+      #welcome {
+        padding: 24px 16px;
+      }
+      #welcome .example-grid {
+        grid-template-columns: 1fr !important;
+      }
+      #auth-card,
+      #settings-card {
+        width: min(440px, calc(100vw - 24px));
+        padding: 24px 20px;
+      }
     }
 
     /* ── LEFT NAV ──────────────────────────────────────────────── */
@@ -1269,7 +1464,7 @@
 
   <div id="history-wrap">
     <button id="history-btn" onclick="toggleHistoryDrop()" title="Chat history">
-      🕐 History
+      🕐 <span class="history-btn-label">History</span>
     </button>
     <div id="history-drop">
       <div id="history-drop-header">
@@ -1291,7 +1486,7 @@
     <span id="t-icon">☀️</span><span id="t-label">Light</span>
   </button>
   <button id="settings-btn" onclick="openSettings()" title="Account">
-    👤 Account
+    👤 <span class="settings-btn-text">Account</span>
   </button>
 </header>
 
@@ -1509,11 +1704,17 @@
   <main id="center">
 
     <div id="context-bar">
+      <div id="mobile-product-row" class="touch-only">
+        <label for="mobile-product-select" class="mobile-product-label">Product focus</label>
+        <select id="mobile-product-select" onchange="onMobileProductChange(this.value)">
+          <option value="">General — all PAN-OS products</option>
+        </select>
+      </div>
       <div id="context-product">
-        <span id="context-icon">🔥</span>
-        <span id="context-name">ADK Cyber AI</span>
-        <span id="context-desc">· Select a product from the left to focus the chat, or ask anything below.</span>
-        <span class="kb-hdr-sep">|</span>
+        <span id="context-icon" class="desktop-context-line">🔥</span>
+        <span id="context-name" class="desktop-context-line">ADK Cyber AI</span>
+        <span id="context-desc" class="desktop-context-line">· Select a product from the left to focus the chat, or ask anything below.</span>
+        <span class="kb-hdr-sep desktop-context-line">|</span>
         <div id="kb-dropdown-wrap">
           <button id="kb-dropdown-btn" onclick="toggleKbDropdown()">📚 Palo KB Articles <span id="kb-dropdown-caret">▾</span></button>
           <div id="kb-dropdown-menu">
@@ -1962,8 +2163,43 @@ function modelLabel(m) {
 }
 
 // ── Init ─────────────────────────────────────────────────────────
+function buildMobileProductSelect() {
+  const sel = document.getElementById('mobile-product-select');
+  if (!sel) return;
+  sel.innerHTML = '<option value="">General — all PAN-OS products</option>';
+  document.querySelectorAll('#left-nav .nav-section').forEach(section => {
+    const label = section.querySelector('.nav-group-label')?.textContent?.trim();
+    const items = section.querySelectorAll('.nav-item[data-id]');
+    if (!items.length) return;
+    const og = document.createElement('optgroup');
+    if (label) og.label = label;
+    items.forEach(btn => {
+      const id = btn.getAttribute('data-id');
+      if (!id || !PRODUCTS[id]) return;
+      const opt = document.createElement('option');
+      opt.value = id;
+      opt.textContent = `${PRODUCTS[id].icon} ${PRODUCTS[id].name}`;
+      og.appendChild(opt);
+    });
+    if (og.children.length) sel.appendChild(og);
+  });
+}
+
+function onMobileProductChange(id) {
+  if (!id) {
+    currentProduct = null;
+    document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
+    document.getElementById('context-icon').textContent = '🔥';
+    document.getElementById('context-name').textContent = 'ADK Cyber AI';
+    document.getElementById('context-chips').innerHTML = '';
+    return;
+  }
+  selectProduct(id);
+}
+
 async function init() {
   applyTheme();
+  buildMobileProductSelect();
   await checkInstallHealth();
   await checkAuthStatus();
   checkForUpdate();
@@ -3114,6 +3350,9 @@ function selectProduct(id) {
   document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
   document.querySelector(`[data-id="${id}"]`)?.classList.add('active');
 
+  const mob = document.getElementById('mobile-product-select');
+  if (mob) mob.value = id;
+
   document.getElementById('context-icon').textContent = p.icon;
   document.getElementById('context-name').textContent = p.name;
   document.getElementById('context-desc').textContent = `· ${p.desc}`;
@@ -3261,6 +3500,8 @@ function newChat() {
   clearMessages();
   document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
   currentProduct = null;
+  const mob = document.getElementById('mobile-product-select');
+  if (mob) mob.value = '';
   document.getElementById('context-icon').textContent = '🔥';
   document.getElementById('context-name').textContent = 'ADK Cyber AI';
   document.getElementById('context-desc').textContent = '· Select a product from the left to focus the chat, or ask anything below.';

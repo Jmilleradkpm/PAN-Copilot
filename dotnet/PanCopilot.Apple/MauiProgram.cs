@@ -1,4 +1,4 @@
-using Microsoft.Extensions.Logging;
+using PanCopilot.Apple.Bridge;
 using PanCopilot.Apple.Platform;
 using PanCopilot.Platform;
 
@@ -9,14 +9,10 @@ public static class MauiProgram
     public static MauiApp CreateMauiApp()
     {
         PlatformRuntime.Host = new ApplePlatformHost();
+        AppleWebViewConfigurator.Register();
 
         var builder = MauiApp.CreateBuilder();
         builder.UseMauiApp<App>();
-
-#if DEBUG
-        builder.Logging.AddDebug();
-#endif
-
         return builder.Build();
     }
 }

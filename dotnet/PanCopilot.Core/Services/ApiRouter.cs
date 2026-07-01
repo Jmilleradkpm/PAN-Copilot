@@ -3,7 +3,7 @@ using System.IO;
 using System.IO.Compression;
 using System.Text;
 using System.Text.Json.Nodes;
-using System.Web;
+using Microsoft.AspNetCore.WebUtilities;
 using PanCopilot.Platform;
 using PanCopilot.Services.Migration;
 
@@ -65,7 +65,7 @@ public sealed class ApiRouter
         {
             var qIdx = pathAndQuery.IndexOf('?');
             var path = qIdx >= 0 ? pathAndQuery[..qIdx] : pathAndQuery;
-            var query = HttpUtility.ParseQueryString(qIdx >= 0 ? pathAndQuery[(qIdx + 1)..] : "");
+            var query = QueryHelpers.ParseQuery(qIdx >= 0 ? pathAndQuery[(qIdx + 1)..] : "");
             var body = string.IsNullOrEmpty(bodyJson) ? new JsonObject() : (JsonNode.Parse(bodyJson)?.AsObject() ?? new JsonObject());
 
             return (method.ToUpperInvariant(), path) switch
@@ -95,7 +95,8 @@ public sealed class ApiRouter
                     body["model"]?.GetValue<string>() ?? "",
                     body["api_key"]?.GetValue<string>())),
                 ("GET", "/api/local_llm/models") => Wrap(await _localLlm.ListModelsAsync(
-                    query["base_url"] ?? "", query["api_key"])),
+                    query.TryGetValue("base_url", out var baseUrl) ? baseUrl.ToString() : "",
+                    query.TryGetValue("api_key", out var apiKey) ? apiKey.ToString() : "")),
                 ("GET", "/api/local_llm/detect") => Json(200, await _localLlm.DetectAsync()),
                 ("POST", "/api/local_llm/context_estimate") => ContextEstimate(body),
 
@@ -107,13 +108,15 @@ public sealed class ApiRouter
                 ("DELETE", var p) when p.StartsWith("/conversations/") => DeleteConversation(p[15..]),
 
                 // ── version / update ──────────────────────────────────────
-                ("GET", "/api/version") => Json(200, await _updates.GetVersionInfoAsync(query["force"] == "1")),
+                ("GET", "/api/version") => Json(200, await _updates.GetVersionInfoAsync(
+                    query.TryGetValue("force", out var force) && force == "1")),
                 ("POST", "/api/update") => await InstallUpdate(),
                 ("GET", "/api/support/update-logs") => GetUpdateLogs(),
                 ("POST", "/api/support/open") => OpenSupportPath(body),
 
                 // ── advisories ────────────────────────────────────────────
-                ("GET", "/api/advisories") => await Advisories(query["force"] == "1"),
+                ("GET", "/api/advisories") => await Advisories(
+                    query.TryGetValue("force", out var advForce) && advForce == "1"),
                 ("POST", "/api/advisories/dismiss") => DismissAdvisory(body),
                 ("POST", "/api/advisories/dismiss_all") => DismissAll(),
 

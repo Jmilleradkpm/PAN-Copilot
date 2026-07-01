@@ -5,6 +5,7 @@
              BackgroundColor="#0d1117">
     <Grid>
         <WebView x:Name="AppWebView"
+                 BackgroundColor="#0d1117"
                  HorizontalOptions="Fill"
                  VerticalOptions="Fill" />
         <VerticalStackLayout x:Name="LoadingPanel"

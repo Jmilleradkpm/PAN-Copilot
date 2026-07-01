@@ -28,12 +28,9 @@
   </ItemGroup>
 
   <ItemGroup>
-    <FrameworkReference Include="Microsoft.AspNetCore.App" />
-  </ItemGroup>
-
-  <ItemGroup>
     <PackageReference Include="Microsoft.Maui.Controls" Version="8.0.100" />
     <PackageReference Include="Microsoft.Maui.Controls.Compatibility" Version="8.0.100" />
+    <PackageReference Include="Microsoft.Maui.Graphics" Version="8.0.100" />
   </ItemGroup>
 
   <ItemGroup>
@@ -45,7 +42,11 @@
     <Content Include="..\Frontend\**\*.*">
       <Link>Frontend\%(RecursiveDir)%(Filename)%(Extension)</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
     </Content>
+    <BundleResource Include="..\Frontend\**\*.*">
+      <Link>Frontend\%(RecursiveDir)%(Filename)%(Extension)</Link>
+    </BundleResource>
   </ItemGroup>
 
   <ItemGroup Condition="Exists('..\PAN_Copilot_Master_System_Prompt.md')">

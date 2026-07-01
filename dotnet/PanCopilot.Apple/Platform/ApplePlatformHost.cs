@@ -1,14 +1,16 @@
-using System.Security.Cryptography;
-using System.Text;
 using Microsoft.Maui.ApplicationModel;
 using Microsoft.Maui.Storage;
 using PanCopilot.Platform;
 
 namespace PanCopilot.Apple.Platform;
 
+/// <summary>
+/// Apple platform host — secrets live in SecureStorage (Keychain). AesGcm is not
+/// available on iOS/Mac Catalyst runtimes, so we avoid it entirely.
+/// </summary>
 public sealed class ApplePlatformHost : IPlatformHost
 {
-    private const string SecretPrefix = "keychain:";
+    private const string SecretPrefix = "ss:";
 
     public string AppVersion => "";
 
@@ -48,27 +50,13 @@ public sealed class ApplePlatformHost : IPlatformHost
         if (string.IsNullOrEmpty(plain)) return null;
         try
         {
-            var key = GetOrCreateKey();
-            var nonce = RandomNumberGenerator.GetBytes(12);
-            var plainBytes = Encoding.UTF8.GetBytes(plain);
-            var cipher = new byte[plainBytes.Length];
-            var tag = new byte[16];
-            using var aes = new AesGcm(key, 16);
-            aes.Encrypt(nonce, plainBytes, cipher, tag);
-            var blob = new byte[nonce.Length + cipher.Length + tag.Length];
-            Buffer.BlockCopy(nonce, 0, blob, 0, nonce.Length);
-            Buffer.BlockCopy(cipher, 0, blob, nonce.Length, cipher.Length);
-            Buffer.BlockCopy(tag, 0, blob, nonce.Length + cipher.Length, tag.Length);
-            return SecretPrefix + Convert.ToBase64String(blob);
+            var key = Guid.NewGuid().ToString("N");
+            SecureStorage.SetAsync(StorageKey(key), plain).GetAwaiter().GetResult();
+            return SecretPrefix + key;
         }
         catch
         {
-            try
-            {
-                SecureStorage.SetAsync("fw_fallback", plain).GetAwaiter().GetResult();
-                return SecretPrefix + "fallback";
-            }
-            catch { return plain; }
+            return plain;
         }
     }
 
@@ -76,24 +64,15 @@ public sealed class ApplePlatformHost : IPlatformHost
     {
         if (string.IsNullOrEmpty(stored)) return null;
         if (!stored.StartsWith(SecretPrefix, StringComparison.Ordinal)) return stored;
-        if (stored == SecretPrefix + "fallback")
-        {
-            try { return SecureStorage.GetAsync("fw_fallback").GetAwaiter().GetResult(); }
-            catch { return null; }
-        }
         try
         {
-            var blob = Convert.FromBase64String(stored[SecretPrefix.Length..]);
-            var nonce = blob[..12];
-            var tag = blob[^16..];
-            var cipher = blob[12..^16];
-            var key = GetOrCreateKey();
-            var plain = new byte[cipher.Length];
-            using var aes = new AesGcm(key, 16);
-            aes.Decrypt(nonce, cipher, tag, plain);
-            return Encoding.UTF8.GetString(plain);
+            var key = stored[SecretPrefix.Length..];
+            return SecureStorage.GetAsync(StorageKey(key)).GetAwaiter().GetResult();
         }
-        catch { return null; }
+        catch
+        {
+            return null;
+        }
     }
 
     public void EnsureFirstRunShortcuts() { }
@@ -102,14 +81,5 @@ public sealed class ApplePlatformHost : IPlatformHost
 
     public string ResolveUpdateTargetDir() => InstallDirectory;
 
-    private static byte[] GetOrCreateKey()
-    {
-        const string keyName = "pancopilot_secret_key_v1";
-        var existing = SecureStorage.GetAsync(keyName).GetAwaiter().GetResult();
-        if (!string.IsNullOrEmpty(existing))
-            return Convert.FromBase64String(existing);
-        var key = RandomNumberGenerator.GetBytes(32);
-        SecureStorage.SetAsync(keyName, Convert.ToBase64String(key)).GetAwaiter().GetResult();
-        return key;
-    }
+    private static string StorageKey(string id) => $"pancopilot_secret_{id}";
 }
