@@ -148,7 +148,7 @@ public sealed class UpdateService
     public async Task InstallUpdateAsync(Action exitApp)
     {
         if (DistributionService.IsMicrosoftStore)
-            throw new InvalidOperationException("Updates are managed by the Microsoft Store.");
+            throw new InvalidOperationException("Updates are managed by the app store.");
 
         if (!await _updateGate.WaitAsync(0))
             throw new InvalidOperationException("An update is already in progress.");
@@ -324,7 +324,7 @@ public sealed class UpdateService
         ["latest_version"] = CurrentVersion,
         ["update_available"] = false,
         ["distribution_channel"] = "store",
-        ["update_managed_by"] = "microsoft_store",
+        ["update_managed_by"] = DistributionService.Channel,
         ["download_url"] = "",
         ["zip_sha256"] = "",
         ["installer_url"] = "",

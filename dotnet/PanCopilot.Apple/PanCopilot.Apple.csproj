@@ -20,6 +20,27 @@
 
     <Company>Adirondack CyberSecurity</Company>
     <Product>ADK Cyber AI</Product>
+
+    <!-- App Store signing: set via scripts/build-appstore-apple.sh or CI secrets -->
+    <AppleTeamId Condition="'$(AppleTeamId)' == ''">$(APPLE_TEAM_ID)</AppleTeamId>
+    <CodesignKey Condition="'$(CodesignKey)' == ''">$(APPLE_CODESIGN_KEY)</CodesignKey>
+    <CodesignProvision Condition="'$(CodesignProvision)' == ''">$(APPLE_CODESIGN_PROVISION)</CodesignProvision>
+    <MtouchUseLlvm>true</MtouchUseLlvm>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <DebugType>none</DebugType>
+    <DebugSymbols>false</DebugSymbols>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'maccatalyst'">
+    <CodesignEntitlements>Platforms/MacCatalyst/Entitlements.plist</CodesignEntitlements>
+    <CreatePackage Condition="'$(CreatePackage)' == ''">false</CreatePackage>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'ios'">
+    <CodesignEntitlements>Platforms/iOS/Entitlements.plist</CodesignEntitlements>
+    <BuildIpa Condition="'$(BuildIpa)' == ''">false</BuildIpa>
   </PropertyGroup>
 
   <ItemGroup>
@@ -53,6 +74,10 @@
     <Content Include="..\PAN_Copilot_Master_System_Prompt.md">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
+  </ItemGroup>
+
+  <ItemGroup>
+    <BundleResource Include="Platforms/PrivacyInfo.xcprivacy" />
   </ItemGroup>
 
 </Project>

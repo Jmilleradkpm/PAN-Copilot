@@ -50,13 +50,14 @@ For local dev without CI secrets, place `PAN_Copilot_Master_System_Prompt.md` in
 
 GitHub Actions: **Build Apple (.NET MAUI)** (`build-release-apple.yml`) — manual `workflow_dispatch`, runs on `macos-14`, uploads Mac Catalyst + iOS artifacts.
 
-## App Store (not yet wired)
+## App Store
+
+See **[APP_STORE.md](APP_STORE.md)** for the full submission checklist (App Store Connect, signing, upload).
 
 - **Bundle ID:** `com.adkcyber.pancopilot`
-- Mac Catalyst: distribute `.pkg` via Mac App Store or notarized direct download
-- iOS: archive + upload via Xcode / Transporter
-
-Add signing certificates and provisioning profiles to the workflow before shipping to production.
+- Mac Catalyst: signed `.pkg` via `scripts/build-appstore-apple.sh`
+- iOS: signed `.ipa` via same script or CI workflow
+- Entitlements: `Platforms/MacCatalyst/Entitlements.plist` (sandbox + network)
 
 ## Platform notes
 

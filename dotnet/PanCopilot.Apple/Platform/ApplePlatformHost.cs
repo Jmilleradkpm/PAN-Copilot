@@ -1,3 +1,4 @@
+using Foundation;
 using Microsoft.Maui.ApplicationModel;
 using Microsoft.Maui.Storage;
 using PanCopilot.Platform;
@@ -14,25 +15,25 @@ public sealed class ApplePlatformHost : IPlatformHost
 
     public string AppVersion => "";
 
-    public string DistributionChannel
-    {
-        get
-        {
-            if (IsStoreManaged) return "appstore";
-#if MACCATALYST
-            return "direct";
-#else
-            return "appstore";
-#endif
-        }
-    }
+    public string DistributionChannel => IsStoreManaged ? "store" : "direct";
 
     public bool IsStoreManaged
     {
         get
         {
+            if (string.Equals(Environment.GetEnvironmentVariable("ADK_SIMULATE_STORE"), "1", StringComparison.Ordinal))
+                return !string.Equals(Environment.GetEnvironmentVariable("ADK_FORCE_DIRECT_UPDATES"), "1", StringComparison.Ordinal);
+
+#if IOS || MACCATALYST
+            if (HasAppStoreReceipt())
+                return true;
+#endif
+
 #if IOS
-            return !AppInfo.PackageName.Contains("com.adkcyber.pancopilot.dev", StringComparison.Ordinal);
+            return !AppInfo.PackageName.Contains("com.adkcyber.pancopilot.dev", StringComparison.Ordinal)
+                   && !AppInfo.PackageName.Contains("iossimulator", StringComparison.Ordinal);
+#elif MACCATALYST
+            return false;
 #else
             return false;
 #endif
@@ -82,4 +83,19 @@ public sealed class ApplePlatformHost : IPlatformHost
     public string ResolveUpdateTargetDir() => InstallDirectory;
 
     private static string StorageKey(string id) => $"pancopilot_secret_{id}";
+
+#if IOS || MACCATALYST
+    private static bool HasAppStoreReceipt()
+    {
+        try
+        {
+            var receipt = NSBundle.MainBundle.AppStoreReceiptUrl;
+            return receipt is not null && File.Exists(receipt.Path);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+#endif
 }

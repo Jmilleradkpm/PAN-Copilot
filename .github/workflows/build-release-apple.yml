@@ -82,21 +82,54 @@ jobs:
           dotnet restore PanCopilot.sln
           dotnet test PanCopilot.Tests/PanCopilot.Tests.csproj --configuration Release
 
-      - name: Build Mac Catalyst
+      - name: Import signing certificate (optional)
+        if: ${{ secrets.APPLE_CERTIFICATE_P12 != '' }}
+        env:
+          P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12 }}
+          P12_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
         run: |
+          echo "$P12_BASE64" | base64 --decode > /tmp/apple_dist.p12
+          security create-keychain -p actions build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p actions build.keychain
+          security import /tmp/apple_dist.p12 -k build.keychain -P "$P12_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k actions build.keychain
+
+      - name: Build Mac Catalyst
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_CODESIGN_KEY: ${{ secrets.APPLE_CODESIGN_KEY }}
+          APPLE_CODESIGN_PROVISION: ${{ secrets.APPLE_CODESIGN_PROVISION_MAC }}
+        run: |
+          EXTRA_SIGN=""
+          if [ -n "$APPLE_CODESIGN_KEY" ]; then
+            EXTRA_SIGN="-p:EnableCodeSigning=true -p:AppleTeamId=$APPLE_TEAM_ID -p:CodesignKey=$APPLE_CODESIGN_KEY -p:CodesignProvision=$APPLE_CODESIGN_PROVISION"
+          fi
           dotnet publish PanCopilot.Apple/PanCopilot.Apple.csproj \
             -f net8.0-maccatalyst \
             -c Release \
+            -r maccatalyst-arm64 \
             -p:CreatePackage=true \
+            $EXTRA_SIGN \
             -o publish/maccatalyst
 
       - name: Build iOS (device)
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_CODESIGN_KEY: ${{ secrets.APPLE_CODESIGN_KEY }}
+          APPLE_CODESIGN_PROVISION: ${{ secrets.APPLE_CODESIGN_PROVISION_IOS }}
         run: |
+          EXTRA_SIGN=""
+          if [ -n "$APPLE_CODESIGN_KEY" ]; then
+            EXTRA_SIGN="-p:EnableCodeSigning=true -p:AppleTeamId=$APPLE_TEAM_ID -p:CodesignKey=$APPLE_CODESIGN_KEY -p:CodesignProvision=$APPLE_CODESIGN_PROVISION"
+          fi
           dotnet publish PanCopilot.Apple/PanCopilot.Apple.csproj \
             -f net8.0-ios \
             -c Release \
+            -r ios-arm64 \
             -p:ArchiveOnBuild=true \
-            -p:RuntimeIdentifier=ios-arm64 \
+            -p:BuildIpa=true \
+            $EXTRA_SIGN \
             -o publish/ios
 
       - name: Upload artifacts
