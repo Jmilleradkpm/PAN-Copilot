@@ -2664,12 +2664,41 @@ function onBrainProviderChange() {
   const sel = document.getElementById('bb-provider');
   if (!sel) return;
   const val = sel.value;
+  const avail = _providerState.providers_available || {};
+  const tier = _providerState.tier || currentTier || 'free';
+
+  // Explain locks instead of silently snapping back to Anthropic.
+  if (val === 'grok' && avail.grok === false) {
+    alert(
+      'Grok is available on Pro, Max, and Owner plans only.\n\n' +
+      'Your current plan: ' + (tier || 'unknown') + '.\n\n' +
+      'If you just redeployed the license server, re-log in. If your account was reset to Free, restore Pro in Partner Center / Lemon Squeezy or via admin set-tier.\n\n' +
+      'Also make sure you are on app v3.21+ (portable R2 or a published Store build). Store 3.19.x does not include Grok.'
+    );
+    renderProviderUI();
+    return;
+  }
+  if (val === 'local' && avail.local === false) {
+    alert('Local LLM requires the Local tier ($5/mo) or Pro/Max/Owner.');
+    renderProviderUI();
+    return;
+  }
+  if (val === 'anthropic' && avail.anthropic === false) {
+    alert('Cloud (Claude) is not available on the Local tier. Upgrade to Pro for cloud chat.');
+    renderProviderUI();
+    return;
+  }
+
   const radio = document.querySelector(`input[name="chat_provider"][value="${val}"]`);
   if (radio && !radio.disabled) {
     radio.checked = true;
     onProviderChange();
+  } else if (avail[val] !== false) {
+    // Radios may be out of sync — still POST the provider
+    if (!_providerState.settings) _providerState.settings = {};
+    _providerState.settings.chat_provider = val;
+    onProviderChange();
   } else {
-    // Revert select if option is locked
     renderProviderUI();
   }
 }
@@ -2689,9 +2718,22 @@ function syncBrainBarFromState() {
   const bbProv = document.getElementById('bb-provider');
   if (bbProv) {
     [...bbProv.options].forEach(o => {
-      o.disabled = avail[o.value] === false;
+      const locked = avail[o.value] === false;
+      o.disabled = locked;
+      // Make locked options obvious in the closed list
+      if (o.value === 'grok') {
+        o.textContent = locked ? 'Grok (xAI) — Pro+ only' : 'Grok (xAI)';
+      } else if (o.value === 'local') {
+        o.textContent = locked ? 'Local LLM — requires Local/Pro' : 'Local LLM';
+      } else if (o.value === 'anthropic') {
+        o.textContent = locked ? 'Anthropic (Claude) — not on Local tier' : 'Anthropic (Claude)';
+      }
     });
-    bbProv.value = (eff === 'cloud' ? 'anthropic' : eff) || 'anthropic';
+    // Prefer saved preference when available; else effective provider
+    let show = pref;
+    if (avail[show] === false) show = (eff === 'cloud' ? 'anthropic' : eff) || 'anthropic';
+    if (avail[show] === false) show = 'anthropic';
+    bbProv.value = show;
   }
   const modelProvider = (eff === 'local') ? 'local' : (eff === 'grok' ? 'grok' : 'anthropic');
   rebuildBrainModelSelect(modelProvider, st.cloud_model || selectedModel);
@@ -3903,16 +3945,18 @@ function updateTierUI(tier, queriesUsed, queriesLimit, period) {
   // Refresh the provider panel — tier change can flip cloud availability.
   if (_providerState) {
     _providerState.tier = currentTier;
+    // Keep providers_available aligned with tier (stale free flags used to lock Grok after upgrade).
     if (currentTier === 'local') {
       _providerState.providers_available = { anthropic: false, grok: false, cloud: false, local: true };
       _providerState.effective_provider  = 'local';
-      _providerState.settings.chat_provider = 'local';
+      if (_providerState.settings) _providerState.settings.chat_provider = 'local';
     } else if (currentTier === 'free') {
-      _providerState.providers_available = {
-        ...(_providerState.providers_available || {}),
-        anthropic: true, grok: false, cloud: true,
-        local: false,
-      };
+      _providerState.providers_available = { anthropic: true, grok: false, cloud: true, local: false };
+    } else if (currentTier === 'pro' || currentTier === 'max' || currentTier === 'owner') {
+      _providerState.providers_available = { anthropic: true, grok: true, cloud: true, local: true };
+    } else if (!currentTier) {
+      // Logged out / unknown — allow both cloud providers in UI; server still enforces.
+      _providerState.providers_available = { anthropic: true, grok: true, cloud: true, local: true };
     }
     renderProviderUI();
   }
