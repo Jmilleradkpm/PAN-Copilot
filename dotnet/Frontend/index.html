@@ -1999,10 +1999,12 @@
       </div>
       <div id="model-picker">
         <span id="model-picker-label">Model:</span>
-        <button class="model-pill active" data-model="auto"                    onclick="setModel('auto')">⚡ Auto</button>
-        <button class="model-pill"        data-model="claude-haiku-4-5-20251001" onclick="setModel('claude-haiku-4-5-20251001')">Haiku</button>
-        <button class="model-pill"        data-model="claude-sonnet-4-6"         onclick="setModel('claude-sonnet-4-6')">Sonnet</button>
-        <button class="model-pill"        data-model="claude-opus-4-8"           onclick="setModel('claude-opus-4-8')">Opus</button>
+        <span id="model-pills">
+          <button class="model-pill active" data-model="auto" onclick="setModel('auto')">⚡ Auto</button>
+          <button class="model-pill" data-model="claude-haiku-4-5-20251001" onclick="setModel('claude-haiku-4-5-20251001')">Haiku</button>
+          <button class="model-pill" data-model="claude-sonnet-4-6" onclick="setModel('claude-sonnet-4-6')">Sonnet</button>
+          <button class="model-pill" data-model="claude-opus-4-8" onclick="setModel('claude-opus-4-8')">Opus</button>
+        </span>
         <span id="provider-mode-pill" onclick="toggleProvider()"></span>
       </div>
       <div id="input-hint">
@@ -2055,10 +2057,17 @@
       </div>
       <div id="provider-panel">
         <label class="provider-radio">
-          <input type="radio" name="chat_provider" value="cloud" onchange="onProviderChange()">
+          <input type="radio" name="chat_provider" value="anthropic" onchange="onProviderChange()">
           <span>
-            <strong>ADK Cyber AI (cloud)</strong>
-            <span class="provider-radio-sub">Anthropic-backed · best reasoning · queries count toward your quota</span>
+            <strong>Anthropic (Claude)</strong>
+            <span class="provider-radio-sub">Claude models · ADK gateway · queries count toward your quota</span>
+          </span>
+        </label>
+        <label class="provider-radio">
+          <input type="radio" name="chat_provider" value="grok" onchange="onProviderChange()">
+          <span>
+            <strong>Grok (xAI)</strong>
+            <span class="provider-radio-sub">Grok 4.5 / 4.3 · ADK-hosted · Pro+ · same cloud quota</span>
           </span>
         </label>
         <label class="provider-radio">
@@ -2275,15 +2284,18 @@ const PRIVACY_URL = 'https://www.adkcyber.com/adk-cyber-ai.html#privacy';
 const CONV_STORE_PATH = '~/.pan_copilot/conversations_v3/';
 
 function privacyShortText() {
-  const eff = _providerState.effective_provider || 'cloud';
+  const eff = _providerState.effective_provider || 'anthropic';
   if (eff === 'local') {
     return 'Local LLM on your machine — nothing you type leaves your PC';
+  }
+  if (eff === 'grok') {
+    return 'Credentials redacted on device · relayed through ADK Cyber\'s gateway (not stored) to xAI';
   }
   return 'Credentials redacted on device · relayed through ADK Cyber\'s gateway (not stored) to Anthropic';
 }
 
 function privacyBadgeText() {
-  const eff = _providerState.effective_provider || 'cloud';
+  const eff = _providerState.effective_provider || 'anthropic';
   return eff === 'local' ? 'Local LLM · Private' : 'Local app · Private';
 }
 
@@ -2296,8 +2308,11 @@ function updatePrivacyCopy() {
   if (badge) badge.title = short;
   const stPriv = document.getElementById('settings-privacy-text');
   if (stPriv) {
-    if ((_providerState.effective_provider || 'cloud') === 'local') {
-      stPriv.innerHTML = 'Local LLM mode: chat and configs stay on your machine. Nothing is sent to ADK Cyber or Anthropic. Conversations are stored locally at <code>' + CONV_STORE_PATH + '</code>.';
+    const eff = _providerState.effective_provider || 'anthropic';
+    if (eff === 'local') {
+      stPriv.innerHTML = 'Local LLM mode: chat and configs stay on your machine. Nothing is sent to ADK Cyber, Anthropic, or xAI. Conversations are stored locally at <code>' + CONV_STORE_PATH + '</code>.';
+    } else if (eff === 'grok') {
+      stPriv.innerHTML = 'Credentials are redacted on your device. On cloud plans, redacted requests pass through ADK Cyber\'s gateway (not stored) to xAI (Grok). Conversations are stored locally at <code>' + CONV_STORE_PATH + '</code>.';
     } else {
       stPriv.innerHTML = 'Credentials are redacted on your device. On cloud plans, redacted requests pass through ADK Cyber\'s gateway (not stored) to Anthropic. Conversations are stored locally at <code>' + CONV_STORE_PATH + '</code>.';
     }
@@ -2305,13 +2320,33 @@ function updatePrivacyCopy() {
 }
 
 // ── Model selection ───────────────────────────────────────────────
+const MODEL_LABELS = {
+  'auto': '⚡ Auto',
+  'claude-haiku-4-5-20251001': 'Haiku',
+  'claude-sonnet-4-6': 'Sonnet',
+  'claude-opus-4-8': 'Opus',
+  'grok-4.5': 'Grok 4.5',
+  'grok-4.3': 'Grok 4.3',
+};
 let selectedModel = 'auto';
 
-function setModel(model) {
+function setModel(model, persist) {
   selectedModel = model;
   document.querySelectorAll('.model-pill').forEach(p => {
     p.classList.toggle('active', p.dataset.model === model);
   });
+  if (persist !== false && _providerState && _providerState.settings) {
+    const eff = _providerState.effective_provider || _providerState.settings.chat_provider || 'anthropic';
+    if (eff === 'anthropic' || eff === 'grok' || eff === 'cloud') {
+      _providerState.settings.cloud_model = model;
+      // Fire-and-forget persist last used cloud model
+      fetch(`${API}/api/settings`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cloud_model: model }),
+      }).catch(() => {});
+    }
+  }
 }
 
 function modelLabel(m) {
@@ -2451,10 +2486,14 @@ function refreshAboutPanel(health) {
     ver.textContent = v.startsWith('v') ? v : 'v' + v;
   }
   if (prov) {
-    const eff = _providerState.effective_provider || 'cloud';
-    prov.textContent = eff === 'local'
-      ? `Local · ${(_providerState.settings || {}).local_model || 'LLM'}`
-      : 'Cloud · ADK Cyber AI';
+    const eff = _providerState.effective_provider || 'anthropic';
+    if (eff === 'local') {
+      prov.textContent = `Local · ${(_providerState.settings || {}).local_model || 'LLM'}`;
+    } else if (eff === 'grok') {
+      prov.textContent = `Cloud · Grok (${selectedModel || 'xAI'})`;
+    } else {
+      prov.textContent = `Cloud · Claude (${MODEL_LABELS[selectedModel] || selectedModel || 'Auto'})`;
+    }
   }
   if (inst) inst.textContent = _installDir || (health && health.install_dir) || '—';
   if (wRow && wEl && typeof (health && health.install_writable) === 'boolean') {
@@ -2544,11 +2583,38 @@ async function loadUpdateLogs() {
 // State pulled from GET /api/settings — kept in sync with the backend so the
 // mode pill, quota UI, and request branching all reflect the same truth.
 let _providerState = {
-  settings:           { chat_provider: 'cloud', local_base_url: '', local_model: '', local_api_key: '' },
+  settings:           { chat_provider: 'anthropic', cloud_model: 'auto', local_base_url: '', local_model: '', local_api_key: '' },
   tier:               'free',
-  effective_provider: 'cloud',
-  providers_available:{ cloud: true, local: true },
+  effective_provider: 'anthropic',
+  providers_available:{ anthropic: true, grok: false, local: true, cloud: true },
+  models_available:   {
+    anthropic: ['auto', 'claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'claude-opus-4-8'],
+    grok: ['grok-4.5', 'grok-4.3'],
+    local: [],
+  },
 };
+
+function isCloudEff(eff) {
+  return eff === 'anthropic' || eff === 'grok' || eff === 'cloud';
+}
+
+function rebuildModelPills(provider, preferredModel) {
+  const host = document.getElementById('model-pills');
+  if (!host) return;
+  const models = (_providerState.models_available && _providerState.models_available[provider]) || [];
+  if (!models.length || provider === 'local') {
+    host.innerHTML = '';
+    return;
+  }
+  let pick = preferredModel || selectedModel;
+  if (!models.includes(pick)) pick = models[0];
+  host.innerHTML = models.map(m => {
+    const label = MODEL_LABELS[m] || m;
+    const active = m === pick ? ' active' : '';
+    return `<button class="model-pill${active}" data-model="${m}" onclick="setModel('${m}')">${label}</button>`;
+  }).join('');
+  selectedModel = pick;
+}
 
 function toggleProviderPanel() {
   document.getElementById('provider-section').classList.toggle('expanded');
@@ -2605,14 +2671,16 @@ async function tryAutoDetectLocalLlm() {
 
 function renderProviderUI() {
   const st     = _providerState.settings || {};
-  const eff    = _providerState.effective_provider || 'cloud';
+  let   pref   = st.chat_provider || 'anthropic';
+  if (pref === 'cloud') pref = 'anthropic';
+  const eff    = _providerState.effective_provider || pref;
   const avail  = _providerState.providers_available || {};
   const tier   = _providerState.tier || 'free';
   const section = document.getElementById('provider-section');
 
   // Hydrate radios + fields
   document.querySelectorAll('input[name="chat_provider"]').forEach(r => {
-    r.checked  = (r.value === st.chat_provider);
+    r.checked  = (r.value === pref);
     const row = r.closest('.provider-radio');
     const isDisabled = avail[r.value] === false;
     if (row) row.classList.toggle('disabled', isDisabled);
@@ -2635,17 +2703,23 @@ function renderProviderUI() {
   syncLocalModelSelect(st.local_model || '');
 
   // Show the local-fields group only when local is the current selection.
-  section.classList.toggle('show-local', st.chat_provider === 'local');
-  if (st.chat_provider === 'local') {
+  section.classList.toggle('show-local', pref === 'local');
+  if (pref === 'local') {
     section.classList.add('expanded');
   }
+
+  // Model pills for the effective cloud provider
+  const modelProvider = isCloudEff(eff) ? (eff === 'cloud' ? 'anthropic' : eff) : 'local';
+  rebuildModelPills(modelProvider, st.cloud_model || selectedModel);
 
   // Header label summarising the effective mode
   const label = document.getElementById('provider-mode-label');
   if (eff === 'local') {
     label.textContent = `Local · ${st.local_model || '(no model)'}`;
+  } else if (eff === 'grok') {
+    label.textContent = `Cloud · ${MODEL_LABELS[selectedModel] || selectedModel || 'Grok'}`;
   } else {
-    label.textContent = 'Cloud · ADK Cyber AI';
+    label.textContent = `Cloud · ${MODEL_LABELS[selectedModel] || 'Claude'}`;
   }
 
   // Tier-aware lock messaging
@@ -2658,35 +2732,41 @@ function renderProviderUI() {
     const qs = email && email !== '—' ? `?checkout[email]=${encodeURIComponent(email)}` : '';
     lock.innerHTML = `Local-LLM mode requires the <strong>Local</strong> tier ($5/mo). <a href="${LS_LOCAL_URL + qs}" target="_blank" rel="noopener">Get the Local tier</a> to use your own local model.`;
     lock.classList.add('show');
+  } else if (!avail.grok && (tier === 'free' || !tier)) {
+    lock.innerHTML = 'Grok is available on <strong>Pro / Max</strong>. Free plan uses Claude Haiku only.';
+    lock.classList.add('show');
   } else {
     lock.classList.remove('show');
     lock.textContent = '';
   }
 
-  // Mode pill next to the model picker
+  // Mode pill next to the model picker — cycles local ⇄ primary cloud (anthropic)
   const pill = document.getElementById('provider-mode-pill');
   if (pill) {
-    pill.classList.remove('cloud', 'local');
-    pill.classList.add(eff);
-    const canToggle = avail.cloud && avail.local;
-    const baseLabel = eff === 'local' ? `Local · ${st.local_model || '?'}` : 'Cloud';
+    pill.classList.remove('cloud', 'local', 'anthropic', 'grok');
+    pill.classList.add(isCloudEff(eff) ? 'cloud' : 'local');
+    const hasCloud = avail.anthropic || avail.cloud || avail.grok;
+    const canToggle = hasCloud && avail.local;
+    let baseLabel = 'Cloud';
+    if (eff === 'local') baseLabel = `Local · ${st.local_model || '?'}`;
+    else if (eff === 'grok') baseLabel = `Grok · ${MODEL_LABELS[selectedModel] || selectedModel}`;
+    else baseLabel = `Claude · ${MODEL_LABELS[selectedModel] || 'Auto'}`;
     pill.textContent = canToggle ? `${baseLabel}  ⇄` : baseLabel;
     pill.style.cursor = canToggle ? 'pointer' : 'default';
     if (canToggle) {
-      pill.title = eff === 'local' ? 'Click to switch to Cloud' : 'Click to switch to Local';
+      pill.title = eff === 'local' ? 'Click to switch to cloud' : 'Click to switch to Local';
     } else {
       pill.title = eff === 'local'
         ? `Local provider at ${st.local_base_url}`
-        : 'Cloud provider (Anthropic)';
+        : (eff === 'grok' ? 'Cloud provider (Grok / xAI)' : 'Cloud provider (Anthropic)');
     }
   }
 
-  // Hide the Anthropic model picker when in local mode (it's irrelevant).
-  document.querySelectorAll('.model-pill[data-model]').forEach(b => {
-    b.style.display = (eff === 'local') ? 'none' : '';
-  });
+  // Hide model picker when in local mode
   const lbl = document.getElementById('model-picker-label');
   if (lbl) lbl.style.display = (eff === 'local') ? 'none' : '';
+  const pills = document.getElementById('model-pills');
+  if (pills) pills.style.display = (eff === 'local') ? 'none' : '';
 
   // Hide the "config >8K = 3 queries" weight warning in local mode (no quota).
   const cfgWarn = document.getElementById('large-cfg-warn');
@@ -2757,7 +2837,7 @@ let _contextEstimateTimer = null;
 async function updateLocalContextWarn() {
   const warn = document.getElementById('local-context-warn');
   if (!warn) return;
-  const eff = _providerState.effective_provider || 'cloud';
+  const eff = _providerState.effective_provider || 'anthropic';
   if (eff !== 'local') {
     warn.classList.remove('show', 'over');
     warn.textContent = '';
@@ -2802,9 +2882,25 @@ function scheduleContextEstimate() {
 function onProviderChange() {
   const radio = document.querySelector('input[name="chat_provider"]:checked');
   if (!radio) return;
-  _providerState.settings.chat_provider = radio.value;
-  document.getElementById('provider-section').classList.toggle('show-local', radio.value === 'local');
-  if (radio.value === 'local') {
+  let val = radio.value;
+  if (val === 'cloud') val = 'anthropic';
+  _providerState.settings.chat_provider = val;
+  // When switching into a cloud provider, pick a valid default model for that family.
+  if (val === 'grok') {
+    const models = (_providerState.models_available && _providerState.models_available.grok) || ['grok-4.5'];
+    if (!models.includes(selectedModel)) {
+      selectedModel = models[0];
+      _providerState.settings.cloud_model = selectedModel;
+    }
+  } else if (val === 'anthropic') {
+    const models = (_providerState.models_available && _providerState.models_available.anthropic) || ['auto'];
+    if (!models.includes(selectedModel)) {
+      selectedModel = 'auto';
+      _providerState.settings.cloud_model = 'auto';
+    }
+  }
+  document.getElementById('provider-section').classList.toggle('show-local', val === 'local');
+  if (val === 'local') {
     document.getElementById('provider-section').classList.add('expanded');
   }
   // Persist immediately — selecting a provider should switch right away, no
@@ -2812,14 +2908,18 @@ function onProviderChange() {
   saveProvider();
 }
 
-// One-click switch via the mode pill. Only meaningful when the tier has both
-// providers available (owner/pro/max with a configured local endpoint).
+// One-click switch via the mode pill: local ⇄ last cloud provider (anthropic default).
 async function toggleProvider() {
   const avail = _providerState.providers_available || {};
-  if (!avail.cloud || !avail.local) return;
+  const hasCloud = avail.anthropic || avail.cloud || avail.grok;
+  if (!hasCloud || !avail.local) return;
   const st   = _providerState.settings || {};
-  const cur  = st.chat_provider || 'cloud';
-  const next = cur === 'local' ? 'cloud' : 'local';
+  let cur  = st.chat_provider || 'anthropic';
+  if (cur === 'cloud') cur = 'anthropic';
+  const next = cur === 'local'
+    ? ((st._last_cloud_provider === 'grok' && avail.grok) ? 'grok' : 'anthropic')
+    : 'local';
+  if (cur !== 'local') st._last_cloud_provider = cur;
   // Switching to local needs a configured endpoint — open settings if missing.
   if (next === 'local' && !(st.local_base_url || '').trim()) {
     document.getElementById('provider-section').classList.add('expanded');
@@ -2835,6 +2935,8 @@ async function toggleProvider() {
     const data = await res.json();
     _providerState.settings           = data.settings;
     _providerState.effective_provider = data.effective_provider;
+    if (data.providers_available) _providerState.providers_available = data.providers_available;
+    if (data.models_available) _providerState.models_available = data.models_available;
     renderProviderUI();
   } catch (e) { /* leave the pill as-is on failure */ }
 }
@@ -2843,8 +2945,11 @@ async function saveProvider() {
   const radio  = document.querySelector('input[name="chat_provider"]:checked');
   const status = document.getElementById('provider-save-status');
   status.textContent = 'Saving…';
+  let provider = radio ? radio.value : 'anthropic';
+  if (provider === 'cloud') provider = 'anthropic';
   const body = {
-    chat_provider:  radio ? radio.value : 'cloud',
+    chat_provider:  provider,
+    cloud_model:    selectedModel || (_providerState.settings && _providerState.settings.cloud_model) || 'auto',
     local_base_url: document.getElementById('local-base-url').value.trim(),
     local_model:    document.getElementById('local-model').value.trim(),
     local_api_key:  document.getElementById('local-api-key').value,
@@ -2870,6 +2975,8 @@ async function saveProvider() {
     const data = await res.json();
     _providerState.settings           = data.settings;
     _providerState.effective_provider = data.effective_provider;
+    if (data.providers_available) _providerState.providers_available = data.providers_available;
+    if (data.models_available) _providerState.models_available = data.models_available;
     renderProviderUI();
     status.textContent = '✓ Saved';
     status.style.color = '#4caf50';
@@ -3296,7 +3403,7 @@ async function downloadMigrationZip() {
 }
 
 function maybeWarnScreenshotPaste() {
-  const eff = _providerState.effective_provider || 'cloud';
+  const eff = _providerState.effective_provider || 'anthropic';
   if (eff === 'local') return;
   if (localStorage.getItem('pcop_screenshot_warn_ack')) return;
   localStorage.setItem('pcop_screenshot_warn_ack', '1');
@@ -3366,9 +3473,15 @@ function updateTierUI(tier, queriesUsed, queriesLimit, period) {
   if (_providerState) {
     _providerState.tier = currentTier;
     if (currentTier === 'local') {
-      _providerState.providers_available = { cloud: false, local: true };
+      _providerState.providers_available = { anthropic: false, grok: false, cloud: false, local: true };
       _providerState.effective_provider  = 'local';
       _providerState.settings.chat_provider = 'local';
+    } else if (currentTier === 'free') {
+      _providerState.providers_available = {
+        ...(_providerState.providers_available || {}),
+        anthropic: true, grok: false, cloud: true,
+        local: false,
+      };
     }
     renderProviderUI();
   }
@@ -3971,11 +4084,11 @@ async function sendMessage() {
   // Allow image-only sends with a default prompt so the model has a question to anchor to.
   if (!msg && imgs.length) msg = 'Please analyze the attached screenshot(s) and explain what you see.';
 
-  const effProvider = _providerState.effective_provider || 'cloud';
+  const effProvider = _providerState.effective_provider || 'anthropic';
   const st = _providerState.settings || {};
   if (effProvider === 'local' && imgs.length && !st.local_supports_vision) {
     appendAssistantMessage(
-      '⚠️ Screenshot upload is disabled for local LLM mode. Enable **Model supports vision** in Settings → My local LLM, or switch to Cloud.',
+      '⚠️ Screenshot upload is disabled for local LLM mode. Enable **Model supports vision** in Settings → My local LLM, or switch to Anthropic/Grok cloud.',
       null
     );
     return;
@@ -4139,7 +4252,7 @@ function updateConfigStatus() {
   }
   // Show large-config warning only for free-tier users with >8,000 char configs
   if (warn) {
-    const eff = _providerState.effective_provider || 'cloud';
+    const eff = _providerState.effective_provider || 'anthropic';
     warn.style.display = (eff !== 'local' && currentTier === 'free' && val.length > 8000) ? 'block' : 'none';
   }
   document.getElementById('config-ind').textContent = val ? '📎 Config attached' : '';

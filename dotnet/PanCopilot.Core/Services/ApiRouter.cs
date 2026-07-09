@@ -215,11 +215,8 @@ public sealed class ApiRouter
             ["settings"] = ToNode(_settings.PublicDict()),
             ["tier"] = tier,
             ["effective_provider"] = _chat.EffectiveProvider(),
-            ["providers_available"] = new JsonObject
-            {
-                ["cloud"] = tier != "local",
-                ["local"] = tier is null or "local" or "pro" or "max" or "owner",
-            },
+            ["providers_available"] = ChatService.ProvidersAvailable(tier),
+            ["models_available"] = ChatService.ModelsAvailable(),
         });
     }
 
@@ -228,12 +225,19 @@ public sealed class ApiRouter
         var s = _settings.Current;
         var tier = _session.Tier;
         var newProvider = body["chat_provider"]?.GetValue<string>() ?? s.chat_provider;
-        if (newProvider != "cloud" && newProvider != "local")
+        if (string.Equals(newProvider, "cloud", StringComparison.OrdinalIgnoreCase))
+            newProvider = "anthropic";
+        if (newProvider is not ("anthropic" or "grok" or "local"))
             return Detail(400, $"Invalid chat_provider '{newProvider}'.");
-        if (tier == "local" && newProvider == "cloud")
+        if (tier == "local" && newProvider is "anthropic" or "grok")
             return Detail(403, "Your account is on the Local tier — cloud chat is not included. Upgrade to Pro at adkcyber.com/pan-copilot.html to enable cloud mode.");
+        if (newProvider == "grok" && tier is not ("pro" or "max" or "owner"))
+            return Detail(403, "Grok is available on Pro, Max, and Owner plans. Upgrade at adkcyber.com/pan-copilot.html.");
+        if (newProvider == "local" && tier is "free")
+            return Detail(403, "Local-LLM mode requires the Local tier ($5/mo) or a Pro/Max plan.");
 
         s.chat_provider = newProvider;
+        if (body["cloud_model"] is { } cm) s.cloud_model = cm.GetValue<string>().Trim();
         if (body["local_base_url"] is { } bu) s.local_base_url = bu.GetValue<string>().Trim();
         if (body["local_model"] is { } lm) s.local_model = lm.GetValue<string>().Trim();
         if (body["local_api_key"] is { } lk) s.local_api_key = lk.GetValue<string>().Trim();
@@ -250,6 +254,8 @@ public sealed class ApiRouter
             ["ok"] = true,
             ["settings"] = ToNode(_settings.PublicDict()),
             ["effective_provider"] = _chat.EffectiveProvider(),
+            ["providers_available"] = ChatService.ProvidersAvailable(tier),
+            ["models_available"] = ChatService.ModelsAvailable(),
         });
     }
 

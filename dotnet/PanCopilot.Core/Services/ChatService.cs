@@ -29,8 +29,11 @@ public sealed class ChatService
         "best practices", "troubleshoot", "diagnose", "forensic",
     };
 
-    private static readonly HashSet<string> AllowedModels = new()
-    { "auto", "claude-haiku-4-5-20251001", "claude-sonnet-4-6", "claude-opus-4-7", "claude-opus-4-8" };
+    private static readonly HashSet<string> AllowedModels = new(SettingsStore.AnthropicModels);
+    private static readonly HashSet<string> AllowedGrokModels = new(SettingsStore.GrokModels);
+
+    public static bool IsCloudProvider(string provider) =>
+        provider is "anthropic" or "grok" or "cloud";
 
     // Appended as a cached system block. Output tokens are the largest marginal
     // cost per message (~$15/MTok on Sonnet); this trims reply length without
@@ -77,12 +80,55 @@ public sealed class ChatService
         return "claude-haiku-4-5-20251001";
     }
 
+    /// <summary>
+    /// Resolve the runtime provider: anthropic | grok | local.
+    /// Tier hard-locks override user preference (local tier → local; free cannot use grok).
+    /// </summary>
     public string EffectiveProvider()
     {
-        var pref = _settings.Current.chat_provider;
-        if (_session.Tier == "local") return "local";
-        return pref is "cloud" or "local" ? pref : "cloud";
+        var pref = _settings.Current.chat_provider ?? "anthropic";
+        if (string.Equals(pref, "cloud", StringComparison.OrdinalIgnoreCase))
+            pref = "anthropic";
+
+        var tier = _session.Tier;
+        if (tier == "local") return "local";
+
+        if (pref == "local")
+        {
+            // free has no local; everyone else who chose local keeps it
+            if (tier is null or "local" or "pro" or "max" or "owner")
+                return "local";
+            return "anthropic";
+        }
+
+        if (pref == "grok")
+        {
+            if (tier is "pro" or "max" or "owner")
+                return "grok";
+            return "anthropic"; // free / unknown → fall back to Claude
+        }
+
+        // anthropic or anything else
+        if (tier == "local") return "local";
+        return "anthropic";
     }
+
+    public static JsonObject ProvidersAvailable(string? tier) => new()
+    {
+        ["anthropic"] = tier != "local",
+        ["grok"] = tier is "pro" or "max" or "owner",
+        ["local"] = tier is null or "local" or "pro" or "max" or "owner",
+        // legacy alias so older UI bits keep working until fully migrated
+        ["cloud"] = tier != "local",
+    };
+
+    public static JsonObject ModelsAvailable() => new()
+    {
+        ["anthropic"] = new JsonArray(
+            "auto", "claude-haiku-4-5-20251001", "claude-sonnet-4-6", "claude-opus-4-8"),
+        ["grok"] = new JsonArray("grok-4.5", "grok-4.3"),
+        ["local"] = new JsonArray(),
+    };
 
     /// <summary>Run a chat turn, posting protocol events through emit.</summary>
     public async Task StreamAsync(string payloadJson, Func<JsonObject, Task> emit)
@@ -102,8 +148,7 @@ public sealed class ChatService
             var req = JsonNode.Parse(payloadJson)!.AsObject();
             message = req["message"]?.GetValue<string>() ?? "";
             configText = req["config_text"]?.GetValue<string>() ?? "";
-            model = req["model"]?.GetValue<string>() ?? "auto";
-            if (!AllowedModels.Contains(model)) model = "auto";
+            model = req["model"]?.GetValue<string>() ?? "";
             convIdReq = req["conversation_id"]?.GetValue<string>();
             images = req["images"] as JsonArray;
             maxTokensReq = req["max_tokens"]?.GetValue<int>();
@@ -112,6 +157,22 @@ public sealed class ChatService
 
         var tier = _session.Tier ?? "free";
         var provider = EffectiveProvider();
+        // Prefer request model when valid for the effective provider; else saved cloud_model.
+        if (provider == "grok")
+        {
+            if (!AllowedGrokModels.Contains(model))
+                model = AllowedGrokModels.Contains(_settings.Current.cloud_model)
+                    ? _settings.Current.cloud_model
+                    : "grok-4.5";
+        }
+        else if (provider == "anthropic" || provider == "cloud")
+        {
+            if (!AllowedModels.Contains(model))
+            {
+                var saved = _settings.Current.cloud_model;
+                model = AllowedModels.Contains(saved) ? saved : "auto";
+            }
+        }
         var configLen = configText.Length;
 
         // ── KB routing (short-circuit or LLM augmentation) ───────────────
@@ -245,8 +306,34 @@ public sealed class ChatService
                     async text => { full.Append(text); await emit(new JsonObject { ["type"] = "token", ["text"] = text }); },
                     async thinking => await emit(new JsonObject { ["type"] = thinking ? "thinking_start" : "thinking_end" }));
             }
+            else if (provider == "grok")
+            {
+                resolvedModel = AllowedGrokModels.Contains(model) ? model : "grok-4.5";
+                var ki = _knownIssues?.BuildContext(msgClean);
+                var systemText = string.Join("\n\n", new[]
+                {
+                    _systemPrompt,
+                    BrevityInstruction,
+                    string.IsNullOrEmpty(ki) ? null : ki,
+                }.Where(x => !string.IsNullOrEmpty(x))!);
+
+                var openAiMessages = CloudOpenAiClient.ToOpenAiMessages(messages, systemText);
+                var client = new CloudOpenAiClient(_session.Token!);
+                var result = await client.StreamChatAsync(openAiMessages, resolvedModel, maxTokens,
+                    async text => { full.Append(text); await emit(new JsonObject { ["type"] = "token", ["text"] = text }); },
+                    async thinking => await emit(new JsonObject { ["type"] = thinking ? "thinking_start" : "thinking_end" }));
+                inputTokens = result.InputTokens;
+                outputTokens = result.OutputTokens;
+                if (!string.IsNullOrEmpty(result.Model)) resolvedModel = result.Model!;
+                if (result.QueriesUsed.HasValue)      _session.QueriesUsed = result.QueriesUsed.Value;
+                if (result.QueriesLimit.HasValue)     _session.QueriesLimit = result.QueriesLimit.Value;
+                if (result.QueriesRemaining.HasValue) _session.QueriesRemaining = result.QueriesRemaining.Value;
+                // Pin only Grok models so switching to Claude later does not reuse a Grok id.
+                _conversations.PinModel(convId, resolvedModel);
+            }
             else
             {
+                // anthropic (and legacy "cloud")
                 if (model == "auto")
                 {
                     // Pin the model for the life of the conversation: Anthropic
@@ -255,6 +342,7 @@ public sealed class ChatService
                     // tier stays hard-locked to Haiku via SelectModel.
                     var pinned = tier == "free" ? null : _conversations.GetPinnedModel(convId);
                     resolvedModel = pinned != null && pinned != "auto" && AllowedModels.Contains(pinned)
+                            && !AllowedGrokModels.Contains(pinned)
                         ? pinned
                         : SelectModel(msgClean, cfgClean, tier);
                 }
@@ -358,10 +446,10 @@ public sealed class ChatService
             ["input_tokens"] = inputTokens,
             ["output_tokens"] = outputTokens,
             ["conversation_id"] = convId,
-            ["queries_used"] = provider == "cloud" ? _session.QueriesUsed : null,
-            ["queries_limit"] = provider == "cloud" ? _session.QueriesLimit : null,
-            ["queries_remaining"] = provider == "cloud" ? _session.QueriesRemaining : null,
-            ["period"] = provider == "cloud" ? _session.Period : null,
+            ["queries_used"] = IsCloudProvider(provider) ? _session.QueriesUsed : null,
+            ["queries_limit"] = IsCloudProvider(provider) ? _session.QueriesLimit : null,
+            ["queries_remaining"] = IsCloudProvider(provider) ? _session.QueriesRemaining : null,
+            ["period"] = IsCloudProvider(provider) ? _session.Period : null,
             ["tier"] = _session.Tier,
             ["redactions"] = totalRedactions,
             ["config_truncated"] = provider == "local" && configTruncated,

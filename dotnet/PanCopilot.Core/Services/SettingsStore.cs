@@ -16,9 +16,29 @@ public sealed class SettingsStore
     private static string Dir => PlatformRuntime.Host.DataDirectory;
     private static string FilePath => Path.Combine(Dir, "settings_v3.json");
 
+    public static readonly HashSet<string> ValidProviders = new(StringComparer.Ordinal)
+    {
+        "anthropic", "grok", "local",
+        // legacy alias accepted on load / POST, rewritten to anthropic
+        "cloud",
+    };
+
+    public static readonly HashSet<string> AnthropicModels = new(StringComparer.Ordinal)
+    {
+        "auto", "claude-haiku-4-5-20251001", "claude-sonnet-4-6", "claude-opus-4-7", "claude-opus-4-8",
+    };
+
+    public static readonly HashSet<string> GrokModels = new(StringComparer.Ordinal)
+    {
+        "grok-4.5", "grok-4.3",
+    };
+
     public sealed class Settings
     {
-        public string chat_provider { get; set; } = "cloud";
+        /// <summary>anthropic | grok | local (legacy "cloud" migrates to anthropic).</summary>
+        public string chat_provider { get; set; } = "anthropic";
+        /// <summary>Preferred model for anthropic or grok providers.</summary>
+        public string cloud_model { get; set; } = "auto";
         public string local_base_url { get; set; } = "http://localhost:11434/v1";
         public string local_model { get; set; } = "qwen2.5:14b";
         public string local_api_key { get; set; } = "";
@@ -42,7 +62,11 @@ public sealed class SettingsStore
 
     public Settings Current { get; private set; }
 
-    public SettingsStore() => Current = Load();
+    public SettingsStore()
+    {
+        Current = Load();
+        Normalize();
+    }
 
     private static Settings Load()
     {
@@ -50,7 +74,11 @@ public sealed class SettingsStore
         {
             var text = SafeIO.ReadAllText(FilePath);
             if (!string.IsNullOrEmpty(text))
-                return JsonSerializer.Deserialize<Settings>(text) ?? new Settings();
+            {
+                var s = JsonSerializer.Deserialize<Settings>(text) ?? new Settings();
+                MigrateProvider(s);
+                return s;
+            }
         }
         catch { /* corrupt file → defaults */ }
         return new Settings();
@@ -62,11 +90,33 @@ public sealed class SettingsStore
         File.WriteAllText(FilePath, JsonSerializer.Serialize(Current, new JsonSerializerOptions { WriteIndented = true }));
     }
 
+    /// <summary>Map legacy cloud → anthropic. Idempotent.</summary>
+    public static void MigrateProvider(Settings s)
+    {
+        if (string.Equals(s.chat_provider, "cloud", StringComparison.OrdinalIgnoreCase))
+            s.chat_provider = "anthropic";
+    }
+
     /// <summary>Clamp ranges the same way app.py's _normalize_settings does.</summary>
     public void Normalize()
     {
         var s = Current;
-        if (s.chat_provider != "cloud" && s.chat_provider != "local") s.chat_provider = "cloud";
+        MigrateProvider(s);
+        if (s.chat_provider is not ("anthropic" or "grok" or "local"))
+            s.chat_provider = "anthropic";
+
+        s.cloud_model = (s.cloud_model ?? "").Trim();
+        if (s.chat_provider == "grok")
+        {
+            if (!GrokModels.Contains(s.cloud_model))
+                s.cloud_model = "grok-4.5";
+        }
+        else if (s.chat_provider == "anthropic")
+        {
+            if (!AnthropicModels.Contains(s.cloud_model))
+                s.cloud_model = "auto";
+        }
+
         s.local_history_turns = Math.Clamp(s.local_history_turns, 2, 400);
         s.local_context_tokens = Math.Clamp(s.local_context_tokens, 4096, 1_000_000);
         s.local_max_tokens = Math.Clamp(s.local_max_tokens, 256, 131072);
@@ -81,6 +131,7 @@ public sealed class SettingsStore
         return new Dictionary<string, object?>
         {
             ["chat_provider"] = s.chat_provider,
+            ["cloud_model"] = s.cloud_model,
             ["local_base_url"] = s.local_base_url,
             ["local_model"] = s.local_model,
             ["local_api_key"] = s.local_api_key,
