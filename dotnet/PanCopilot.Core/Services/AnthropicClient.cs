@@ -29,7 +29,7 @@ public sealed class AnthropicClient
     {
         _sessionToken = sessionToken ?? throw new ArgumentNullException(nameof(sessionToken));
         var ov = Environment.GetEnvironmentVariable("ADK_PROXY_MESSAGES_URL");
-        _url = string.IsNullOrWhiteSpace(ov) ? DefaultMessagesUrl : ov.Trim();
+        _url = ProxyUrl.Resolve(ov, DefaultMessagesUrl);
         _http = http ?? new HttpClient { Timeout = TimeSpan.FromMinutes(5) };
     }
 

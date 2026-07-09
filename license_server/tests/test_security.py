@@ -100,29 +100,30 @@ def test_tmp_db_allowed_with_override():
 
 
 # ---------------------------------------------------------------------------
-# S3 — key delivery auditing + anomaly log
+# S3 — cloud model keys are never delivered to clients
 # ---------------------------------------------------------------------------
-def test_register_and_login_record_key_delivery():
+def test_register_does_not_return_anthropic_key():
     client = TestClient(app.app)
     email = "audit-test@example.com"
-    # Clean any prior run.
     with app.get_db() as db:
         uid = db.execute("SELECT id FROM users WHERE email=?", (email,)).fetchone()
         if uid:
-            db.execute("DELETE FROM key_deliveries WHERE user_id=?", (uid["id"],))
+            db.execute("DELETE FROM sessions WHERE user_id=?", (uid["id"],))
             db.execute("DELETE FROM users WHERE email=?", (email,))
             db.commit()
 
     r = client.post("/auth/register", json={"email": email, "password": "password123"})
     assert r.status_code == 200, r.text
-    assert r.json().get("anthropic_key")  # free tier still gets the (encrypted) key
-
+    body = r.json()
+    assert body.get("token")  # session token still issued
+    assert body.get("anthropic_key") in (None, "")  # never ship org API key
+    # Session is stored hashed, not plaintext
     with app.get_db() as db:
         uid = db.execute("SELECT id FROM users WHERE email=?", (email,)).fetchone()["id"]
-        n = db.execute(
-            "SELECT COUNT(*) AS c FROM key_deliveries WHERE user_id=?", (uid,)
-        ).fetchone()["c"]
-    assert n >= 1
+        row = db.execute("SELECT token_hash FROM sessions WHERE user_id=?", (uid,)).fetchone()
+    assert row is not None
+    assert row["token_hash"] != body["token"]
+    assert len(row["token_hash"]) == 64  # sha256 hex
 
 
 # ---------------------------------------------------------------------------

@@ -18,16 +18,20 @@ public sealed class LocalApiServer : IAsyncDisposable
     private readonly string _frontendRoot;
     private readonly ApiRouter _router;
     private readonly ChatService _chat;
+    private readonly string _localSecret;
 
     public int Port { get; }
+    /// <summary>Per-launch secret required on all API/chat requests.</summary>
+    public string LocalSecret => _localSecret;
 
-    private LocalApiServer(HttpListener listener, int port, string frontendRoot, ApiRouter router, ChatService chat)
+    private LocalApiServer(HttpListener listener, int port, string frontendRoot, ApiRouter router, ChatService chat, string localSecret)
     {
         _listener = listener;
         Port = port;
         _frontendRoot = frontendRoot;
         _router = router;
         _chat = chat;
+        _localSecret = localSecret;
         _loop = Task.Run(() => RunAsync(_cts.Token));
     }
 
@@ -38,10 +42,11 @@ public sealed class LocalApiServer : IAsyncDisposable
         CancellationToken ct = default)
     {
         var port = FindFreePort();
+        var secret = Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(24));
         var listener = new HttpListener();
         listener.Prefixes.Add($"http://127.0.0.1:{port}/");
         listener.Start();
-        return Task.FromResult(new LocalApiServer(listener, port, frontendRoot, router, chat));
+        return Task.FromResult(new LocalApiServer(listener, port, frontendRoot, router, chat, secret));
     }
 
     public string AppUrl => $"http://127.0.0.1:{Port}/index.html";
@@ -86,6 +91,17 @@ public sealed class LocalApiServer : IAsyncDisposable
 
             var path = ctx.Request.Url?.AbsolutePath ?? "/";
             var query = ctx.Request.Url?.Query ?? "";
+
+            // API + chat require the per-launch secret (blocks other local processes).
+            if ((path == "/chat/stream" || IsApiPath(path)) && !IsAuthorized(ctx.Request))
+            {
+                ctx.Response.StatusCode = 401;
+                var bytes = Encoding.UTF8.GetBytes("{\"detail\":\"Unauthorized local API access.\"}");
+                ctx.Response.ContentType = "application/json";
+                await ctx.Response.OutputStream.WriteAsync(bytes).ConfigureAwait(false);
+                ctx.Response.Close();
+                return;
+            }
 
             if (path == "/chat/stream" && ctx.Request.HttpMethod == "POST")
             {
@@ -192,17 +208,43 @@ public sealed class LocalApiServer : IAsyncDisposable
             _ => "application/octet-stream",
         };
 
+        // Inject per-launch secret so the frontend can authenticate API calls.
+        if (ext == ".html")
+        {
+            var html = await File.ReadAllTextAsync(filePath).ConfigureAwait(false);
+            var inject = $"<script>window.__LOCAL_API_SECRET__={System.Text.Json.JsonSerializer.Serialize(_localSecret)};</script>";
+            if (html.Contains("</head>", StringComparison.OrdinalIgnoreCase))
+                html = html.Replace("</head>", inject + "</head>", StringComparison.OrdinalIgnoreCase);
+            else
+                html = inject + html;
+            var bytes = Encoding.UTF8.GetBytes(html);
+            ctx.Response.StatusCode = 200;
+            ctx.Response.ContentLength64 = bytes.Length;
+            await ctx.Response.OutputStream.WriteAsync(bytes).ConfigureAwait(false);
+            ctx.Response.Close();
+            return;
+        }
+
         await using var fs = File.OpenRead(filePath);
         ctx.Response.StatusCode = 200;
         await fs.CopyToAsync(ctx.Response.OutputStream).ConfigureAwait(false);
         ctx.Response.Close();
     }
 
-    private static void AddCors(HttpListenerResponse response)
+    private bool IsAuthorized(HttpListenerRequest request)
     {
-        response.Headers.Add("Access-Control-Allow-Origin", "*");
+        var header = request.Headers["X-ADK-Local-Secret"] ?? "";
+        return !string.IsNullOrEmpty(header)
+               && string.Equals(header, _localSecret, StringComparison.Ordinal);
+    }
+
+    private void AddCors(HttpListenerResponse response)
+    {
+        // Only the app origin on this loopback port — never *.
+        var origin = $"http://127.0.0.1:{Port}";
+        response.Headers.Add("Access-Control-Allow-Origin", origin);
         response.Headers.Add("Access-Control-Allow-Methods", "GET,POST,DELETE,OPTIONS");
-        response.Headers.Add("Access-Control-Allow-Headers", "Content-Type");
+        response.Headers.Add("Access-Control-Allow-Headers", "Content-Type, X-ADK-Local-Secret");
     }
 
     private static int FindFreePort()

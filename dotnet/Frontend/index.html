@@ -44,6 +44,14 @@
       const path = u.pathname;
       if (!isAppPath(path)) return realFetch(input, init);
 
+      // Apple LocalApiServer: attach per-launch secret when present.
+      init = init ? Object.assign({}, init) : {};
+      const headers = new Headers(init.headers || {});
+      if (window.__LOCAL_API_SECRET__) {
+        headers.set('X-ADK-Local-Secret', window.__LOCAL_API_SECRET__);
+      }
+      init.headers = headers;
+
       const method = ((init && init.method) || (typeof input !== 'string' && input.method) || 'GET').toUpperCase();
 
       // file upload → handled entirely client-side (bridge or localhost)
@@ -3809,13 +3817,21 @@ async function downloadMigrationZip() {
 function maybeWarnScreenshotPaste() {
   const eff = _providerState.effective_provider || 'anthropic';
   if (eff === 'local') return;
-  if (localStorage.getItem('pcop_screenshot_warn_ack')) return;
-  localStorage.setItem('pcop_screenshot_warn_ack', '1');
-  alert(
-    'Screenshot privacy note:\n\n' +
-    'Text in configs is auto-redacted before sending, but pasted screenshots are NOT redacted. ' +
-    'Crop or blur any passwords, keys, or sensitive hostnames before attaching images.'
+  // Always warn once per app session when attaching screenshots for cloud send.
+  if (window.__pcop_screenshot_session_ack) return;
+  const ok = confirm(
+    'Screenshot privacy warning\n\n' +
+    'Text in configs is auto-redacted, but screenshots are NOT redacted.\n\n' +
+    'Anything visible (passwords, keys, MFA codes, hostnames) will be sent to the cloud model via the ADK gateway.\n\n' +
+    'Continue only if this image is safe to share.'
   );
+  if (!ok) {
+    // Caller should check return value — for paste path we clear last images if rejected.
+    window.__pcop_screenshot_reject = true;
+    return;
+  }
+  window.__pcop_screenshot_session_ack = true;
+  window.__pcop_screenshot_reject = false;
 }
 
 function showOnboardingIfNeeded() {
@@ -4455,7 +4471,9 @@ async function handlePasteImages(e) {
   }
   if (!imageFiles.length) return;   // text paste — let the default run
   e.preventDefault();
+  window.__pcop_screenshot_reject = false;
   maybeWarnScreenshotPaste();
+  if (window.__pcop_screenshot_reject) return;
   if (pendingImages.length + imageFiles.length > MAX_IMAGES_PER_MSG) {
     alert(`You can attach up to ${MAX_IMAGES_PER_MSG} images per message.`);
     return;
@@ -4516,6 +4534,14 @@ async function sendMessage() {
   if ((hasCfg || imgs.length) && !localStorage.getItem('pcop_data_ack')) {
     showDataDisclosure();
     return; // user must acknowledge; ackDataDisclosure() will re-call sendMessage()
+  }
+  // Cloud + screenshots: explicit confirm every send (not just first paste).
+  if (imgs.length && effProvider !== 'local') {
+    const ok = confirm(
+      'Send ' + imgs.length + ' screenshot(s) to the cloud model?\n\n' +
+      'Screenshots are NOT redacted. Secrets visible in the image will leave this device.'
+    );
+    if (!ok) return;
   }
 
   input.value = '';

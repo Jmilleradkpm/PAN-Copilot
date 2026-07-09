@@ -238,9 +238,20 @@ public sealed class ApiRouter
 
         s.chat_provider = newProvider;
         if (body["cloud_model"] is { } cm) s.cloud_model = cm.GetValue<string>().Trim();
-        if (body["local_base_url"] is { } bu) s.local_base_url = bu.GetValue<string>().Trim();
+        if (body["local_base_url"] is { } bu)
+        {
+            var url = bu.GetValue<string>().Trim();
+            if (!string.IsNullOrEmpty(url) && !LocalLlmService.IsAllowedBaseUrl(url))
+                return Detail(400, "Local LLM base URL must be loopback (localhost / 127.0.0.1) unless you set allow_remote_local_llm.");
+            s.local_base_url = url;
+        }
         if (body["local_model"] is { } lm) s.local_model = lm.GetValue<string>().Trim();
-        if (body["local_api_key"] is { } lk) s.local_api_key = lk.GetValue<string>().Trim();
+        // local_api_key: store via DPAPI accessor (never plaintext on disk)
+        if (body["local_api_key"] is { } lk)
+        {
+            try { _settings.LocalApiKey = lk.GetValue<string>().Trim(); }
+            catch (Exception ex) { return Detail(500, "Could not protect local API key: " + ex.Message); }
+        }
         if (body["local_history_turns"] is { } ht) s.local_history_turns = ht.GetValue<int>();
         if (body["local_context_tokens"] is { } ctk) s.local_context_tokens = ctk.GetValue<int>();
         if (body["local_truncate_config"] is { } tc) s.local_truncate_config = tc.GetValue<bool>();
@@ -248,7 +259,8 @@ public sealed class ApiRouter
         if (body["local_temperature"] is { } tp) s.local_temperature = tp.GetValue<double>();
         if (body["local_supports_vision"] is { } sv) s.local_supports_vision = sv.GetValue<bool>();
         _settings.Normalize();
-        _settings.Save();
+        try { _settings.Save(); }
+        catch (Exception ex) { return Detail(500, "Could not save settings: " + ex.Message); }
         return Json(200, new JsonObject
         {
             ["ok"] = true,

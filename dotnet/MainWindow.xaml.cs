@@ -67,10 +67,61 @@ public partial class MainWindow : Window
 
         _host = new PanCopilotHost(WebView, router, chat);
         WebView.CoreWebView2.AddHostObjectToScript("host", _host);
+
+#if DEBUG
         WebView.CoreWebView2.Settings.AreDevToolsEnabled = true;
         WebView.CoreWebView2.Settings.AreDefaultContextMenusEnabled = true;
+#else
+        // Shipping builds: no DevTools / context menu on the privileged host bridge.
+        WebView.CoreWebView2.Settings.AreDevToolsEnabled = false;
+        WebView.CoreWebView2.Settings.AreDefaultContextMenusEnabled = false;
+#endif
 
-        var frontendPath = Path.Combine(AppContext.BaseDirectory, "Frontend", "index.html");
-        WebView.CoreWebView2.Navigate(new Uri(frontendPath).AbsoluteUri);
+        // Only allow main-frame navigation to our local Frontend package.
+        // External links (docs, upgrades) open in the system browser.
+        var frontendDir = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "Frontend"));
+        var frontendUri = new Uri(Path.Combine(frontendDir, "index.html")).AbsoluteUri;
+        var frontendRoot = new Uri(frontendDir + Path.DirectorySeparatorChar).AbsoluteUri;
+
+        WebView.CoreWebView2.Settings.IsZoomControlEnabled = false;
+        WebView.CoreWebView2.Settings.AreHostObjectsAllowed = true;
+
+        WebView.CoreWebView2.NavigationStarting += (_, args) =>
+        {
+            if (string.IsNullOrEmpty(args.Uri)) { args.Cancel = true; return; }
+            // Allow our frontend (file:// under Frontend/) and about:blank.
+            if (args.Uri.StartsWith("about:", StringComparison.OrdinalIgnoreCase)) return;
+            if (args.Uri.StartsWith(frontendRoot, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(args.Uri, frontendUri, StringComparison.OrdinalIgnoreCase))
+                return;
+            // data: images / blobs for in-app zoom — allow only data:image/
+            if (args.Uri.StartsWith("data:image/", StringComparison.OrdinalIgnoreCase)) return;
+            args.Cancel = true;
+            try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = args.Uri,
+                UseShellExecute = true,
+            }); } catch { /* ignore */ }
+        };
+
+        WebView.CoreWebView2.NewWindowRequested += (_, args) =>
+        {
+            args.Handled = true;
+            var uri = args.Uri;
+            if (string.IsNullOrEmpty(uri)) return;
+            // Keep in-app only for frontend paths; everything else → system browser.
+            if (uri.StartsWith(frontendRoot, StringComparison.OrdinalIgnoreCase))
+            {
+                WebView.CoreWebView2.Navigate(uri);
+                return;
+            }
+            try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = uri,
+                UseShellExecute = true,
+            }); } catch { /* ignore */ }
+        };
+
+        WebView.CoreWebView2.Navigate(frontendUri);
     }
 }

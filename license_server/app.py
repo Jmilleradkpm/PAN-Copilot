@@ -5,10 +5,13 @@ Lightweight FastAPI service deployed to Render.
 
 Responsibilities:
   1. User registration / login (email + password, argon2id hashed)
-  2. Session token issuance and validation
+  2. Session token issuance and validation (tokens stored as SHA-256 hashes)
   3. Query counting with tier-appropriate limits
-  4. Returning ADK Cyber's Anthropic API key (encrypted with session-token-derived key)
-  5. Tier management (free / pro / max)
+  4. Tier management (free / pro / max / local / owner)
+  5. Webhooks (Lemon Squeezy) for subscription tiers
+
+Cloud inference keys (Anthropic / xAI) are NOT delivered to clients.
+They live only on the ADK Cloudflare proxy (AI Gateway BYOK / Worker secrets).
 
 Data that NEVER passes through here:
   - Firewall configs
@@ -46,11 +49,14 @@ logger = logging.getLogger("pan_copilot_license")
 # ---------------------------------------------------------------------------
 # Config from environment variables
 # ---------------------------------------------------------------------------
-ANTHROPIC_API_KEY     = os.environ.get("ANTHROPIC_API_KEY", "")
+ANTHROPIC_API_KEY     = os.environ.get("ANTHROPIC_API_KEY", "")  # retained for ops; never returned to clients
 ANTHROPIC_KEY_VERSION = os.environ.get("ANTHROPIC_KEY_VERSION", "1")
 SECRET_PEPPER         = os.environ.get("SECRET_PEPPER", "change-me-in-production")
 ADMIN_TOKEN           = os.environ.get("ADMIN_TOKEN", "")
 LS_WEBHOOK_SECRET     = os.environ.get("LS_WEBHOOK_SECRET", "")
+# Shared secret for the ADK proxy when it needs weight>1 on /query/check.
+# Without this header, all client weights are forced to 1.
+QUERY_SERVICE_SECRET  = os.environ.get("QUERY_SERVICE_SECRET", "")
 
 # Number of trusted reverse-proxy hops in front of this app. On Render there is
 # exactly one (the platform LB), so the real client IP is the value the trusted
@@ -69,8 +75,8 @@ if not LS_WEBHOOK_SECRET:
     logger.critical("LS_WEBHOOK_SECRET is not set — webhook endpoint will reject all requests.")
 if not ADMIN_TOKEN:
     logger.warning("ADMIN_TOKEN is not set — admin endpoints are disabled.")
-if not ANTHROPIC_API_KEY:
-    logger.warning("ANTHROPIC_API_KEY is not set.")
+# ANTHROPIC_API_KEY is no longer delivered to desktop clients (proxy-only path).
+# Keep env for operator tooling / key-version health, but never put it on the wire.
 
 # ---------------------------------------------------------------------------
 # Password hashing — argon2id with legacy SHA-256 migration path
@@ -89,35 +95,9 @@ def verify_password(password: str, stored_hash: str) -> bool:
     # Legacy SHA-256 + pepper
     return hmac.compare_digest(_legacy_hash(password), stored_hash)
 
-# ---------------------------------------------------------------------------
-# API key encryption (Fernet, key derived from session token via HKDF)
-# ---------------------------------------------------------------------------
-try:
-    from cryptography.hazmat.primitives.kdf.hkdf import HKDF
-    from cryptography.hazmat.primitives import hashes as _crypto_hashes
-    from cryptography.fernet import Fernet
-    _CRYPTO_OK = True
-except ImportError:
-    _CRYPTO_OK = False
-    logger.warning("cryptography package not available — API key will not be encrypted in transit.")
-
-def _derive_fernet_key(session_token: str) -> bytes:
-    hkdf = HKDF(
-        algorithm=_crypto_hashes.SHA256(),
-        length=32,
-        salt=b"pan-copilot-apikey-v1",
-        info=b"api-key-encryption",
-    )
-    return base64.urlsafe_b64encode(hkdf.derive(session_token.encode()))
-
-def encrypt_api_key(api_key: str, session_token: str) -> Optional[str]:
-    if not _CRYPTO_OK or not api_key or not session_token:
-        return None
-    try:
-        return Fernet(_derive_fernet_key(session_token)).encrypt(api_key.encode()).decode()
-    except Exception as e:
-        logger.error(f"API key encryption failed: {e}")
-        return None
+def hash_session_token(token: str) -> str:
+    """At-rest form of a session token. Only the SHA-256 hex is stored in SQLite."""
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 # ---------------------------------------------------------------------------
 # Rate limiter
@@ -208,7 +188,7 @@ def init_db():
                 created_at    TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS sessions (
-                token      TEXT PRIMARY KEY,
+                token_hash TEXT PRIMARY KEY,
                 user_id    TEXT NOT NULL,
                 created_at TEXT NOT NULL,
                 expires_at TEXT NOT NULL,
@@ -220,15 +200,29 @@ def init_db():
                 count      INTEGER NOT NULL DEFAULT 0,
                 PRIMARY KEY (user_id, period_key)
             );
-            CREATE TABLE IF NOT EXISTS key_deliveries (
-                user_id      TEXT NOT NULL,
-                ip           TEXT NOT NULL,
-                delivered_at TEXT NOT NULL
-            );
             CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
             CREATE INDEX IF NOT EXISTS idx_qc_user      ON query_counts(user_id);
-            CREATE INDEX IF NOT EXISTS idx_kd_user      ON key_deliveries(user_id);
         """)
+        # Migrate legacy plaintext-token sessions → hashed storage.
+        # Existing rows cannot be re-hashed without the cleartext token, so we
+        # drop the old table and force re-login (one-time on deploy).
+        cols = {r[1] for r in db.execute("PRAGMA table_info(sessions)").fetchall()}
+        if "token" in cols and "token_hash" not in cols:
+            logger.warning(
+                "Migrating sessions table to token_hash storage — all existing "
+                "sessions will be invalidated (users must log in again)."
+            )
+            db.executescript("""
+                DROP TABLE IF EXISTS sessions;
+                CREATE TABLE sessions (
+                    token_hash TEXT PRIMARY KEY,
+                    user_id    TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    expires_at TEXT NOT NULL,
+                    FOREIGN KEY (user_id) REFERENCES users(id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+            """)
         db.commit()
 
 init_db()
@@ -253,41 +247,23 @@ def make_token() -> str:
     return secrets.token_urlsafe(40)
 
 def get_user_by_token(token: str) -> Optional[sqlite3.Row]:
+    if not token:
+        return None
+    th = hash_session_token(token)
     with get_db() as db:
         return db.execute("""
             SELECT u.*, s.expires_at FROM sessions s
             JOIN users u ON s.user_id = u.id
-            WHERE s.token = ? AND s.expires_at > ?
-        """, (token, now_iso())).fetchone()
+            WHERE s.token_hash = ? AND s.expires_at > ?
+        """, (th, now_iso())).fetchone()
 
-def record_key_delivery(user_id: str, ip: str) -> None:
-    """Audit every delivery of the shared Anthropic key and flag anomalies.
-
-    The key is shared across paid clients and is extractable from any client
-    that holds its own session token, so we can't cryptographically stop a user
-    from using it directly. What we CAN do is detect abnormal fan-out: if one
-    account pulls the key from many distinct IPs in a period, log a CRITICAL so
-    an operator can investigate / rotate (set a new ANTHROPIC_API_KEY and bump
-    ANTHROPIC_KEY_VERSION). The per-user quota counter remains the hard cap.
-    """
-    pk = month_start()
+def store_session(token: str, user_id: str, created_at: str, expires_at: str) -> None:
     with get_db() as db:
         db.execute(
-            "INSERT INTO key_deliveries (user_id, ip, delivered_at) VALUES (?,?,?)",
-            (user_id, ip, now_iso()),
+            "INSERT INTO sessions (token_hash, user_id, created_at, expires_at) VALUES (?,?,?,?)",
+            (hash_session_token(token), user_id, created_at, expires_at),
         )
         db.commit()
-        distinct_ips = db.execute(
-            "SELECT COUNT(DISTINCT ip) AS n FROM key_deliveries "
-            "WHERE user_id = ? AND delivered_at >= ?",
-            (user_id, pk),
-        ).fetchone()["n"]
-    if distinct_ips > KEY_DELIVERY_IP_THRESHOLD:
-        logger.critical(
-            "Key-delivery anomaly: user %s pulled the API key from %d distinct "
-            "IPs this month (threshold %d). Latest IP: %s. Consider rotating.",
-            user_id, distinct_ips, KEY_DELIVERY_IP_THRESHOLD, ip,
-        )
 
 
 def get_query_count(user_id: str, tier: str) -> int:
@@ -309,14 +285,9 @@ def usage_response(user, queries_used: int = None, session_token: str = None) ->
     period  = "weekly" if tier == "free" else "monthly"
     unlimited = (tier == "owner")
 
-    # Local-tier accounts never get the Anthropic key. The app reads this
-    # field as the signal that cloud chat is unavailable and shows the
-    # "upgrade to Pro" lock in the provider settings panel.
-    if tier == "local":
-        encrypted_key = None
-    else:
-        encrypted_key = encrypt_api_key(ANTHROPIC_API_KEY, session_token) if session_token else None
-
+    # Cloud model keys are never returned to clients. Desktop chat goes through
+    # the ADK proxy (session Bearer); Anthropic/xAI keys stay on the Worker.
+    # anthropic_key is always null for backward-compatible response shape.
     return {
         "email":             user["email"],
         "tier":              tier,
@@ -330,7 +301,8 @@ def usage_response(user, queries_used: int = None, session_token: str = None) ->
         "weekly_limit":      limit if tier == "free" else None,
         "monthly_used":      used  if tier not in ("free", "local") else None,
         "monthly_limit":     limit if tier not in ("free", "local") else None,
-        "anthropic_key":     encrypted_key,  # Fernet-encrypted, never plaintext
+        "anthropic_key":     None,
+        "key_version":       ANTHROPIC_KEY_VERSION,
     }
 
 # ---------------------------------------------------------------------------
@@ -396,18 +368,11 @@ def register(request: Request, req: AuthRequest):
 
     token   = make_token()
     expires = (datetime.now(timezone.utc) + timedelta(days=SESSION_TTL_DAYS)).isoformat()
-    with get_db() as db:
-        db.execute(
-            "INSERT INTO sessions (token, user_id, created_at, expires_at) VALUES (?,?,?,?)",
-            (token, user_id, ts, expires)
-        )
-        db.commit()
+    store_session(token, user_id, ts, expires)
 
     new_user = {"id": user_id, "email": email, "tier": "free", "seats_allowed": 1}
     payload = usage_response(new_user, queries_used=0, session_token=token)
     payload["token"] = token
-    if payload.get("anthropic_key"):
-        record_key_delivery(user_id, _real_ip(request))
     return payload
 
 
@@ -437,17 +402,10 @@ def login(request: Request, req: AuthRequest):
     token   = make_token()
     ts      = now_iso()
     expires = (datetime.now(timezone.utc) + timedelta(days=SESSION_TTL_DAYS)).isoformat()
-    with get_db() as db:
-        db.execute(
-            "INSERT INTO sessions (token, user_id, created_at, expires_at) VALUES (?,?,?,?)",
-            (token, user["id"], ts, expires)
-        )
-        db.commit()
+    store_session(token, user["id"], ts, expires)
 
     payload = usage_response(user, session_token=token)
     payload["token"] = token
-    if payload.get("anthropic_key"):
-        record_key_delivery(user["id"], _real_ip(request))
     return payload
 
 
@@ -459,8 +417,6 @@ def validate_token(request: Request, req: TokenRequest):
         raise HTTPException(status_code=401, detail="Session expired or invalid. Please log in again.")
     payload = usage_response(user, session_token=req.token)
     payload["valid"] = True
-    if payload.get("anthropic_key"):
-        record_key_delivery(user["id"], _real_ip(request))
     return payload
 
 # ---------------------------------------------------------------------------
@@ -476,7 +432,14 @@ def check_and_count(request: Request, req: TokenRequest):
     tier   = user["tier"]
     limit  = query_limit_for(tier)
     pk     = period_key(tier)
-    weight = max(1, min(req.weight, MAX_QUERY_WEIGHT))  # clamp to [1, MAX_QUERY_WEIGHT]
+    # Weight is only trusted from the ADK proxy (service secret). All other
+    # callers (desktop, stolen token scripts) are forced to weight 1 so they
+    # cannot under-count free large pastes by lying about weight.
+    service = request.headers.get("X-ADK-Service-Secret", "")
+    if QUERY_SERVICE_SECRET and service and hmac.compare_digest(service, QUERY_SERVICE_SECRET):
+        weight = max(1, min(req.weight, MAX_QUERY_WEIGHT))
+    else:
+        weight = 1
 
     if tier == "owner":
         return {
@@ -554,11 +517,12 @@ def check_and_count(request: Request, req: TokenRequest):
 # ---------------------------------------------------------------------------
 def _check_admin(authorization: str):
     token = authorization.replace("Bearer ", "").strip()
-    if not ADMIN_TOKEN or token != ADMIN_TOKEN:
+    if not ADMIN_TOKEN or not token or not hmac.compare_digest(token, ADMIN_TOKEN):
         raise HTTPException(status_code=403, detail="Forbidden.")
 
 @app.post("/admin/set-tier")
-def set_tier(req: AdminTierRequest, authorization: str = Header(default="")):
+@limiter.limit("30/minute")
+def set_tier(request: Request, req: AdminTierRequest, authorization: str = Header(default="")):
     _check_admin(authorization)
     if req.tier not in VALID_TIERS:
         raise HTTPException(status_code=400, detail=f"tier must be one of: {', '.join(sorted(VALID_TIERS))}.")
@@ -574,7 +538,8 @@ def set_tier(req: AdminTierRequest, authorization: str = Header(default="")):
 
 
 @app.get("/admin/users")
-def list_users(authorization: str = Header(default="")):
+@limiter.limit("30/minute")
+def list_users(request: Request, authorization: str = Header(default="")):
     _check_admin(authorization)
     with get_db() as db:
         rows = db.execute(
@@ -614,7 +579,15 @@ async def lemonsqueezy_webhook(request: Request):
     elif "local" in variant_name or "local" in product_name:
         tier = "local"
     else:
-        tier = LS_VARIANT_TIER.get(str(attrs.get("variant_id", ""))) or "pro"
+        # Default deny: unknown product/variant must not silently grant Pro.
+        mapped = LS_VARIANT_TIER.get(str(attrs.get("variant_id", "")))
+        if not mapped:
+            logger.warning(
+                "Webhook unknown product/variant for %s (product=%r variant=%r) — tier not changed.",
+                email, product_name, variant_name,
+            )
+            return {"ok": False, "reason": "unknown product/variant", "email": email}
+        tier = mapped
 
     if event in ("subscription_created", "subscription_updated", "subscription_resumed"):
         if not email:

@@ -8,8 +8,8 @@ namespace PanCopilot.Services;
 /// <summary>
 /// Persists user settings to %USERPROFILE%\.pan_copilot\settings_v3.json
 /// (separate from the Python build's settings.json so both apps can coexist).
-/// Secrets (session token, firewall API key) are DPAPI-wrapped at rest.
-/// Field surface mirrors app.py's _DEFAULT_SETTINGS so the old UI works as-is.
+/// Secrets (session token, firewall API key, local LLM API key) are DPAPI-wrapped
+/// at rest. Field surface mirrors app.py's _DEFAULT_SETTINGS for UI compatibility.
 /// </summary>
 public sealed class SettingsStore
 {
@@ -41,7 +41,8 @@ public sealed class SettingsStore
         public string cloud_model { get; set; } = "auto";
         public string local_base_url { get; set; } = "http://localhost:11434/v1";
         public string local_model { get; set; } = "qwen2.5:14b";
-        public string local_api_key { get; set; } = "";
+        /// <summary>DPAPI-wrapped on disk when non-empty (same as fw_api_key).</summary>
+        public string? local_api_key { get; set; } = "";
         public int local_history_turns { get; set; } = 40;
         public int local_context_tokens { get; set; } = 32768;
         public bool local_truncate_config { get; set; } = true;
@@ -66,6 +67,18 @@ public sealed class SettingsStore
     {
         Current = Load();
         Normalize();
+        // Migrate legacy plaintext local_api_key → DPAPI (one-time).
+        try
+        {
+            var raw = Current.local_api_key;
+            if (!string.IsNullOrEmpty(raw) && !raw.StartsWith("dpapi:", StringComparison.Ordinal)
+                && !raw.StartsWith("ss:", StringComparison.Ordinal))
+            {
+                Current.local_api_key = Protect(raw);
+                Save();
+            }
+        }
+        catch { /* leave as-is if protect unavailable in tests */ }
     }
 
     private static Settings Load()
@@ -124,17 +137,22 @@ public sealed class SettingsStore
         s.fw_host = (s.fw_host ?? "").Trim();
     }
 
-    /// <summary>Settings dict safe for the frontend — never the firewall key.</summary>
+    /// <summary>Settings dict safe for the frontend — never raw secret material.</summary>
     public Dictionary<string, object?> PublicDict()
     {
         var s = Current;
+        // local_api_key: return decrypted for form fill when present, empty otherwise.
+        // Never return a dpapi: blob to the page. Prefer set/not-set if UI only needs that.
+        string localKeyUi = "";
+        try { localKeyUi = LocalApiKey ?? ""; } catch { localKeyUi = ""; }
         return new Dictionary<string, object?>
         {
             ["chat_provider"] = s.chat_provider,
             ["cloud_model"] = s.cloud_model,
             ["local_base_url"] = s.local_base_url,
             ["local_model"] = s.local_model,
-            ["local_api_key"] = s.local_api_key,
+            ["local_api_key"] = localKeyUi,
+            ["local_api_key_set"] = !string.IsNullOrEmpty(localKeyUi),
             ["local_history_turns"] = s.local_history_turns,
             ["local_context_tokens"] = s.local_context_tokens,
             ["local_truncate_config"] = s.local_truncate_config,
@@ -161,6 +179,17 @@ public sealed class SettingsStore
     {
         get => Unprotect(Current.fw_api_key);
         set { Current.fw_api_key = Protect(value); Save(); }
+    }
+
+    /// <summary>Local LLM optional Bearer key — DPAPI-wrapped on disk.</summary>
+    public string? LocalApiKey
+    {
+        get => Unprotect(Current.local_api_key);
+        set
+        {
+            Current.local_api_key = string.IsNullOrEmpty(value) ? "" : Protect(value);
+            Save();
+        }
     }
 
     public void SetFirewall(string host, string apiKey, bool verifyTls, IReadOnlyDictionary<string, string> info)

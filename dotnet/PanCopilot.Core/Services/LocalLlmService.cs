@@ -4,6 +4,7 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using PanCopilot.Platform;
 
 namespace PanCopilot.Services;
 
@@ -36,12 +37,31 @@ public sealed class LocalLlmService
         return trimmed;
     }
 
+    /// <summary>
+    /// Local LLM endpoints must be loopback by default to prevent the app from
+    /// being used as an open SSRF client. Set ADK_ALLOW_REMOTE_LOCAL_LLM=1 to
+    /// permit any http(s) host (power users / remote boxes).
+    /// </summary>
+    public static bool IsAllowedBaseUrl(string? baseUrl)
+    {
+        if (string.Equals(Environment.GetEnvironmentVariable("ADK_ALLOW_REMOTE_LOCAL_LLM"), "1", StringComparison.Ordinal))
+            return true;
+        var n = NormalizeBaseUrl(baseUrl);
+        if (string.IsNullOrEmpty(n)) return true; // empty = unset, validated later
+        if (!Uri.TryCreate(n, UriKind.Absolute, out var uri)) return false;
+        if (uri.Scheme is not ("http" or "https")) return false;
+        var host = uri.Host;
+        return host is "localhost" or "127.0.0.1" or "::1" or "[::1]";
+    }
+
     /// <summary>POST /api/local_llm/test — one-token ping, returns latency.</summary>
     public async Task<Httpish> TestAsync(string baseUrl, string model, string? apiKey)
     {
         var baseTrim = NormalizeBaseUrl(baseUrl);
         if (string.IsNullOrEmpty(baseTrim))
             return new(400, Err("Base URL is required."));
+        if (!IsAllowedBaseUrl(baseTrim))
+            return new(400, Err("Local LLM base URL must be localhost/127.0.0.1. Set ADK_ALLOW_REMOTE_LOCAL_LLM=1 to allow remote endpoints."));
         var url = baseTrim + "/chat/completions";
         var body = new JsonObject
         {
@@ -79,6 +99,8 @@ public sealed class LocalLlmService
     {
         var baseTrim = NormalizeBaseUrl(baseUrl);
         if (string.IsNullOrEmpty(baseTrim)) return new(400, Err("base_url is required."));
+        if (!IsAllowedBaseUrl(baseTrim))
+            return new(400, Err("Local LLM base URL must be localhost/127.0.0.1. Set ADK_ALLOW_REMOTE_LOCAL_LLM=1 to allow remote endpoints."));
         var url = baseTrim + "/models";
         HttpResponseMessage resp;
         try
@@ -167,7 +189,11 @@ public sealed class LocalLlmService
         Func<bool, Task>? onThinking = null,
         CancellationToken ct = default)
     {
-        var url = NormalizeBaseUrl(st.local_base_url) + "/chat/completions";
+        var baseTrim = NormalizeBaseUrl(st.local_base_url);
+        if (!IsAllowedBaseUrl(baseTrim))
+            throw new HttpRequestException(
+                "Local LLM base URL must be localhost/127.0.0.1. Set ADK_ALLOW_REMOTE_LOCAL_LLM=1 to allow remote endpoints.");
+        var url = baseTrim + "/chat/completions";
         var msgs = new JsonArray();
         if (!string.IsNullOrEmpty(system))
             msgs.Add(new JsonObject { ["role"] = "system", ["content"] = system });
@@ -183,7 +209,17 @@ public sealed class LocalLlmService
             ["stream"] = true,
         };
 
-        using var req = NewReq(HttpMethod.Post, url, string.IsNullOrEmpty(st.local_api_key) ? null : st.local_api_key);
+        // Prefer DPAPI-wrapped accessor when available; fall back to raw field for tests.
+        string? apiKey = null;
+        try
+        {
+            // Settings object may hold a dpapi: blob — callers should pass unwrapped via settings store.
+            apiKey = st.local_api_key;
+            if (!string.IsNullOrEmpty(apiKey) && apiKey.StartsWith("dpapi:", StringComparison.Ordinal))
+                apiKey = PlatformRuntime.Host.UnprotectSecret(apiKey);
+        }
+        catch { apiKey = null; }
+        using var req = NewReq(HttpMethod.Post, url, string.IsNullOrEmpty(apiKey) ? null : apiKey);
         req.Content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json");
         using var resp = await _chatHttp.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct);
         if (!resp.IsSuccessStatusCode)

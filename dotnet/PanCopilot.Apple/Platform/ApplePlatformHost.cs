@@ -57,9 +57,10 @@ public sealed class ApplePlatformHost : IPlatformHost
             SecureStorage.SetAsync(StorageKey(key), plain).GetAwaiter().GetResult();
             return SecretPrefix + key;
         }
-        catch
+        catch (Exception ex)
         {
-            return plain;
+            throw new InvalidOperationException(
+                "Failed to store secret in Keychain. Secret was not saved in plaintext.", ex);
         }
     }
 

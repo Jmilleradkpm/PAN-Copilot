@@ -166,3 +166,62 @@ public class FernetTests
         Assert.Null(Fernet.DecryptApiKey("not-valid-fernet", new string('a', 40)));
     }
 }
+
+public class ConfigSanitizerSecurityTests
+{
+    [Fact]
+    public void RedactsJsonPasswordFields()
+    {
+        var (text, n) = ConfigSanitizer.Sanitize(@"{""password"": ""s3cret!"", ""host"": ""fw1""}");
+        Assert.True(n >= 1);
+        Assert.DoesNotContain("s3cret!", text);
+        Assert.Contains("[REDACTED]", text);
+        Assert.Contains("fw1", text);
+    }
+
+    [Fact]
+    public void RedactsXmlAttributePasswords()
+    {
+        var (text, n) = ConfigSanitizer.Sanitize(@"<entry password=""hunter2"" name=""x""/>");
+        Assert.True(n >= 1);
+        Assert.DoesNotContain("hunter2", text);
+    }
+}
+
+public class ProxyUrlTests
+{
+    [Fact]
+    public void Resolve_DefaultWhenOverrideEmpty()
+    {
+        Assert.Equal("https://adk-cyber-ai-proxy.adkcyber.workers.dev/v1/messages",
+            ProxyUrl.Resolve(null, "https://adk-cyber-ai-proxy.adkcyber.workers.dev/v1/messages"));
+    }
+
+    [Fact]
+    public void Resolve_RejectsHttp()
+    {
+        Assert.Throws<ArgumentException>(() =>
+            ProxyUrl.Resolve("http://evil.example/v1/messages", "https://adk-cyber-ai-proxy.adkcyber.workers.dev/v1/messages"));
+    }
+
+    [Fact]
+    public void Resolve_RejectsUnknownHost()
+    {
+        Assert.Throws<ArgumentException>(() =>
+            ProxyUrl.Resolve("https://evil.example/v1/messages", "https://adk-cyber-ai-proxy.adkcyber.workers.dev/v1/messages"));
+    }
+}
+
+public class LocalLlmUrlTests
+{
+    [Theory]
+    [InlineData("http://localhost:1234/v1", true)]
+    [InlineData("http://127.0.0.1:11434/v1", true)]
+    [InlineData("https://evil.example/v1", false)]
+    [InlineData("http://169.254.169.254/", false)]
+    public void IsAllowedBaseUrl_LoopbackOnlyByDefault(string url, bool ok)
+    {
+        Environment.SetEnvironmentVariable("ADK_ALLOW_REMOTE_LOCAL_LLM", null);
+        Assert.Equal(ok, LocalLlmService.IsAllowedBaseUrl(url));
+    }
+}

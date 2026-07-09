@@ -26,7 +26,7 @@ public sealed class CloudOpenAiClient
     {
         _sessionToken = sessionToken ?? throw new ArgumentNullException(nameof(sessionToken));
         var ov = Environment.GetEnvironmentVariable("ADK_PROXY_CHAT_COMPLETIONS_URL");
-        _url = string.IsNullOrWhiteSpace(ov) ? DefaultChatCompletionsUrl : ov.Trim();
+        _url = ProxyUrl.Resolve(ov, DefaultChatCompletionsUrl);
         _http = http ?? new HttpClient { Timeout = TimeSpan.FromMinutes(5) };
     }
 

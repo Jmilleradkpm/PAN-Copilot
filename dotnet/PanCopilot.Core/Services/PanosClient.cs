@@ -9,6 +9,8 @@ namespace PanCopilot.Services;
 /// Read-only PAN-OS / Panorama XML API client. Port of the Python panos_api
 /// package. Keygen + operational ("op") commands + config reads only — no
 /// set/edit/delete/commit surface, by design. Uses HttpClient (no SDK).
+/// Credentials and API keys are sent in the POST body (never URL query strings)
+/// so they do not appear in access logs or proxy histories.
 /// </summary>
 public sealed class PanosException : Exception
 {
@@ -54,6 +56,9 @@ public sealed class PanosClient
         return new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(30) };
     }
 
+    private static FormUrlEncodedContent Form(params (string k, string v)[] pairs) =>
+        new(pairs.Select(p => new KeyValuePair<string, string>(p.k, p.v)));
+
     /// <summary>Exchange username/password for an API key (type=keygen). Call once.</summary>
     public static async Task<string> GenerateApiKeyAsync(
         string host, string user, string password, bool verifyTls = true, CancellationToken ct = default)
@@ -62,8 +67,11 @@ public sealed class PanosClient
         if (string.IsNullOrEmpty(user) || string.IsNullOrEmpty(password))
             throw new ArgumentException("Username and password are required for keygen.");
         using var http = BuildHttp(verifyTls);
-        var url = $"https://{host}/api/?type=keygen&user={Uri.EscapeDataString(user)}&password={Uri.EscapeDataString(password)}";
-        var resp = await http.GetAsync(url, ct);
+        using var content = Form(
+            ("type", "keygen"),
+            ("user", user),
+            ("password", password));
+        var resp = await http.PostAsync($"https://{host}/api/", content, ct);
         var root = await ParseAsync(resp, ct);
         var key = root.Descendants("key").FirstOrDefault()?.Value;
         if (string.IsNullOrEmpty(key)) throw new PanosException("keygen succeeded but no key was returned.");
@@ -90,8 +98,11 @@ public sealed class PanosClient
     {
         if (string.IsNullOrWhiteSpace(cmdXml) || !cmdXml.TrimStart().StartsWith("<"))
             throw new ArgumentException("op command must be an XML element, e.g. <show><system><info/></system></show>");
-        var url = $"https://{_host}/api/?type=op&cmd={Uri.EscapeDataString(cmdXml)}&key={Uri.EscapeDataString(_apiKey)}";
-        return await ParseAsync(await _http.GetAsync(url, ct), ct);
+        using var content = Form(
+            ("type", "op"),
+            ("cmd", cmdXml),
+            ("key", _apiKey));
+        return await ParseAsync(await _http.PostAsync($"https://{_host}/api/", content, ct), ct);
     }
 
     /// <summary>Read config at an xpath. source = "running" (action=show) or "candidate" (action=get).</summary>
@@ -100,8 +111,12 @@ public sealed class PanosClient
         if (string.IsNullOrEmpty(xpath) || !xpath.StartsWith("/"))
             throw new ArgumentException("xpath must be an absolute /config/... path.");
         var action = source switch { "running" => "show", "candidate" => "get", _ => throw new ArgumentException("source must be 'running' or 'candidate'.") };
-        var url = $"https://{_host}/api/?type=config&action={action}&xpath={Uri.EscapeDataString(xpath)}&key={Uri.EscapeDataString(_apiKey)}";
-        return await ParseAsync(await _http.GetAsync(url, ct), ct);
+        using var content = Form(
+            ("type", "config"),
+            ("action", action),
+            ("xpath", xpath),
+            ("key", _apiKey));
+        return await ParseAsync(await _http.PostAsync($"https://{_host}/api/", content, ct), ct);
     }
 
     /// <summary>Key fields from `show system info` (version, model, serial...).</summary>

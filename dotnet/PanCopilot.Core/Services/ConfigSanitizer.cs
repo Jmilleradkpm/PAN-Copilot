@@ -39,6 +39,22 @@ public static class ConfigSanitizer
         var setKw = string.Join("|", CliKeywords.Select(Regex.Escape));
         list.Add((new Regex($@"(?m)(^\s*set\s+\S.*?\s+(?:{setKw})\s+)\S+", RegexOptions.IgnoreCase | RegexOptions.Compiled), "$1[REDACTED]"));
         list.Add((new Regex($@"(?m)(^\s*(?:{setKw}|phash)\s*:\s*)\S+", RegexOptions.IgnoreCase | RegexOptions.Compiled), "$1[REDACTED]"));
+
+        // JSON / YAML-ish: "password": "secret", password: secret
+        list.Add((new Regex(
+            @"(?i)([""']?(?:password|passwd|passphrase|api[_-]?key|secret|token|pre[_-]?shared[_-]?key|shared[_-]?secret|auth[_-]?key)[""']?\s*[:=]\s*)([""'])([^""']+)\2",
+            RegexOptions.Compiled),
+            "$1$2[REDACTED]$2"));
+        list.Add((new Regex(
+            @"(?i)([""']?(?:password|passwd|passphrase|api[_-]?key|secret|token|pre[_-]?shared[_-]?key|shared[_-]?secret|auth[_-]?key)[""']?\s*[:=]\s*)(\S+)",
+            RegexOptions.Compiled),
+            "$1[REDACTED]"));
+
+        // XML attributes: password="..."
+        list.Add((new Regex(
+            @"(?i)(\b(?:password|secret|api-key|pre-shared-key|auth-key)\s*=\s*[""'])([^""']+)([""'])",
+            RegexOptions.Compiled),
+            "$1[REDACTED]$3"));
         return list;
     }
 

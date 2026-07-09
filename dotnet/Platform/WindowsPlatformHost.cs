@@ -28,6 +28,10 @@ public sealed class WindowsPlatformHost : IPlatformHost
     public bool IsInstallWritable =>
         !IsStoreManaged && !InstallPathService.IsProtectedInstallPath(AppContext.BaseDirectory);
 
+    /// <summary>
+    /// DPAPI-protect a secret. Fail closed: never return plaintext if Protect fails.
+    /// Empty input → null (nothing to store).
+    /// </summary>
     public string? ProtectSecret(string? plain)
     {
         if (string.IsNullOrEmpty(plain)) return null;
@@ -36,12 +40,17 @@ public sealed class WindowsPlatformHost : IPlatformHost
             var enc = ProtectedData.Protect(Encoding.UTF8.GetBytes(plain), null, DataProtectionScope.CurrentUser);
             return "dpapi:" + Convert.ToBase64String(enc);
         }
-        catch { return plain; }
+        catch (Exception ex)
+        {
+            throw new CryptographicException(
+                "Failed to protect secret with DPAPI. Secret was not stored in plaintext.", ex);
+        }
     }
 
     public string? UnprotectSecret(string? stored)
     {
         if (string.IsNullOrEmpty(stored)) return null;
+        // Legacy plaintext leftovers (pre fail-closed) — treat as raw value once.
         if (!stored.StartsWith("dpapi:", StringComparison.Ordinal)) return stored;
         try
         {

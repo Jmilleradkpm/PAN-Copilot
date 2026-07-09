@@ -6,9 +6,9 @@ using System.Text.Json.Serialization;
 namespace PanCopilot.Services;
 
 /// <summary>
-/// Client for the ADK Cyber license server (auth, quota, encrypted key
-/// delivery). Port of the local app's license-server calls. The Anthropic key
-/// lives in memory only and is decrypted from the session token via Fernet.
+/// Client for the ADK Cyber license server (auth, quota, tier). Cloud model
+/// keys are never delivered to the desktop — inference uses the ADK proxy with
+/// a session Bearer token only.
 /// </summary>
 public sealed class LicenseClient
 {
@@ -29,7 +29,8 @@ public sealed class LicenseClient
         public string? Token { get; set; }
         public string? Email { get; set; }
         public string? Tier { get; set; }
-        public string? AnthropicKey { get; set; }   // decrypted, in-memory only
+        /// <summary>Always null on modern proxy-only clients; kept for API shape.</summary>
+        public string? AnthropicKey { get; set; }
         public int QueriesUsed { get; set; }
         public int QueriesLimit { get; set; }
         public int QueriesRemaining { get; set; }
@@ -79,15 +80,14 @@ public sealed class LicenseClient
     private AuthResult MapResult(JsonElement raw, string? tokenForDecrypt = null)
     {
         var token = tokenForDecrypt ?? (raw.TryGetProperty("token", out var t) ? t.GetString() : null);
-        string? key = null;
-        if (raw.TryGetProperty("anthropic_key", out var k) && k.ValueKind == JsonValueKind.String && token != null)
-            key = Fernet.DecryptApiKey(k.GetString()!, token);
+        // Never decrypt or retain org Anthropic keys — even if a legacy server
+        // still returns anthropic_key. Chat uses the ADK proxy + session token.
         return new AuthResult
         {
             Token = token,
             Email = raw.TryGetProperty("email", out var e) ? e.GetString() : null,
             Tier = raw.TryGetProperty("tier", out var ti) ? ti.GetString() : null,
-            AnthropicKey = key,
+            AnthropicKey = null,
             QueriesUsed = GetInt(raw, "queries_used"),
             QueriesLimit = GetInt(raw, "queries_limit"),
             QueriesRemaining = GetInt(raw, "queries_remaining"),
