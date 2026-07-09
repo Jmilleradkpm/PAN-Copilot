@@ -606,9 +606,8 @@
       height: calc(100dvh - var(--header-h));
     }
 
-    /* iOS / touch: always single-column */
-    html.platform-touch #left-nav,
-    html.platform-touch #right-sidebar {
+    /* iOS / touch: always single-column (tools drawer still available via header) */
+    html.platform-touch #left-nav {
       display: none !important;
     }
     html.platform-touch #center {
@@ -629,10 +628,9 @@
       grid-template-columns: 1fr !important;
     }
 
-    /* Narrow desktop / tablet WebView */
+    /* Narrow desktop / tablet WebView — left rail hides; tools stay a drawer */
     @media (max-width: 1200px) {
-      #left-nav,
-      #right-sidebar {
+      #left-nav {
         display: none !important;
       }
       #center {
@@ -649,8 +647,9 @@
       #local-badge {
         display: none !important;
       }
+      /* Keep History + Tools on narrow desktop (settings no longer live only in a rail) */
       #history-wrap {
-        display: none !important;
+        display: block !important;
       }
       html.platform-touch #history-wrap {
         display: block !important;
@@ -1000,8 +999,15 @@
     .token-meta {
       font-size: 10px; color: var(--text-dim); margin-top: 9px;
       padding-top: 7px; border-top: 1px solid var(--border-dim);
-      display: flex; gap: 10px;
+      display: flex; gap: 10px; flex-wrap: wrap; align-items: center;
     }
+    .msg-copy-btn {
+      margin-left: auto;
+      background: none; border: 1px solid var(--border); border-radius: 4px;
+      color: var(--text-sub); font-size: 10px; font-family: inherit;
+      padding: 2px 8px; cursor: pointer;
+    }
+    .msg-copy-btn:hover { border-color: var(--accent); color: var(--accent); }
     .cursor { display: inline-block; width: 2px; height: 13px; background: var(--accent); vertical-align: middle; margin-left: 2px; animation: blink 0.7s infinite; }
     @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
     .thinking-row { padding: 5px 20px; }
@@ -1077,16 +1083,204 @@
       border: 1px solid var(--border); display: block; cursor: zoom-in;
     }
 
-    /* ── RIGHT SIDEBAR ─────────────────────────────────────────── */
+    /* ── TOOLS DRAWER (was permanent right sidebar) ─────────────── */
+    #tools-backdrop {
+      display: none;
+      position: fixed;
+      inset: 0;
+      top: var(--header-h);
+      background: rgba(0, 0, 0, 0.45);
+      z-index: 95;
+    }
+    #tools-backdrop.open { display: block; }
     #right-sidebar {
-      width: var(--right-w); flex-shrink: 0;
+      position: fixed;
+      top: var(--header-h);
+      right: 0;
+      bottom: 0;
+      width: min(360px, 94vw);
+      z-index: 100;
       background: var(--surface);
       border-left: 1px solid var(--border);
-      display: flex; flex-direction: column;
+      display: flex;
+      flex-direction: column;
       overflow-x: hidden;
       overflow-y: auto;
       min-height: 0;
+      transform: translateX(100%);
+      transition: transform 0.2s ease;
+      box-shadow: none;
     }
+    #right-sidebar.open {
+      transform: translateX(0);
+      box-shadow: -16px 0 48px rgba(0, 0, 0, 0.45);
+    }
+    #tools-drawer-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+      position: sticky;
+      top: 0;
+      background: var(--surface);
+      z-index: 2;
+    }
+    #tools-drawer-head h3 {
+      font-size: 13px;
+      font-weight: 700;
+      margin: 0;
+    }
+    #tools-drawer-close {
+      background: none;
+      border: none;
+      color: var(--text-sub);
+      font-size: 18px;
+      cursor: pointer;
+      line-height: 1;
+      padding: 2px 6px;
+    }
+    #tools-drawer-close:hover { color: var(--text); }
+    .tools-header-btn {
+      background: transparent;
+      border: 1px solid transparent;
+      color: var(--text-sub);
+      font: inherit;
+      font-size: 12px;
+      font-weight: 600;
+      padding: 6px 10px;
+      border-radius: 6px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+    }
+    .tools-header-btn:hover {
+      background: var(--surface2);
+      color: var(--text);
+      border-color: var(--border);
+    }
+
+    /* ── Brain bar (provider + model + quota) ───────────────────── */
+    #brain-bar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+    .bb-select {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 5px 10px;
+      font-size: 12px;
+    }
+    .bb-select label {
+      color: var(--text-dim);
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .bb-select select {
+      appearance: none;
+      background: transparent;
+      border: none;
+      color: var(--text);
+      font: inherit;
+      font-weight: 600;
+      cursor: pointer;
+      outline: none;
+      min-width: 118px;
+      max-width: 180px;
+    }
+    .bb-select select:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
+    #bb-quota {
+      margin-left: auto;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 11.5px;
+      color: var(--text-sub);
+    }
+    #bb-quota-track {
+      width: 64px;
+      height: 5px;
+      border-radius: 999px;
+      background: var(--border-dim);
+      overflow: hidden;
+    }
+    #bb-quota-fill {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, var(--accent), #3fb950);
+      border-radius: 999px;
+      transition: width 0.25s ease;
+    }
+    #composer-footer {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-top: 8px;
+      font-size: 11px;
+      color: var(--text-dim);
+    }
+    #composer-footer .privacy-short-text { color: var(--text-sub); }
+    .focus-hint {
+      font-size: 11.5px;
+      color: var(--text-dim);
+      margin-left: 4px;
+    }
+    #nav-recents { padding: 0 0 4px; }
+    #nav-recents:empty { display: none; }
+    details.nav-fold {
+      border: none;
+      margin: 0;
+    }
+    details.nav-fold > summary {
+      list-style: none;
+      cursor: pointer;
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--text-dim);
+      padding: 6px 8px 4px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      user-select: none;
+    }
+    details.nav-fold > summary::-webkit-details-marker { display: none; }
+    details.nav-fold > summary::after {
+      content: '▸';
+      font-family: monospace;
+      font-size: 11px;
+      transition: transform 0.12s;
+    }
+    details.nav-fold[open] > summary::after { transform: rotate(90deg); }
+    details.nav-fold .nav-item { padding-left: 12px; }
+    .nav-recent-item .pin-tag {
+      margin-left: auto;
+      font-size: 9px;
+      font-weight: 700;
+      color: #58a6ff;
+      background: rgba(88, 166, 255, 0.12);
+      border-radius: 3px;
+      padding: 1px 5px;
+    }
+    #model-pills, #model-picker-label, #provider-mode-pill { display: none !important; }
     .rs-section { padding: 12px 12px 0; }
     .rs-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-dim); margin-bottom: 7px; display: block; }
     #new-chat-btn {
@@ -1613,7 +1807,7 @@
 <header id="header">
   <div class="h-logo"><svg viewBox="0 0 32 32" width="16" height="16" fill="none" stroke="white" stroke-width="2.8" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true"><path d="M4 26 L12 8 L20 22 L28 12"/><path d="M4 26 L28 26" opacity=".55"/></svg></div>
   <div class="h-text-stack">
-    <div class="h-eyebrow">ADK CYBER AI <span class="h-beta">BETA</span> <span class="h-ver" id="app-version-hdr" onclick="recheckVersion()" title="Installed version (click to re-check for updates)"></span></div>
+    <div class="h-eyebrow">ADK CYBER AI <span class="h-ver" id="app-version-hdr" onclick="recheckVersion()" title="Installed version (click to re-check for updates)"></span></div>
     <div class="h-sub" id="h-sub">ADK Cyber AI online. Ready to assist with your PAN-OS environment.</div>
   </div>
   <div class="h-spacer"></div>
@@ -1621,6 +1815,10 @@
   <div id="mobile-header-actions" class="touch-only">
     <button id="mobile-new-chat-btn" class="header-icon-btn" onclick="newChat()" title="New chat" aria-label="New chat">+</button>
   </div>
+
+  <button type="button" class="tools-header-btn" id="tools-header-btn" onclick="openToolsDrawer()" title="Config, provider, firewall">
+    🧰 Tools
+  </button>
 
   <div id="history-wrap">
     <button id="history-btn" onclick="toggleHistoryDrop(event)" title="Chat history" aria-label="Chat history">
@@ -1780,70 +1978,79 @@
     <div class="nav-divider" style="margin-top:0;"></div>
 
     <div class="nav-section">
-      <span class="nav-group-label">Network Security</span>
-      <button class="nav-item" onclick="selectProduct('pa-series')"    data-id="pa-series">    <span class="nav-icon">🔥</span> PA-Series NGFW</button>
-      <button class="nav-item" onclick="selectProduct('vm-series')"    data-id="vm-series">    <span class="nav-icon">☁️</span> VM-Series</button>
-      <button class="nav-item" onclick="selectProduct('cn-series')"    data-id="cn-series">    <span class="nav-icon">🐳</span> CN-Series</button>
-      <button class="nav-item" onclick="selectProduct('panorama')"     data-id="panorama">     <span class="nav-icon">🗂️</span> Panorama</button>
-      <button class="nav-item" onclick="openMigrationModal()" title="Cisco ASA / Firepower → PAN-OS">
-        <span class="nav-icon">🔄</span> Config Migration
-      </button>
+      <span class="nav-group-label">Recent focus</span>
+      <div id="nav-recents"></div>
     </div>
 
     <div class="nav-divider"></div>
 
     <div class="nav-section">
-      <span class="nav-group-label">SASE / Network-as-a-Service</span>
-      <button class="nav-item" onclick="selectProduct('prisma-access')"  data-id="prisma-access"> <span class="nav-icon">🌐</span> Prisma Access</button>
-      <button class="nav-item" onclick="selectProduct('prisma-sdwan')"   data-id="prisma-sdwan">  <span class="nav-icon">🔀</span> Prisma SD-WAN</button>
-      <button class="nav-item" onclick="selectProduct('adem')"           data-id="adem">          <span class="nav-icon">📊</span> ADEM</button>
+      <details class="nav-fold" open>
+        <summary>Network Security</summary>
+        <button class="nav-item" onclick="selectProduct('pa-series')"    data-id="pa-series">    <span class="nav-icon">🔥</span> PA-Series NGFW</button>
+        <button class="nav-item" onclick="selectProduct('vm-series')"    data-id="vm-series">    <span class="nav-icon">☁️</span> VM-Series</button>
+        <button class="nav-item" onclick="selectProduct('cn-series')"    data-id="cn-series">    <span class="nav-icon">🐳</span> CN-Series</button>
+        <button class="nav-item" onclick="selectProduct('panorama')"     data-id="panorama">     <span class="nav-icon">🗂️</span> Panorama</button>
+        <button class="nav-item" onclick="openMigrationModal()" title="Cisco ASA / Firepower → PAN-OS">
+          <span class="nav-icon">🔄</span> Config Migration
+        </button>
+      </details>
     </div>
-
-    <div class="nav-divider"></div>
 
     <div class="nav-section">
-      <span class="nav-group-label">Cloud Security (Prisma Cloud)</span>
-      <button class="nav-item" onclick="selectProduct('cspm')"   data-id="cspm">  <span class="nav-icon">🛡️</span> CSPM</button>
-      <button class="nav-item" onclick="selectProduct('cwp')"    data-id="cwp">   <span class="nav-icon">💻</span> CWP</button>
-      <button class="nav-item" onclick="selectProduct('ciem')"   data-id="ciem">  <span class="nav-icon">🔑</span> CIEM</button>
-      <button class="nav-item" onclick="selectProduct('appsec')" data-id="appsec"><span class="nav-icon">🧪</span> Application Security</button>
+      <details class="nav-fold">
+        <summary>SASE / NaaS</summary>
+        <button class="nav-item" onclick="selectProduct('prisma-access')"  data-id="prisma-access"> <span class="nav-icon">🌐</span> Prisma Access</button>
+        <button class="nav-item" onclick="selectProduct('prisma-sdwan')"   data-id="prisma-sdwan">  <span class="nav-icon">🔀</span> Prisma SD-WAN</button>
+        <button class="nav-item" onclick="selectProduct('adem')"           data-id="adem">          <span class="nav-icon">📊</span> ADEM</button>
+      </details>
     </div>
-
-    <div class="nav-divider"></div>
 
     <div class="nav-section">
-      <span class="nav-group-label">Security Operations (Cortex)</span>
-      <button class="nav-item" onclick="selectProduct('xdr')"    data-id="xdr">   <span class="nav-icon">🔎</span> Cortex XDR</button>
-      <button class="nav-item" onclick="selectProduct('xsoar')"  data-id="xsoar"> <span class="nav-icon">⚙️</span> Cortex XSOAR</button>
-      <button class="nav-item" onclick="selectProduct('xsiam')"  data-id="xsiam"> <span class="nav-icon">🧠</span> Cortex XSIAM</button>
-      <button class="nav-item" onclick="selectProduct('xpanse')" data-id="xpanse"><span class="nav-icon">🌍</span> Cortex Xpanse</button>
+      <details class="nav-fold">
+        <summary>Cloud Security</summary>
+        <button class="nav-item" onclick="selectProduct('cspm')"   data-id="cspm">  <span class="nav-icon">🛡️</span> CSPM</button>
+        <button class="nav-item" onclick="selectProduct('cwp')"    data-id="cwp">   <span class="nav-icon">💻</span> CWP</button>
+        <button class="nav-item" onclick="selectProduct('ciem')"   data-id="ciem">  <span class="nav-icon">🔑</span> CIEM</button>
+        <button class="nav-item" onclick="selectProduct('appsec')" data-id="appsec"><span class="nav-icon">🧪</span> Application Security</button>
+      </details>
     </div>
-
-    <div class="nav-divider"></div>
 
     <div class="nav-section">
-      <span class="nav-group-label">Threat Intelligence</span>
-      <button class="nav-item" onclick="selectProduct('wildfire')" data-id="wildfire"><span class="nav-icon">🔬</span> WildFire</button>
-      <button class="nav-item" onclick="selectProduct('atp')"      data-id="atp">     <span class="nav-icon">🚫</span> Adv. Threat Prevention</button>
-      <button class="nav-item" onclick="selectProduct('urlf')"     data-id="urlf">    <span class="nav-icon">🔗</span> Adv. URL Filtering</button>
-      <button class="nav-item" onclick="selectProduct('dns-sec')"  data-id="dns-sec"> <span class="nav-icon">🔍</span> DNS Security</button>
-      <button class="nav-item" onclick="selectProduct('unit42')"   data-id="unit42">  <span class="nav-icon">🕵️</span> Unit 42</button>
+      <details class="nav-fold">
+        <summary>Cortex</summary>
+        <button class="nav-item" onclick="selectProduct('xdr')"    data-id="xdr">   <span class="nav-icon">🔎</span> Cortex XDR</button>
+        <button class="nav-item" onclick="selectProduct('xsoar')"  data-id="xsoar"> <span class="nav-icon">⚙️</span> Cortex XSOAR</button>
+        <button class="nav-item" onclick="selectProduct('xsiam')"  data-id="xsiam"> <span class="nav-icon">🧠</span> Cortex XSIAM</button>
+        <button class="nav-item" onclick="selectProduct('xpanse')" data-id="xpanse"><span class="nav-icon">🌍</span> Cortex Xpanse</button>
+      </details>
     </div>
-
-    <div class="nav-divider"></div>
 
     <div class="nav-section">
-      <span class="nav-group-label">Identity &amp; Access</span>
-      <button class="nav-item" onclick="selectProduct('globalprotect')" data-id="globalprotect"><span class="nav-icon">🔒</span> GlobalProtect</button>
-      <button class="nav-item" onclick="selectProduct('cie')"           data-id="cie">           <span class="nav-icon">🪪</span> Cloud Identity Engine</button>
+      <details class="nav-fold">
+        <summary>Threat Intel</summary>
+        <button class="nav-item" onclick="selectProduct('wildfire')" data-id="wildfire"><span class="nav-icon">🔬</span> WildFire</button>
+        <button class="nav-item" onclick="selectProduct('atp')"      data-id="atp">     <span class="nav-icon">🚫</span> Adv. Threat Prevention</button>
+        <button class="nav-item" onclick="selectProduct('urlf')"     data-id="urlf">    <span class="nav-icon">🔗</span> Adv. URL Filtering</button>
+        <button class="nav-item" onclick="selectProduct('dns-sec')"  data-id="dns-sec"> <span class="nav-icon">🔍</span> DNS Security</button>
+        <button class="nav-item" onclick="selectProduct('unit42')"   data-id="unit42">  <span class="nav-icon">🕵️</span> Unit 42</button>
+      </details>
     </div>
 
-    <div class="nav-divider"></div>
+    <div class="nav-section">
+      <details class="nav-fold">
+        <summary>Identity</summary>
+        <button class="nav-item" onclick="selectProduct('globalprotect')" data-id="globalprotect"><span class="nav-icon">🔒</span> GlobalProtect</button>
+        <button class="nav-item" onclick="selectProduct('cie')"           data-id="cie">           <span class="nav-icon">🪪</span> Cloud Identity Engine</button>
+      </details>
+    </div>
 
     <div class="nav-section" style="padding-bottom:12px;">
-      <span class="nav-group-label">AI / Emerging</span>
-      <button class="nav-item" onclick="selectProduct('ai-runtime')"   data-id="ai-runtime">  <span class="nav-icon">🤖</span> AI Runtime Security</button>
-      <button class="nav-item" onclick="selectProduct('strata-log')"   data-id="strata-log">  <span class="nav-icon">📋</span> Strata Logging Service</button>
+      <details class="nav-fold">
+        <summary>AI / Emerging</summary>
+        <button class="nav-item" onclick="selectProduct('ai-runtime')"   data-id="ai-runtime">  <span class="nav-icon">🤖</span> AI Runtime Security</button>
+        <button class="nav-item" onclick="selectProduct('strata-log')"   data-id="strata-log">  <span class="nav-icon">📋</span> Strata Logging Service</button>
+      </details>
     </div>
 
     <!-- conv-list kept in DOM (hidden) so JS renderConvList() doesn't throw -->
@@ -1854,8 +2061,9 @@
     <div class="nav-divider"></div>
 
     <div class="nav-section" style="padding-bottom:10px;">
-      <button class="nav-item" onclick="openSettings()"><span class="nav-icon">⚙️</span>Settings</button>
-      <button class="nav-item" onclick="window.open('https://docs.paloaltonetworks.com','_blank')"><span class="nav-icon">📚</span>Knowledge base</button>
+      <button class="nav-item" onclick="openToolsDrawer()"><span class="nav-icon">🧰</span>Tools</button>
+      <button class="nav-item" onclick="openSettings()"><span class="nav-icon">👤</span>Account</button>
+      <button class="nav-item" onclick="window.open('https://docs.paloaltonetworks.com','_blank')"><span class="nav-icon">📚</span>PAN docs</button>
     </div>
 
   </nav>
@@ -1872,8 +2080,9 @@
       </div>
       <div id="context-product">
         <span id="context-icon" class="desktop-context-line">🔥</span>
+        <span class="desktop-context-line" style="font-size:11px;color:var(--text-dim);font-weight:700;text-transform:uppercase;letter-spacing:0.04em;">Focus</span>
         <span id="context-name" class="desktop-context-line">ADK Cyber AI</span>
-        <span id="context-desc" class="desktop-context-line">· Select a product from the left to focus the chat, or ask anything below.</span>
+        <span id="context-desc" class="desktop-context-line">· Select a product to prioritize answers (not a hard filter).</span>
         <span class="kb-hdr-sep desktop-context-line">|</span>
         <div id="kb-dropdown-wrap">
           <button id="kb-dropdown-btn" onclick="toggleKbDropdown(event)">📚 Palo KB Articles <span id="kb-dropdown-caret">▾</span></button>
@@ -1986,6 +2195,25 @@
     </div>
 
     <div id="input-bar">
+      <div id="brain-bar" aria-label="Provider and model">
+        <div class="bb-select">
+          <label for="bb-provider">Provider</label>
+          <select id="bb-provider" onchange="onBrainProviderChange()" aria-label="Chat provider">
+            <option value="anthropic">Anthropic (Claude)</option>
+            <option value="grok">Grok (xAI)</option>
+            <option value="local">Local LLM</option>
+          </select>
+        </div>
+        <div class="bb-select">
+          <label for="bb-model">Model</label>
+          <select id="bb-model" onchange="onBrainModelChange()" aria-label="Model"></select>
+        </div>
+        <button type="button" class="tools-header-btn" onclick="openToolsDrawer('config')" title="Paste config / CLI / firewall tools">📎 Config</button>
+        <div id="bb-quota" title="Cloud query quota">
+          <span id="bb-quota-label">—</span>
+          <div id="bb-quota-track"><div id="bb-quota-fill"></div></div>
+        </div>
+      </div>
       <div id="chat-attach-strip" class="attach-strip" aria-label="Pasted screenshots to send"></div>
       <div id="input-wrap">
         <textarea id="user-input" rows="1"
@@ -1997,7 +2225,8 @@
           </svg>
         </button>
       </div>
-      <div id="model-picker">
+      <!-- Legacy model pills kept for setModel/rebuildModelPills compatibility (hidden via CSS) -->
+      <div id="model-picker" aria-hidden="true">
         <span id="model-picker-label">Model:</span>
         <span id="model-pills">
           <button class="model-pill active" data-model="auto" onclick="setModel('auto')">⚡ Auto</button>
@@ -2007,49 +2236,32 @@
         </span>
         <span id="provider-mode-pill" onclick="toggleProvider()"></span>
       </div>
-      <div id="input-hint">
+      <div id="composer-footer">
+        <span id="config-ind"></span>
+        <span class="privacy-short-text">Credentials redacted on device · relayed through ADK Cyber's gateway (not stored) to Anthropic</span>
+        <span id="app-version" onclick="recheckVersion()" title="Installed version (click to re-check for updates)" style="cursor:pointer;opacity:0.7;"></span>
+      </div>
+      <div id="input-hint" style="display:none;">
         <span>Shift+Enter for newline · Enter to send</span>
-        <span style="display:flex;gap:10px;align-items:center;">
-          <span id="config-ind"></span>
-          <span id="app-version" onclick="recheckVersion()" title="Installed version (click to re-check for updates)" style="cursor:pointer;opacity:0.7;"></span>
-        </span>
       </div>
     </div>
   </main>
 
-  <!-- ── RIGHT SIDEBAR ─────────────────────────────────────────── -->
-  <aside id="right-sidebar">
+  <div id="tools-backdrop" onclick="closeToolsDrawer()" aria-hidden="true"></div>
 
-    <div class="rs-section" style="padding-bottom:12px;">
-      <button id="new-chat-btn" onclick="newChat()">
-        <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
-        New Chat
-      </button>
+  <!-- ── TOOLS DRAWER (provider, local LLM, firewall, config) ── -->
+  <aside id="right-sidebar" aria-label="Tools drawer">
+
+    <div id="tools-drawer-head">
+      <h3>Tools</h3>
+      <button type="button" id="tools-drawer-close" onclick="closeToolsDrawer()" aria-label="Close tools">×</button>
     </div>
 
-    <div class="rs-divider" style="margin-top:0;"></div>
-
-    <!-- Recent Docs -->
-    <div class="rs-section" style="padding-bottom:8px;">
-      <span class="rs-label">PAN-OS Docs</span>
-      <div class="doc-link" onclick="window.open('https://docs.paloaltonetworks.com/pan-os/11-1/pan-os-release-notes','_blank')">
-        <span class="doc-title">PAN-OS 11.1 Release Notes</span>
-        <span class="doc-meta">docs.paloaltonetworks.com</span>
-      </div>
-      <div class="doc-link" onclick="window.open('https://docs.paloaltonetworks.com/best-practices','_blank')">
-        <span class="doc-title">Best Practice Security Policy</span>
-        <span class="doc-meta">Palo Alto KB</span>
-      </div>
-      <div class="doc-link" onclick="window.open('https://docs.paloaltonetworks.com/cortex/cortex-xdr/cortex-xdr-pro-admin/investigation-and-response','_blank')">
-        <span class="doc-title">Cortex XDR Investigation Guide</span>
-        <span class="doc-meta">docs.paloaltonetworks.com</span>
-      </div>
-    </div>
-
-    <div class="rs-divider"></div>
+    <!-- hidden legacy new-chat for any callers -->
+    <button id="new-chat-btn" onclick="newChat()" style="display:none;" aria-hidden="true">New Chat</button>
 
     <!-- ── Chat provider settings ──────────────────────────────── -->
-    <div id="provider-section" class="rs-section" style="padding-bottom:6px;">
+    <div id="provider-section" class="rs-section expanded" style="padding-bottom:6px;">
       <div id="provider-toggle" onclick="toggleProviderPanel()">
         <span class="rs-label" style="margin-bottom:0;">Chat Provider</span>
         <span id="provider-mode-label"></span>
@@ -2335,6 +2547,16 @@ function setModel(model, persist) {
   document.querySelectorAll('.model-pill').forEach(p => {
     p.classList.toggle('active', p.dataset.model === model);
   });
+  const bbModel = document.getElementById('bb-model');
+  if (bbModel && model) {
+    if (![...bbModel.options].some(o => o.value === model)) {
+      const opt = document.createElement('option');
+      opt.value = model;
+      opt.textContent = MODEL_LABELS[model] || model;
+      bbModel.appendChild(opt);
+    }
+    bbModel.value = model;
+  }
   if (persist !== false && _providerState && _providerState.settings) {
     const eff = _providerState.effective_provider || _providerState.settings.chat_provider || 'anthropic';
     if (eff === 'anthropic' || eff === 'grok' || eff === 'cloud') {
@@ -2349,12 +2571,172 @@ function setModel(model, persist) {
   }
 }
 
+function openToolsDrawer(section) {
+  const drawer = document.getElementById('right-sidebar');
+  const backdrop = document.getElementById('tools-backdrop');
+  if (drawer) drawer.classList.add('open');
+  if (backdrop) backdrop.classList.add('open');
+  if (section === 'config') {
+    const el = document.getElementById('config-section');
+    if (el) setTimeout(() => el.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
+  } else if (section === 'provider' || section === 'local') {
+    const el = document.getElementById('provider-section');
+    if (el) {
+      el.classList.add('expanded');
+      const panel = document.getElementById('provider-panel');
+      if (panel) panel.style.display = 'flex';
+      setTimeout(() => el.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
+    }
+  } else if (section === 'firewall') {
+    const el = document.getElementById('firewall-section');
+    if (el) {
+      const panel = document.getElementById('firewall-panel');
+      if (panel) panel.style.display = 'block';
+      setTimeout(() => el.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
+    }
+  }
+}
+
+function closeToolsDrawer() {
+  document.getElementById('right-sidebar')?.classList.remove('open');
+  document.getElementById('tools-backdrop')?.classList.remove('open');
+}
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') closeToolsDrawer();
+});
+
+function onBrainProviderChange() {
+  const sel = document.getElementById('bb-provider');
+  if (!sel) return;
+  const val = sel.value;
+  const radio = document.querySelector(`input[name="chat_provider"][value="${val}"]`);
+  if (radio && !radio.disabled) {
+    radio.checked = true;
+    onProviderChange();
+  } else {
+    // Revert select if option is locked
+    renderProviderUI();
+  }
+}
+
+function onBrainModelChange() {
+  const sel = document.getElementById('bb-model');
+  if (!sel || !sel.value) return;
+  setModel(sel.value, true);
+}
+
+function syncBrainBarFromState() {
+  const st = _providerState.settings || {};
+  let pref = st.chat_provider || 'anthropic';
+  if (pref === 'cloud') pref = 'anthropic';
+  const eff = _providerState.effective_provider || pref;
+  const avail = _providerState.providers_available || {};
+  const bbProv = document.getElementById('bb-provider');
+  if (bbProv) {
+    [...bbProv.options].forEach(o => {
+      o.disabled = avail[o.value] === false;
+    });
+    bbProv.value = (eff === 'cloud' ? 'anthropic' : eff) || 'anthropic';
+  }
+  const modelProvider = (eff === 'local') ? 'local' : (eff === 'grok' ? 'grok' : 'anthropic');
+  rebuildBrainModelSelect(modelProvider, st.cloud_model || selectedModel);
+  updateBrainQuota();
+  // Local advanced fields only in drawer when local selected
+  const section = document.getElementById('provider-section');
+  if (section) section.classList.toggle('show-local', pref === 'local' || eff === 'local');
+}
+
+function rebuildBrainModelSelect(provider, preferred) {
+  const bbModel = document.getElementById('bb-model');
+  if (!bbModel) return;
+  if (provider === 'local') {
+    const localModel = (_providerState.settings || {}).local_model || 'local';
+    bbModel.innerHTML = `<option value="${escHtml(localModel)}">${escHtml(localModel || 'Local model')}</option>`;
+    bbModel.disabled = true;
+    selectedModel = localModel;
+    return;
+  }
+  bbModel.disabled = false;
+  const models = (_providerState.models_available && _providerState.models_available[provider]) || [];
+  const list = models.length ? models : (provider === 'grok' ? ['grok-4.5', 'grok-4.3'] : ['auto', 'claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'claude-opus-4-8']);
+  let pick = preferred || selectedModel;
+  if (!list.includes(pick)) pick = list[0];
+  bbModel.innerHTML = list.map(m =>
+    `<option value="${m}"${m === pick ? ' selected' : ''}>${MODEL_LABELS[m] || m}</option>`
+  ).join('');
+  selectedModel = pick;
+}
+
+function updateBrainQuota() {
+  const label = document.getElementById('bb-quota-label');
+  const fill = document.getElementById('bb-quota-fill');
+  if (!label) return;
+  const eff = _providerState.effective_provider || 'anthropic';
+  if (eff === 'local') {
+    label.textContent = 'Local · no quota';
+    if (fill) fill.style.width = '0%';
+    return;
+  }
+  const badge = document.getElementById('tier-badge');
+  // Prefer numeric fields from last updateUsageDisplay / session
+  const used = window._lastQueriesUsed;
+  const lim = window._lastQueriesLimit;
+  if (used != null && lim != null && lim > 0) {
+    label.textContent = `${Number(used).toLocaleString()} / ${Number(lim).toLocaleString()}`;
+    if (fill) fill.style.width = Math.min(100, Math.round((used / lim) * 100)) + '%';
+  } else {
+    label.textContent = badge?.textContent?.trim() || 'Cloud';
+    if (fill) fill.style.width = '0%';
+  }
+}
+
+function pushRecentProduct(id) {
+  if (!id || !PRODUCTS[id]) return;
+  let rec = [];
+  try { rec = JSON.parse(localStorage.getItem('pcop_recent_products') || '[]'); } catch { rec = []; }
+  rec = [id, ...rec.filter(x => x !== id)].slice(0, 4);
+  localStorage.setItem('pcop_recent_products', JSON.stringify(rec));
+  renderRecentProducts();
+}
+
+function renderRecentProducts() {
+  const host = document.getElementById('nav-recents');
+  if (!host) return;
+  let rec = [];
+  try { rec = JSON.parse(localStorage.getItem('pcop_recent_products') || '[]'); } catch { rec = []; }
+  if (!rec.length) {
+    host.innerHTML = '<div style="font-size:11px;color:var(--text-dim);padding:4px 10px;">Pick a product to pin it here</div>';
+    return;
+  }
+  host.innerHTML = rec.map((id, i) => {
+    const p = PRODUCTS[id];
+    if (!p) return '';
+    return `<button type="button" class="nav-item nav-recent-item${currentProduct === id ? ' active' : ''}" onclick="selectProduct('${id}')" data-id="${id}">
+      <span class="nav-icon">${p.icon}</span> ${escHtml(p.name)}${i === 0 ? '<span class="pin-tag">PIN</span>' : ''}
+    </button>`;
+  }).join('');
+}
+
 function modelLabel(m) {
   if (!m) return '';
+  if (MODEL_LABELS[m]) return MODEL_LABELS[m].replace(/^⚡\s*/, '');
   if (m.includes('opus'))   return 'Opus';
   if (m.includes('sonnet')) return 'Sonnet';
   if (m.includes('haiku'))  return 'Haiku';
+  if (m.includes('grok'))   return m;
   return m;
+}
+
+function copyAssistantText(btn) {
+  const meta = btn && btn.closest('.token-meta');
+  const text = (meta && meta.dataset.rawText) || '';
+  if (!text) return;
+  navigator.clipboard.writeText(text).then(() => {
+    const prev = btn.textContent;
+    btn.textContent = 'Copied';
+    setTimeout(() => { btn.textContent = prev; }, 1200);
+  }).catch(() => {});
 }
 
 // ── Init ─────────────────────────────────────────────────────────
@@ -2363,7 +2745,9 @@ function buildMobileProductSelect() {
   if (!sel) return;
   sel.innerHTML = '<option value="">General — all PAN-OS products</option>';
   document.querySelectorAll('#left-nav .nav-section').forEach(section => {
-    const label = section.querySelector('.nav-group-label')?.textContent?.trim();
+    const label = section.querySelector('.nav-group-label')?.textContent?.trim()
+      || section.querySelector('details.nav-fold > summary')?.childNodes[0]?.textContent?.trim()
+      || section.querySelector('summary')?.textContent?.replace(/[▸▾]/g, '').trim();
     const items = section.querySelectorAll('.nav-item[data-id]');
     if (!items.length) return;
     const og = document.createElement('optgroup');
@@ -2395,6 +2779,7 @@ function onMobileProductChange(id) {
 async function init() {
   applyTheme();
   buildMobileProductSelect();
+  renderRecentProducts();
   await checkInstallHealth();
   await checkAuthStatus();
   checkForUpdate();
@@ -2678,7 +3063,7 @@ function renderProviderUI() {
   const tier   = _providerState.tier || 'free';
   const section = document.getElementById('provider-section');
 
-  // Hydrate radios + fields
+  // Hydrate radios + fields (drawer)
   document.querySelectorAll('input[name="chat_provider"]').forEach(r => {
     r.checked  = (r.value === pref);
     const row = r.closest('.provider-radio');
@@ -2686,91 +3071,59 @@ function renderProviderUI() {
     if (row) row.classList.toggle('disabled', isDisabled);
     r.disabled = isDisabled;
   });
-  document.getElementById('local-base-url').value = st.local_base_url || '';
-  document.getElementById('local-model').value    = st.local_model    || '';
-  document.getElementById('local-api-key').value  = st.local_api_key  || '';
-  document.getElementById('local-history-turns').value = st.local_history_turns || 40;
-  const ctxEl = document.getElementById('local-context-tokens');
-  if (ctxEl) ctxEl.value = st.local_context_tokens || 32768;
-  const maxEl = document.getElementById('local-max-tokens');
-  if (maxEl) maxEl.value = st.local_max_tokens || 8192;
-  const tempEl = document.getElementById('local-temperature');
-  if (tempEl) tempEl.value = st.local_temperature ?? 0.2;
+  const setVal = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
+  setVal('local-base-url', st.local_base_url || '');
+  setVal('local-model', st.local_model || '');
+  setVal('local-api-key', st.local_api_key || '');
+  setVal('local-history-turns', st.local_history_turns || 40);
+  setVal('local-context-tokens', st.local_context_tokens || 32768);
+  setVal('local-max-tokens', st.local_max_tokens || 8192);
+  setVal('local-temperature', st.local_temperature ?? 0.2);
   const truncEl = document.getElementById('local-truncate-config');
   if (truncEl) truncEl.checked = st.local_truncate_config !== false;
   const visEl = document.getElementById('local-supports-vision');
   if (visEl) visEl.checked = !!st.local_supports_vision;
   syncLocalModelSelect(st.local_model || '');
 
-  // Show the local-fields group only when local is the current selection.
-  section.classList.toggle('show-local', pref === 'local');
-  if (pref === 'local') {
+  if (section) {
+    section.classList.toggle('show-local', pref === 'local');
     section.classList.add('expanded');
+    const panel = document.getElementById('provider-panel');
+    if (panel) panel.style.display = 'flex';
   }
 
-  // Model pills for the effective cloud provider
   const modelProvider = isCloudEff(eff) ? (eff === 'cloud' ? 'anthropic' : eff) : 'local';
   rebuildModelPills(modelProvider, st.cloud_model || selectedModel);
+  syncBrainBarFromState();
 
-  // Header label summarising the effective mode
   const label = document.getElementById('provider-mode-label');
-  if (eff === 'local') {
-    label.textContent = `Local · ${st.local_model || '(no model)'}`;
-  } else if (eff === 'grok') {
-    label.textContent = `Cloud · ${MODEL_LABELS[selectedModel] || selectedModel || 'Grok'}`;
-  } else {
-    label.textContent = `Cloud · ${MODEL_LABELS[selectedModel] || 'Claude'}`;
+  if (label) {
+    if (eff === 'local') label.textContent = `Local · ${st.local_model || '(no model)'}`;
+    else if (eff === 'grok') label.textContent = `Grok · ${MODEL_LABELS[selectedModel] || selectedModel || '4.5'}`;
+    else label.textContent = `Claude · ${MODEL_LABELS[selectedModel] || 'Auto'}`;
   }
 
-  // Tier-aware lock messaging
   const lock = document.getElementById('provider-tier-lock');
-  if (tier === 'local') {
-    lock.innerHTML = '🔒 Your account is on the <strong>Local</strong> tier — cloud chat is not included. <a href="https://adkcyber.com/pan-copilot.html" target="_blank" rel="noopener">Upgrade to Pro</a> to unlock cloud mode.';
-    lock.classList.add('show');
-  } else if (!avail.local) {
-    const email = (document.getElementById('acct-email')?.textContent || '').trim();
-    const qs = email && email !== '—' ? `?checkout[email]=${encodeURIComponent(email)}` : '';
-    lock.innerHTML = `Local-LLM mode requires the <strong>Local</strong> tier ($5/mo). <a href="${LS_LOCAL_URL + qs}" target="_blank" rel="noopener">Get the Local tier</a> to use your own local model.`;
-    lock.classList.add('show');
-  } else if (!avail.grok && (tier === 'free' || !tier)) {
-    lock.innerHTML = 'Grok is available on <strong>Pro / Max</strong>. Free plan uses Claude Haiku only.';
-    lock.classList.add('show');
-  } else {
-    lock.classList.remove('show');
-    lock.textContent = '';
-  }
-
-  // Mode pill next to the model picker — cycles local ⇄ primary cloud (anthropic)
-  const pill = document.getElementById('provider-mode-pill');
-  if (pill) {
-    pill.classList.remove('cloud', 'local', 'anthropic', 'grok');
-    pill.classList.add(isCloudEff(eff) ? 'cloud' : 'local');
-    const hasCloud = avail.anthropic || avail.cloud || avail.grok;
-    const canToggle = hasCloud && avail.local;
-    let baseLabel = 'Cloud';
-    if (eff === 'local') baseLabel = `Local · ${st.local_model || '?'}`;
-    else if (eff === 'grok') baseLabel = `Grok · ${MODEL_LABELS[selectedModel] || selectedModel}`;
-    else baseLabel = `Claude · ${MODEL_LABELS[selectedModel] || 'Auto'}`;
-    pill.textContent = canToggle ? `${baseLabel}  ⇄` : baseLabel;
-    pill.style.cursor = canToggle ? 'pointer' : 'default';
-    if (canToggle) {
-      pill.title = eff === 'local' ? 'Click to switch to cloud' : 'Click to switch to Local';
+  if (lock) {
+    if (tier === 'local') {
+      lock.innerHTML = '🔒 Your account is on the <strong>Local</strong> tier — cloud chat is not included. <a href="https://adkcyber.com/pan-copilot.html" target="_blank" rel="noopener">Upgrade to Pro</a> to unlock cloud mode.';
+      lock.classList.add('show');
+    } else if (!avail.local) {
+      const email = (document.getElementById('acct-email')?.textContent || '').trim();
+      const qs = email && email !== '—' ? `?checkout[email]=${encodeURIComponent(email)}` : '';
+      lock.innerHTML = `Local-LLM mode requires the <strong>Local</strong> tier ($5/mo). <a href="${LS_LOCAL_URL + qs}" target="_blank" rel="noopener">Get the Local tier</a> to use your own local model.`;
+      lock.classList.add('show');
+    } else if (!avail.grok && (tier === 'free' || !tier)) {
+      lock.innerHTML = 'Grok is available on <strong>Pro / Max</strong>. Free plan uses Claude Haiku only.';
+      lock.classList.add('show');
     } else {
-      pill.title = eff === 'local'
-        ? `Local provider at ${st.local_base_url}`
-        : (eff === 'grok' ? 'Cloud provider (Grok / xAI)' : 'Cloud provider (Anthropic)');
+      lock.classList.remove('show');
+      lock.textContent = '';
     }
   }
 
-  // Hide model picker when in local mode
-  const lbl = document.getElementById('model-picker-label');
-  if (lbl) lbl.style.display = (eff === 'local') ? 'none' : '';
-  const pills = document.getElementById('model-pills');
-  if (pills) pills.style.display = (eff === 'local') ? 'none' : '';
-
-  // Hide the "config >8K = 3 queries" weight warning in local mode (no quota).
   const cfgWarn = document.getElementById('large-cfg-warn');
-  if (cfgWarn) cfgWarn.style.display = (eff === 'local') ? 'none' : cfgWarn.style.display;
+  if (cfgWarn && eff === 'local') cfgWarn.style.display = 'none';
   updateLocalContextWarn();
   updatePrivacyCopy();
   refreshAboutPanel({ version: document.getElementById('app-version')?.textContent?.replace(/^v/, ''), install_dir: _installDir, install_writable: _installWritable });
@@ -2899,9 +3252,14 @@ function onProviderChange() {
       _providerState.settings.cloud_model = 'auto';
     }
   }
-  document.getElementById('provider-section').classList.toggle('show-local', val === 'local');
+  const section = document.getElementById('provider-section');
+  if (section) {
+    section.classList.toggle('show-local', val === 'local');
+    section.classList.add('expanded');
+  }
   if (val === 'local') {
-    document.getElementById('provider-section').classList.add('expanded');
+    // Local needs base URL / model — open the tools drawer to those fields.
+    openToolsDrawer('local');
   }
   // Persist immediately — selecting a provider should switch right away, no
   // separate Save click. (Field edits still use the Save button.)
@@ -2922,7 +3280,7 @@ async function toggleProvider() {
   if (cur !== 'local') st._last_cloud_provider = cur;
   // Switching to local needs a configured endpoint — open settings if missing.
   if (next === 'local' && !(st.local_base_url || '').trim()) {
-    document.getElementById('provider-section').classList.add('expanded');
+    openToolsDrawer('local');
     return;
   }
   try {
@@ -3447,24 +3805,35 @@ function updateTierUI(tier, queriesUsed, queriesLimit, period) {
     badge.className = 'pro';
     const used = queriesUsed ?? 0;
     const lim  = queriesLimit ?? 1000;
+    window._lastQueriesUsed = used;
+    window._lastQueriesLimit = lim;
     badge.textContent = `★ Pro · ${used.toLocaleString()}/${lim.toLocaleString()} this month`;
   } else if (tier === 'max') {
     badge.className = 'max';
     const used = queriesUsed ?? 0;
     const lim  = queriesLimit ?? 2500;
+    window._lastQueriesUsed = used;
+    window._lastQueriesLimit = lim;
     badge.textContent = `★ MAX · ${used.toLocaleString()}/${lim.toLocaleString()} this month`;
   } else if (tier === 'local') {
     badge.className = 'pro';  // reuse the green-ish pro styling
     badge.textContent = '⚙ Local · runs on your machine';
+    window._lastQueriesUsed = null;
+    window._lastQueriesLimit = null;
   } else if (tier === 'owner') {
     badge.className = 'max';
     badge.textContent = '★ Owner · unlimited';
+    window._lastQueriesUsed = 0;
+    window._lastQueriesLimit = 999999;
   } else {
     badge.className = 'free';
     const used = queriesUsed ?? 0;
     const lim  = queriesLimit ?? 10;
+    window._lastQueriesUsed = used;
+    window._lastQueriesLimit = lim;
     badge.textContent = `Free · ${used}/${lim} this week`;
   }
+  updateBrainQuota();
   // Show the free-tier limitations box only for free users
   document.getElementById('free-tier-info').style.display = (tier === 'free') ? 'block' : 'none';
   // Re-evaluate the large-config warning with the current config value
@@ -3619,19 +3988,21 @@ function toggleTheme() {
 function selectProduct(id) {
   currentProduct = id;
   const p = PRODUCTS[id];
+  if (!p) return;
 
   document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
-  document.querySelector(`[data-id="${id}"]`)?.classList.add('active');
+  document.querySelectorAll(`[data-id="${id}"]`).forEach(el => el.classList.add('active'));
 
   const mob = document.getElementById('mobile-product-select');
   if (mob) mob.value = id;
 
   document.getElementById('context-icon').textContent = p.icon;
   document.getElementById('context-name').textContent = p.name;
-  document.getElementById('context-desc').textContent = `· ${p.desc}`;
+  document.getElementById('context-desc').textContent = `· Prioritized for answers · ${p.desc}`;
 
   const chips = document.getElementById('context-chips');
   chips.innerHTML = p.chips.map(c => `<button class="ctx-chip" onclick="quickAsk(${JSON.stringify(c).replace(/"/g, '&quot;')})">${escHtml(c)}</button>`).join('');
+  pushRecentProduct(id);
 }
 
 // ── Conversation list ─────────────────────────────────────────────
@@ -4191,7 +4562,9 @@ async function sendMessage() {
           const truncNote = data.config_truncated
             ? '<span class="meta-redacted">✂ config truncated for local context</span>'
             : '';
-          meta.innerHTML = `${mLabel ? `<span class="meta-model">${mLabel}</span>` : ''}<span>${data.input_tokens} in</span><span>${data.output_tokens} out</span>${data.redactions > 0 ? `<span class="meta-redacted">🔒 ${data.redactions} credential${data.redactions === 1 ? '' : 's'} auto-redacted</span>` : ''}${truncNote}`;
+          const provLabel = data.provider === 'grok' ? 'Grok' : data.provider === 'local' ? 'Local' : data.provider === 'anthropic' || data.provider === 'cloud' ? 'Claude' : '';
+          meta.innerHTML = `${provLabel ? `<span class="meta-model">${provLabel}</span>` : ''}${mLabel ? `<span class="meta-model">${mLabel}</span>` : ''}<span>${data.input_tokens} in</span><span>${data.output_tokens} out</span>${data.redactions > 0 ? `<span class="meta-redacted">🔒 ${data.redactions} credential${data.redactions === 1 ? '' : 's'} auto-redacted</span>` : ''}${truncNote}<button type="button" class="msg-copy-btn" onclick="copyAssistantText(this)" title="Copy reply">Copy</button>`;
+          meta.dataset.rawText = raw;
           const bubble = placeholder.querySelector('.msg-bubble');
           bubble.insertAdjacentHTML('beforeend', assistantReportHtml());
           bubble.appendChild(meta);
