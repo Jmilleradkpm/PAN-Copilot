@@ -1175,34 +1175,80 @@
       display: inline-flex;
       align-items: center;
       gap: 6px;
-      background: var(--surface);
-      border: 1px solid var(--border);
+      background: rgba(0, 212, 228, 0.10);
+      border: 1px solid rgba(0, 212, 228, 0.45);
       border-radius: 8px;
       padding: 5px 10px;
       font-size: 12px;
     }
+    .bb-select:focus-within {
+      border-color: #00D4E4;
+      box-shadow: 0 0 0 2px rgba(0, 212, 228, 0.22);
+      background: rgba(0, 212, 228, 0.14);
+    }
     .bb-select label {
-      color: var(--text-dim);
+      color: #00D4E4;
       font-size: 10px;
       font-weight: 700;
       text-transform: uppercase;
       letter-spacing: 0.04em;
+      opacity: 0.9;
     }
     .bb-select select {
       appearance: none;
-      background: transparent;
+      -webkit-appearance: none;
+      background-color: transparent;
       border: none;
-      color: var(--text);
+      color: #00D4E4;
+      -webkit-text-fill-color: #00D4E4; /* WebView2 often ignores color alone */
       font: inherit;
-      font-weight: 600;
+      font-weight: 700;
       cursor: pointer;
       outline: none;
       min-width: 118px;
-      max-width: 180px;
+      max-width: 200px;
+      /* High-contrast caret via SVG (teal) */
+      padding-right: 16px;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.5 L6 6.5 L11 1.5' fill='none' stroke='%2300D4E4' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 0 center;
+      color-scheme: dark;
+    }
+    /* Dropdown list items — WebView2 / Chromium (closed-list OS chrome varies) */
+    .bb-select select option,
+    .bb-select select optgroup {
+      background-color: #0d1117;
+      color: #00D4E4;
+      font-weight: 600;
+      padding: 8px 10px;
+    }
+    .bb-select select option:checked,
+    .bb-select select option:hover,
+    .bb-select select option:focus {
+      background-color: #003a40;
+      color: #00D4E4;
     }
     .bb-select select:disabled {
-      opacity: 0.45;
+      opacity: 0.5;
       cursor: not-allowed;
+      color: rgba(0, 212, 228, 0.55);
+    }
+    [data-theme="light"] .bb-select {
+      background: rgba(0, 180, 194, 0.10);
+      border-color: rgba(0, 180, 194, 0.50);
+    }
+    [data-theme="light"] .bb-select label,
+    [data-theme="light"] .bb-select select {
+      color: #009AA8;
+    }
+    [data-theme="light"] .bb-select select option,
+    [data-theme="light"] .bb-select select optgroup {
+      background-color: #ffffff;
+      color: #009AA8;
+    }
+    [data-theme="light"] .bb-select select option:checked {
+      background-color: #d6f6f9;
+      color: #007a88;
     }
     #bb-quota {
       margin-left: auto;
