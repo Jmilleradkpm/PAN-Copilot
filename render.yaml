@@ -27,7 +27,7 @@ services:
         value: "1"
       # Bumped on each Anthropic key rotation so /health reports the active version.
       - key: ANTHROPIC_KEY_VERSION
-        value: "1"
+        value: "2"
       # Distinct-IP fan-out per account/month above which a CRITICAL anomaly logs.
       - key: KEY_DELIVERY_IP_THRESHOLD
         value: "5"
