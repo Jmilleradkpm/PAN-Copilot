@@ -93,8 +93,8 @@ ADK Cyber Cloud
 | Tier  | Queries       | Price     |
 |-------|---------------|-----------|
 | Free  | 10 / week     | $0        |
-| Pro   | 1,000 / month | $20 / mo  |
-| MAX   | 2,500 / month | $50 / mo  |
+| Pro   | 500 / month   | $20 / mo  |
+| MAX   | 1,250 / month | $50 / mo  |
 | Owner | Unlimited     | Internal  |
 
 Free tier is hard-locked to `claude-haiku-4-5-20251001`. Large config pastes

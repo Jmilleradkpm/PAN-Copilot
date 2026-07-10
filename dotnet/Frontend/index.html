@@ -3908,14 +3908,14 @@ function updateTierUI(tier, queriesUsed, queriesLimit, period) {
   if (tier === 'pro') {
     badge.className = 'pro';
     const used = queriesUsed ?? 0;
-    const lim  = queriesLimit ?? 1000;
+    const lim  = queriesLimit ?? 500;
     window._lastQueriesUsed = used;
     window._lastQueriesLimit = lim;
     badge.textContent = `★ Pro · ${used.toLocaleString()}/${lim.toLocaleString()} this month`;
   } else if (tier === 'max') {
     badge.className = 'max';
     const used = queriesUsed ?? 0;
-    const lim  = queriesLimit ?? 2500;
+    const lim  = queriesLimit ?? 1250;
     window._lastQueriesUsed = used;
     window._lastQueriesLimit = lim;
     badge.textContent = `★ MAX · ${used.toLocaleString()}/${lim.toLocaleString()} this month`;
@@ -3978,7 +3978,7 @@ function updateUsageDisplay(queriesUsed, queriesLimit, tier, period) {
     return;
   }
   const used  = queriesUsed ?? 0;
-  const lim   = queriesLimit ?? (tier === 'free' ? 10 : tier === 'pro' ? 1000 : 2500);
+  const lim   = queriesLimit ?? (tier === 'free' ? 10 : tier === 'pro' ? 500 : 1250);
   const pct   = Math.min(100, Math.round((used / lim) * 100));
   const p     = period ?? (tier === 'free' ? 'weekly' : 'monthly');
 
@@ -5056,12 +5056,12 @@ function copyCode(btn) {
     <p style="font-size:11px;color:var(--text-dim);margin:-12px 0 14px;line-height:1.5;">Paid subscriptions are processed by ADK Cyber through a secure third-party checkout (not Microsoft). Microsoft is not the seller of Pro or MAX plans.</p>
     <a id="upgrade-pro-btn" class="upgrade-plan-card pro" href="#" target="_blank">
       <div class="plan-name">Pro — $20 / month</div>
-      <div class="plan-price">1,000 queries / month</div>
-      <div class="plan-limit">25× more than Free</div>
+      <div class="plan-price">500 queries / month</div>
+      <div class="plan-limit">12× more than Free</div>
     </a>
     <a id="upgrade-max-btn" class="upgrade-plan-card max" href="#" target="_blank">
       <div class="plan-name">MAX — $50 / month</div>
-      <div class="plan-price">2,500 queries / month</div>
+      <div class="plan-price">1,250 queries / month</div>
       <div class="plan-limit">No seat cap · Power users &amp; consultants</div>
     </a>
     <button id="upgrade-modal-close" onclick="closeUpgradeModal()">Cancel</button>

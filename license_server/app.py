@@ -132,8 +132,8 @@ LS_VARIANT_TIER = {
 }
 
 FREE_WEEKLY_LIMIT  = 10
-PRO_MONTHLY_LIMIT  = 1_000
-MAX_MONTHLY_LIMIT  = 2_500
+PRO_MONTHLY_LIMIT  = 500
+MAX_MONTHLY_LIMIT  = 1_250
 OWNER_LIMIT        = 999_999
 SESSION_TTL_DAYS   = 30
 MAX_QUERY_WEIGHT   = 3  # max cost multiplier per query (e.g. free-tier large config pastes)
@@ -488,7 +488,7 @@ def check_and_count(request: Request, req: TokenRequest):
         period_label = "week" if tier == "free" else "month"
         tier_label   = {"free": "Free", "pro": "Pro", "max": "MAX", "local": "Local"}.get(tier, tier.title())
         upgrade_msg  = (
-            " Upgrade to Pro at adkcyber.com/pan-copilot.html for up to 1,000 queries/month."
+            " Upgrade to Pro at adkcyber.com/adk-cyber-ai.html for up to 500 queries/month."
             if tier == "free" else ""
         )
         return {
