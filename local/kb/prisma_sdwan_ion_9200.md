@@ -155,4 +155,4 @@ If the user only needs a small site with limited WAN bandwidth, do not default t
 
 ---
 
-*ADKCyber internal KB for PAN Copilot. Keep aligned with official TechDocs when Palo Alto revises the hardware reference.*
+*ADKCyber internal KB for ADK Cyber AI. Keep aligned with official TechDocs when Palo Alto revises the hardware reference.*

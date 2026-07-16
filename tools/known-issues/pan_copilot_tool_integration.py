@@ -241,7 +241,7 @@ def _example() -> None:
     tool_def = get_tool_definition(live=True)
 
     system = (
-        "You are PAN Copilot. When a user reports a defect, ask for their exact "
+        "You are ADK Cyber AI. When a user reports a defect, ask for their exact "
         "PAN-OS version, then call known_issues_lookup before answering."
     )
     messages: List[Dict[str, Any]] = [

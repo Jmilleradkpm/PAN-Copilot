@@ -38,6 +38,14 @@ public sealed class ChatService
     // Appended as a cached system block. Output tokens are the largest marginal
     // cost per message (~$15/MTok on Sonnet); this trims reply length without
     // touching the CI-managed master prompt.
+    private const string IdentityInstruction =
+        "Identity (mandatory): Your name is ADK Cyber AI by Adirondack CyberSecurity. " +
+        "Never call yourself PAN Copilot, Pan Copilot, or Grok. " +
+        "If asked what version of Grok you are, whether you are Grok, or what model you are: " +
+        "say you are ADK Cyber AI (not Grok); Grok is only an optional xAI inference backend " +
+        "when the user selects Grok in Settings — you have no Grok version. " +
+        "Do not describe yourself as a 'local variant' of anything; say ADK Cyber AI on the user's device.";
+
     private const string BrevityInstruction =
         "Style: answer directly and concisely. Skip preamble and closing summaries. " +
         "Keep answers to simple questions under 150 words. Full-length detail is " +
@@ -302,7 +310,9 @@ public sealed class ChatService
             if (provider == "local")
             {
                 resolvedModel = _settings.Current.local_model;
-                outputTokens = await _localLlm.StreamChatAsync(_settings.Current, messages, _systemPrompt,
+                var localSystem = string.Join("\n\n", new[] { _systemPrompt, IdentityInstruction }
+                    .Where(x => !string.IsNullOrEmpty(x))!);
+                outputTokens = await _localLlm.StreamChatAsync(_settings.Current, messages, localSystem,
                     async text => { full.Append(text); await emit(new JsonObject { ["type"] = "token", ["text"] = text }); },
                     async thinking => await emit(new JsonObject { ["type"] = thinking ? "thinking_start" : "thinking_end" }));
             }
@@ -313,6 +323,7 @@ public sealed class ChatService
                 var systemText = string.Join("\n\n", new[]
                 {
                     _systemPrompt,
+                    IdentityInstruction,
                     BrevityInstruction,
                     string.IsNullOrEmpty(ki) ? null : ki,
                 }.Where(x => !string.IsNullOrEmpty(x))!);
@@ -373,7 +384,7 @@ public sealed class ChatService
                 sysBlocks.Add(new JsonObject
                 {
                     ["type"] = "text",
-                    ["text"] = BrevityInstruction,
+                    ["text"] = IdentityInstruction + "\n\n" + BrevityInstruction,
                     ["cache_control"] = new JsonObject { ["type"] = "ephemeral", ["ttl"] = "1h" },
                 });
                 if (!string.IsNullOrEmpty(ki))

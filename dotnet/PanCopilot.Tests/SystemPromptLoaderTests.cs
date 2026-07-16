@@ -13,7 +13,7 @@ public class SystemPromptLoaderTests
         // (nonce(12) || ciphertext(N) || tag(16)) decrypts back to the
         // original text using SystemPromptLoader.Decrypt.
         var key = RandomNumberGenerator.GetBytes(32);
-        var plaintext = "You are PAN Copilot. Help users with PAN-OS troubleshooting.";
+        var plaintext = "You are ADK Cyber AI. Help users with PAN-OS troubleshooting.";
         var blob = SystemPromptLoader.Encrypt(plaintext, key);
         var recovered = SystemPromptLoader.Decrypt(blob, key);
         Assert.Equal(plaintext, recovered);
