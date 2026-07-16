@@ -87,4 +87,16 @@ public class KbServiceTests
         Assert.Equal(KbRoute.ShortCircuit, result.Route);
         Assert.Equal("KB-PA-ROUTING-001", result.Entry?.KbId);
     }
+
+    [Fact]
+    public void ExplicitIon9200KbId_ShortCircuitsFullArticle()
+    {
+        var kb = CreateService();
+        var msg = "kb-ion-9200-001";
+
+        var result = kb.Resolve(msg);
+        Assert.Equal(KbRoute.ShortCircuit, result.Route);
+        Assert.Equal("KB-ION-9200-001", result.Entry?.KbId);
+        Assert.Contains("ION 9200", result.Content ?? "", StringComparison.OrdinalIgnoreCase);
+    }
 }

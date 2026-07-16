@@ -1677,17 +1677,19 @@
       "kb-scm-aiops-0001"
     ]
   },
-  "prisma_sdwan_ion_9200.md": {
-    "kb_id": "KB-SDWAN-ION9200-001",
-    "title": "Prisma SD-WAN ION 9200 \u2014 Product Guide (Critical Reference)",
+  "ion_9200.md": {
+    "kb_id": "KB-ION-9200-001",
+    "title": "Prisma SD-WAN ION 9200 — Hardware, Specs & Operations",
     "triggers": [
       "ion 9200",
       "ion9200",
       "ion-9200",
       "pan-ion-9200",
       "pan ion 9200",
+      "pan-ion-9200-hw",
       "prisma sd-wan ion 9200",
       "prisma sdwan ion 9200",
+      "prisma ion 9200",
       "sd-wan ion 9200",
       "sdwan ion 9200",
       "9200 ion",
@@ -1706,13 +1708,24 @@
       "ion9000",
       "pan-ion-9200-ssd",
       "ion 9200 ssd",
+      "ion 9200 fru",
       "ion 9200 poe",
       "ion 9200 sfp",
       "ion 9200 bypass",
+      "ion 9200 led",
+      "ion 9200 rack",
+      "ion 9200 claim",
+      "ion 9200 onboarding",
+      "ion 9200 ports",
+      "ion 9200 performance",
       "ion 9200 hardware",
       "ion 9200 specs",
       "ion 9200 specifications",
       "ion 9200 throughput",
+      "prisma sd-wan ion",
+      "instant-on network 9200",
+      "kb-ion-9200",
+      "kb-ion-9200-001",
       "kb-sdwan-ion9200",
       "kb-sdwan-ion9200-001"
     ]

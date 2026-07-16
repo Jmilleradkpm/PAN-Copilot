@@ -526,6 +526,13 @@
                 <span class="kb-dd-id">KB-SCM-AIOPS-0001</span>
               </span>
             </button>
+            <button class="kb-dd-item" onclick="askKb('kb-ion-9200-001'); closeKbDropdown()">
+              <span class="kb-dd-icon">ION</span>
+              <span class="kb-dd-text">
+                <span class="kb-dd-title">Prisma SD-WAN ION 9200 — Hardware &amp; Operations</span>
+                <span class="kb-dd-id">KB-ION-9200-001</span>
+              </span>
+            </button>
           </div>
         </div>
       </div>
@@ -3217,6 +3224,15 @@ function renderMarkdown(md) {
     if (hm) {
       const level = hm[1].length;
       out.push(`<h${level}>${inlineMd(hm[2].replace(/#*\s*$/, '').trim())}</h${level}>`);
+      i++; continue;
+    }
+
+    // ── Image ![alt](url)
+    const im = line.match(/^!\[([^\]]*)\]\(([^)]+)\)\s*$/);
+    if (im) {
+      const alt = escHtml(im[1]);
+      const src = escHtml(im[2]);
+      out.push(`<figure class="md-figure"><img src="${src}" alt="${alt}" loading="lazy">${alt ? `<figcaption>${alt}</figcaption>` : ''}</figure>`);
       i++; continue;
     }
 
