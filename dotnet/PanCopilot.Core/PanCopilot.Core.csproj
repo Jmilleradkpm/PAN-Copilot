@@ -6,7 +6,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>PanCopilot</RootNamespace>
     <AssemblyName>PanCopilot.Core</AssemblyName>
-    <Version>3.20.2</Version>
+    <Version>3.20.3</Version>
     <Company>Adirondack CyberSecurity</Company>
     <Product>ADK Cyber AI</Product>
   </PropertyGroup>
