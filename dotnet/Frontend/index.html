@@ -822,7 +822,7 @@ const PRODUCTS = {
   'cn-series':     { name:'CN-Series',                icon:'CN', desc:'Kubernetes, container security, service graph',          chips:['Kubernetes','Daemonset','Service graph','eBPF'] },
   'panorama':      { name:'Panorama',                 icon:'PN', desc:'device groups, templates, log collectors, migrations',   chips:['Device groups','Templates','Log collectors','Migrations'] },
   'prisma-access': { name:'Prisma Access',            icon:'PAX', desc:'mobile users, remote networks, ZTNA, service connections', chips:['Mobile users','Remote networks','Service connections','SPNs'] },
-  'prisma-sdwan':  { name:'Prisma SD-WAN',            icon:'SDW', desc:'ION devices, policy sets, BGP, path quality',           chips:['ION devices','Policy sets','BGP','Path quality'] },
+  'prisma-sdwan':  { name:'Prisma SD-WAN',            icon:'SDW', desc:'ION 9200 DC/large edge, policy sets, BGP, path quality, SASE', chips:['ION 9200','DC / large branch','Policy sets','Path quality','PoE++ / SFP+','SASE edge'] },
   'adem':          { name:'ADEM',                     icon:'ADM', desc:'digital experience monitoring, autonomous tests',        chips:['Digital experience','Autonomous tests','Real user monitoring'] },
   'cspm':          { name:'Prisma Cloud CSPM',        icon:'CSP', desc:'misconfigurations, compliance checks, asset inventory',  chips:['Misconfigurations','Compliance checks','Asset inventory'] },
   'cwp':           { name:'CWP / CWPP',               icon:'CWP', desc:'host defender, container defender, serverless',          chips:['Host defender','Container defender','Serverless','Compliance'] },
@@ -997,6 +997,9 @@ function onBrainProviderChange() {
     return;
   }
 
+  // Rebuild model list immediately from the chosen provider (do not wait on save).
+  applyModelListForProvider(val);
+
   const radio = document.querySelector(`input[name="chat_provider"][value="${val}"]`);
   if (radio && !radio.disabled) {
     radio.checked = true;
@@ -1017,6 +1020,37 @@ function onBrainModelChange() {
   setModel(sel.value, true);
 }
 
+/** Resolve which model family the brain-bar should show for a provider id. */
+function modelFamilyForProvider(provider) {
+  if (provider === 'local') return 'local';
+  if (provider === 'grok') return 'grok';
+  return 'anthropic'; // anthropic | cloud | anything else
+}
+
+/**
+ * Rebuild the model <select> for the given provider immediately.
+ * Prefer saved cloud_model only when it belongs to that family.
+ */
+function applyModelListForProvider(provider, preferred) {
+  const family = modelFamilyForProvider(provider);
+  const st = _providerState.settings || {};
+  let pref = preferred;
+  if (pref == null || pref === '') {
+    pref = st.cloud_model || selectedModel;
+  }
+  if (family === 'grok' && (!pref || !String(pref).startsWith('grok'))) {
+    pref = 'grok-4.5';
+  } else if (family === 'anthropic' && pref && String(pref).startsWith('grok')) {
+    pref = 'auto';
+  }
+  rebuildBrainModelSelect(family, pref);
+  if (family === 'grok' || family === 'anthropic') {
+    if (!_providerState.settings) _providerState.settings = {};
+    _providerState.settings.cloud_model = selectedModel;
+  }
+  rebuildModelPills(family, selectedModel);
+}
+
 function syncBrainBarFromState() {
   const st = _providerState.settings || {};
   let pref = st.chat_provider || 'anthropic';
@@ -1024,6 +1058,10 @@ function syncBrainBarFromState() {
   const eff = _providerState.effective_provider || pref;
   const avail = _providerState.providers_available || {};
   const bbProv = document.getElementById('bb-provider');
+  // Prefer saved preference when available; else effective provider
+  let show = pref;
+  if (avail[show] === false) show = (eff === 'cloud' ? 'anthropic' : eff) || 'anthropic';
+  if (avail[show] === false) show = 'anthropic';
   if (bbProv) {
     [...bbProv.options].forEach(o => {
       const locked = avail[o.value] === false;
@@ -1037,14 +1075,11 @@ function syncBrainBarFromState() {
         o.textContent = locked ? 'Anthropic (Claude) — not on Local tier' : 'Anthropic (Claude)';
       }
     });
-    // Prefer saved preference when available; else effective provider
-    let show = pref;
-    if (avail[show] === false) show = (eff === 'cloud' ? 'anthropic' : eff) || 'anthropic';
-    if (avail[show] === false) show = 'anthropic';
     bbProv.value = show;
   }
-  const modelProvider = (eff === 'local') ? 'local' : (eff === 'grok' ? 'grok' : 'anthropic');
-  rebuildBrainModelSelect(modelProvider, st.cloud_model || selectedModel);
+  // Model list follows the provider shown in the bar (user selection / saved pref),
+  // not effective_provider alone — that mismatch left Claude models under Grok.
+  applyModelListForProvider(show, st.cloud_model || selectedModel);
   updateBrainQuota();
   // Local advanced fields only in drawer when local selected
   const section = document.getElementById('provider-section');
@@ -1496,7 +1531,11 @@ function renderProviderUI() {
     if (panel) panel.style.display = 'flex';
   }
 
-  const modelProvider = isCloudEff(eff) ? (eff === 'cloud' ? 'anthropic' : eff) : 'local';
+  // Model list follows preferred provider (what the user selected), not only effective.
+  // effective can lag or disagree (e.g. free→Claude fallback) and left Grok users with Claude models.
+  const modelProvider = (pref === 'local' || eff === 'local')
+    ? 'local'
+    : (pref === 'grok' && avail.grok !== false ? 'grok' : (eff === 'grok' ? 'grok' : 'anthropic'));
   rebuildModelPills(modelProvider, st.cloud_model || selectedModel);
   syncBrainBarFromState();
 
@@ -1641,21 +1680,29 @@ function onProviderChange() {
   if (!radio) return;
   let val = radio.value;
   if (val === 'cloud') val = 'anthropic';
+  if (!_providerState.settings) _providerState.settings = {};
   _providerState.settings.chat_provider = val;
-  // When switching into a cloud provider, pick a valid default model for that family.
+  // When switching into a cloud provider, pick a valid default model for that family
+  // and rebuild the model dropdown immediately (do not wait for save round-trip).
   if (val === 'grok') {
-    const models = (_providerState.models_available && _providerState.models_available.grok) || ['grok-4.5'];
+    const models = (_providerState.models_available && _providerState.models_available.grok) || ['grok-4.5', 'grok-4.3'];
     if (!models.includes(selectedModel)) {
       selectedModel = models[0];
       _providerState.settings.cloud_model = selectedModel;
     }
+    applyModelListForProvider('grok', selectedModel);
   } else if (val === 'anthropic') {
-    const models = (_providerState.models_available && _providerState.models_available.anthropic) || ['auto'];
+    const models = (_providerState.models_available && _providerState.models_available.anthropic) || ['auto', 'claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'claude-opus-4-8'];
     if (!models.includes(selectedModel)) {
       selectedModel = 'auto';
       _providerState.settings.cloud_model = 'auto';
     }
+    applyModelListForProvider('anthropic', selectedModel);
+  } else if (val === 'local') {
+    applyModelListForProvider('local');
   }
+  const bbProv = document.getElementById('bb-provider');
+  if (bbProv && [...bbProv.options].some(o => o.value === val)) bbProv.value = val;
   const section = document.getElementById('provider-section');
   if (section) {
     section.classList.toggle('show-local', val === 'local');
@@ -1706,12 +1753,24 @@ async function toggleProvider() {
 async function saveProvider() {
   const radio  = document.querySelector('input[name="chat_provider"]:checked');
   const status = document.getElementById('provider-save-status');
-  status.textContent = 'Saving…';
+  if (status) {
+    status.textContent = 'Saving…';
+    status.style.color = '';
+  }
   let provider = radio ? radio.value : 'anthropic';
   if (provider === 'cloud') provider = 'anthropic';
+  // Ensure cloud_model matches the provider family being saved.
+  let modelToSave = selectedModel || (_providerState.settings && _providerState.settings.cloud_model) || 'auto';
+  if (provider === 'grok' && !(modelToSave && String(modelToSave).startsWith('grok'))) {
+    modelToSave = 'grok-4.5';
+    selectedModel = modelToSave;
+  } else if (provider === 'anthropic' && modelToSave && String(modelToSave).startsWith('grok')) {
+    modelToSave = 'auto';
+    selectedModel = modelToSave;
+  }
   const body = {
     chat_provider:  provider,
-    cloud_model:    selectedModel || (_providerState.settings && _providerState.settings.cloud_model) || 'auto',
+    cloud_model:    modelToSave,
     local_base_url: document.getElementById('local-base-url').value.trim(),
     local_model:    document.getElementById('local-model').value.trim(),
     local_api_key:  document.getElementById('local-api-key').value,
@@ -1730,8 +1789,10 @@ async function saveProvider() {
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
-      status.textContent = err.detail || `Save failed (${res.status})`;
-      status.style.color = '#f85149';
+      if (status) {
+        status.textContent = err.detail || `Save failed (${res.status})`;
+        status.style.color = '#f85149';
+      }
       return;
     }
     const data = await res.json();
@@ -1740,12 +1801,16 @@ async function saveProvider() {
     if (data.providers_available) _providerState.providers_available = data.providers_available;
     if (data.models_available) _providerState.models_available = data.models_available;
     renderProviderUI();
-    status.textContent = '✓ Saved';
-    status.style.color = '#4caf50';
-    setTimeout(() => { status.textContent = ''; }, 2500);
+    if (status) {
+      status.textContent = '✓ Saved';
+      status.style.color = '#4caf50';
+      setTimeout(() => { status.textContent = ''; }, 2500);
+    }
   } catch (e) {
-    status.textContent = 'Save failed — server unreachable.';
-    status.style.color = '#f85149';
+    if (status) {
+      status.textContent = 'Save failed — server unreachable.';
+      status.style.color = '#f85149';
+    }
   }
 }
 
